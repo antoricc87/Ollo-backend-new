@@ -1,0 +1,30 @@
+{
+  "age": {
+    "M": { "noTreatment": 3.06117, "treatment": null },
+    "F": { "noTreatment": 2.32888, "treatment": null }
+  },
+  "sbp": {
+    "M": { "noTreatment": 1.93303, "treatment": 1.99881 },
+    "F": { "noTreatment": 2.76157, "treatment": 2.82263 }
+  },
+  "tcl": {
+    "M": { "noTreatment": 1.1237, "treatment": null },
+    "F": { "noTreatment": 1.20904, "treatment": null }
+  },
+  "hdl": {
+    "M": { "noTreatment": -0.93263, "treatment": null },
+    "F": { "noTreatment": -0.70833, "treatment": null }
+  },
+  "smoke": {
+    "M": { "noTreatment": 0.65451, "treatment": null },
+    "F": { "noTreatment": 0.52873, "treatment": null }
+  },
+  "diab": {
+    "M": { "noTreatment": 0.57367, "treatment": null },
+    "F": { "noTreatment": 0.69154, "treatment": null }
+  },
+  "const": {
+    "M": { "noTreatment": 23.9802, "treatment": null },
+    "F": { "noTreatment": 26.1931, "treatment": null }
+  }
+}

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# secrets — never commit environment files or backups of them
+.env
+.env.*
+*.bak
+
+# service-account key slot (placeholder today, real key someday)
+src/config/firebaseConfig.json
+
+# user-uploaded content
+uploads/

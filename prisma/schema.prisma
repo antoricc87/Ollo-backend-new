@@ -1,0 +1,1104 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+generator client {
+  provider = "prisma-client-js"
+}
+model Admin{
+    id              String     @id @default(uuid())
+    email           String     @unique
+    password        String
+    firstName       String?
+    lastName        String?
+    createdAt       DateTime   @default(now())
+    updatedAt       DateTime   @updatedAt
+}
+model User {
+  id              String     @id @default(uuid())
+  // username        String     @unique
+  email           String     @unique
+  isEmailVerified Boolean    @default(false)
+  password        String
+  firstName       String
+  lastName        String
+  phoneNumber     String
+  specialty       String?
+  bio             String?
+  profileImageUrl String?
+  npiNumber       String?     @unique
+  licenseNumber   String?     @unique
+  licenseState    String?
+  licenseExpiry   String?
+  clinicName      String?
+  addressLine1    String
+  addressLine2    String?
+  city            String
+  state           String
+  zipCode         String
+  country         String
+  role            Role       @default(DOCTOR)
+  twoFactorEnabled Boolean   @default(false)
+  twoFactorSecret  String?
+  lastLogin       DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  bookings        Booking[]
+  availabilities    WeeklyAvailability[] 
+  acceptedInsurances String[] @default([])
+  resetPassword     ResetPasswordDoctor[]
+  chats             Chat[]
+}
+
+enum Role {
+  ADMIN
+  DOCTOR
+  STAFF
+}
+model WeeklyAvailability {
+  id         String     @id @default(uuid())
+  doctor     User       @relation(fields: [doctorId], references: [id])
+  doctorId   String    
+  weekStartDate  String   
+  weekEndDate  String   
+  days       DailyAvailability[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+model DailyAvailability {
+  id           String     @id @default(uuid())
+  weekAvailability         WeeklyAvailability @relation(fields: [weekId], references: [id],onDelete: Cascade)
+  weekId       String    
+  date         String   
+  slots        TimeSlot[]
+  isCancelled  Boolean    @default(false)
+}
+
+model TimeSlot {
+  id              String     @id @default(uuid())
+  dailyAvailability    DailyAvailability @relation(fields: [dailyAvailabilityId], references: [id],onDelete: Cascade)
+  dailyAvailabilityId  String    
+  startTime       String     
+  endTime         String     
+  isBooked        Boolean    @default(false)
+  isAvailable     Boolean
+}
+
+model Visit {
+  id             String  @id @default(uuid())
+  userId          String
+  patientId      String?
+  fhirPatientId  String?
+  visitType      String?
+  patientSymptoms Json?
+  postVisitNote  String?
+  postVisitCoding String?
+  postVisitBilling String?
+  isEnded        Boolean @default(false)
+  patientName    String
+  patientDOB     String
+  patientGender  String
+  visitTime      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  healthGoals    HealthGoal[] @relation("VisitGoals")  
+}
+
+model Referral {
+  id               String  @id @default(uuid())
+  visitId          String 
+  patientId        String  
+  userId           String  // ID of the referring provider (user)
+  receivingProviderName   String  // Name of the receiving provider/specialist
+  receivingProviderSpecialty String  // Specialty of the receiving provider/specialist
+  reason           String  // Reason for referral
+  referralLetter   String? // The content of the referral letter
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model PreAuth {
+  id              String  @id @default(uuid())
+  visitId         String 
+  patientId       String  
+  userId          String  // ID of the requesting provider (user)
+  procedureName   String  // Name of the procedure or test
+  procedureCPTCode String // CPT code(s) for the procedure/test
+  reason          String  // Medical necessity or reason for the procedure
+  preAuthLetter   String? // The content of the pre-authorization letter
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model UserGeneratedData {
+  id        String @id @default(uuid()) 
+  patientId    String   
+  patient      Patient     @relation(fields: [patientId], references: [id],onDelete: Cascade)
+  type      String 
+  data      Json 
+  createdAt DateTime @default(now()) 
+}
+
+model ResetPassword{
+  id        String @id @default(uuid()) 
+  patientId    String   
+  patient      Patient     @relation(fields: [patientId], references: [id],onDelete: Cascade)
+  email        String
+  otp          String
+  expiresAt   DateTime
+  used        Boolean
+  
+}
+
+model ResetPasswordDoctor{
+  id        String @id @default(uuid()) 
+  userId    String   
+  user      User     @relation(fields: [userId], references: [id],onDelete: Cascade)
+  email        String
+  otp          String
+  expiresAt   DateTime
+  used        Boolean
+  
+}
+// Patient Modules
+model Patient {
+    id        String  @id @default(uuid())
+    doctorIds String[] 
+    firstName String?
+    lastName  String?
+    middleName String?
+    dob       DateTime?
+    gender    String?
+    profilePicture   String?    @default("https://upload.wikimedia.org/wikipedia/commons/2/2c/Default_pfp.svg")
+    summary   Json?
+    password  String?
+    email     String @unique
+    patientSummary PatientSummary? 
+    onBoardingComplete Boolean @default(false)
+    lastSectionCompleted  String?
+    healthGoals     HealthGoal[]  @relation("PatientHealthGoals") 
+    createdAt DateTime? @default(now())
+    conversations Conversation[]
+    userGenerateddata UserGeneratedData[]
+    resetPassword     ResetPassword[]
+    timeZone  String?
+    phoneNumber    String?
+    bookings    Booking[]
+    healthCheckUp HealthCheckUp[]
+    instacartPreferences InstacartPreferences?
+    insurance          PatientInsurance?
+    isProUser   Boolean @default(false) 
+    proActivatedAt String?
+    proExpiresAt    String?
+    avatar          Int?
+    freeTrialEndsOn DateTime?
+    userAlerts UserAlert[]
+    dexcomToken DexcomToken?
+    subAccountOf String?  // NEW: Reference to parent patient
+    parentPatient Patient? @relation("SubAccounts", fields: [subAccountOf], references: [id], onDelete: NoAction, onUpdate: NoAction) 
+    subAccounts Patient[] @relation("SubAccounts")
+    chats       Chat[]
+}
+
+model DexcomToken{
+  id        String  @id @default(uuid())
+  patientId    String @unique
+  accessToken   String
+  refreshToken  String
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  patient Patient @relation(fields: [patientId],references: [id],onDelete: Cascade )
+}
+
+model Alert{
+    id        String  @id @default(uuid())
+    title     String
+    message   String
+    createdAt DateTime @default(now())
+    userAlerts  UserAlert[]
+
+}
+
+model UserAlert{
+    id        String  @id @default(uuid())
+    patientId String  
+    alertId   String 
+    seen      Boolean @default(false)
+    dismissed Boolean @default(false)
+    patient Patient @relation(fields: [patientId],references: [id],onDelete: Cascade )
+    alert Alert @relation(fields: [alertId],references: [id], onDelete: Cascade)
+
+}
+enum FlaggedAreas{
+  GLUCOSE
+  CALORIES
+  NUTRIENTS
+  SODIUM
+  CHOLESTEROL
+  SUGAR
+  SLEEP
+  WEIGHT
+  BLOODPRESSURE
+}
+model HealthCheckUp{
+  id            String  @id @default(uuid())
+  patientId     String    @unique
+  patient       Patient  @relation(fields: [patientId], references: [id],onDelete: Cascade)
+  periodStart   String
+  periodEnd     String
+  checkupReport Json
+  flaggedAreas  FlaggedAreas[]
+  flaggedAreasReasons String[]
+  createdAt     DateTime @default(now())
+}
+model InstacartPreferences{
+  id              String       @id @default(uuid())
+  patientId       String       @unique 
+  patient         Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  retailer_key String
+  retailer_logo_url String
+  retailer_name String
+
+}
+model Conversation {
+  id        String   @id @default(uuid())
+  patientId    String   
+  patient      Patient     @relation(fields: [patientId], references: [id],onDelete: Cascade)
+  messages  String[] // Store messages as an array or structure based on your needs
+  createdAt DateTime @default(now())
+}
+
+model PatientSummary {
+  id              String       @id @default(uuid())
+  patientId       String       @unique // Ensure uniqueness
+  patient         Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  summary         String?
+  immunizations   String[]      
+  allergies       AllergySummary[]
+  conditions      ConditionSummary[]
+  medications     MedicationSummary[]
+  procedures      ProcedureSummary[]
+  labResults      LabResultSummary[]
+  caloricAmount   Int?
+  labReport       LabReport? @relation
+  exercise        ExerciseSummary? @relation
+  familyHistory   FamilyHistorySummary? @relation
+  nutrition       NutritionSummary? @relation
+  vitals          VitalsSummary?   @relation
+}
+
+model LabReport{
+  id            String @id @default(uuid())
+  report        String
+  patientSummary  PatientSummary @relation(fields: [patientSummaryId], references: [id])
+  patientSummaryId String         @unique
+}
+
+model VitalsSummary{
+  id            String @id @default(uuid())
+  weight          Float
+  weight_unit   String?
+  height_unit     String?
+  height          Float
+  isSmoker        Boolean?
+  bfp   Float?
+  sBp Int?
+  dBp Int?
+  alcoholConsumption  String?
+  smokingHabit        String?
+  caffeine            String?
+  activityLevel       String?
+  drugUse             String[]
+  ethnicity           String?
+  patientSummary  PatientSummary @relation(fields: [patientSummaryId], references: [id])
+  patientSummaryId String         @unique
+}
+
+model ExerciseSummary{
+  id            String @id @default(uuid())
+  frequency   String
+  preferences   String[]
+  patientSummary  PatientSummary @relation(fields: [patientSummaryId], references: [id])
+  patientSummaryId String         @unique
+}
+
+model FamilyHistorySummary{
+  id            String @id @default(uuid())
+  historyOfChronicConditions String[]
+  historyOfCancer     String[]
+  historyOfMentalHealth String[]
+  historyOfStroke   Boolean
+  historyOfHeartAttack  Boolean
+  historyOfHereditaryConditions String[]
+  historyOfHighCholesterol Boolean
+  historyOfHighTriglyceride Boolean
+  historyOfAutoimmuneConditions String[]
+  historyOfKidneyDisease  Boolean
+  historyOfRespiratoryConditions   Boolean
+  historyOfDementiaOrAlzheimer Boolean
+  patientSummary  PatientSummary @relation(fields: [patientSummaryId], references: [id])
+  patientSummaryId String         @unique
+}
+
+model AllergySummary {
+  id            String @id @default(uuid())
+  patientSummaryId String
+  allergyId      String
+  patientSummary PatientSummary @relation(fields: [patientSummaryId], references: [id])
+  allergy        Allergy @relation(fields: [allergyId], references: [id], onDelete: Cascade)
+}
+
+model Allergy {
+  id          String @id @default(uuid())
+  substance   String @unique
+  status      String
+  reactions   String[]
+  allergySummaries  AllergySummary[]
+}
+
+model Condition {
+  id                String @id @default(uuid())
+  name              String @unique
+  clinicalStatus    String
+  verificationStatus String
+  onset             String
+  conditionSummaries ConditionSummary[]
+}
+
+model ConditionSummary {
+  id            String @id @default(uuid())
+  patientSummaryId String
+  conditionId   String
+  patientSummary PatientSummary @relation(fields: [patientSummaryId], references: [id])
+  condition     Condition @relation(fields: [conditionId], references: [id], onDelete: Cascade)
+}
+
+model Medication {
+  id          String @id @default(uuid())
+  name        String @unique
+  dosage      String
+  status      String
+  medicationSummaries MedicationSummary[]
+}
+
+model MedicationSummary {
+  id            String @id @default(uuid())
+  patientSummaryId String
+  medicationId  String
+  patientSummary PatientSummary @relation(fields: [patientSummaryId], references: [id])
+  medication    Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+}
+
+model Procedure {
+  id      String @id @default(uuid())
+  name    String @unique
+  period  String
+  procedureSummaries ProcedureSummary[]
+}
+
+model ProcedureSummary {
+  id            String @id @default(uuid())
+  patientSummaryId String
+  procedureId   String
+  patientSummary PatientSummary @relation(fields: [patientSummaryId], references: [id])
+  procedure     Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+}
+
+
+model LabResult {
+  id                  String             @id @default(uuid())
+  category            String
+  testType            String
+  referenceRange      String
+  isOutOfRange        Boolean
+  result              String
+  units               String?
+  aboutTestType       String
+  labResultSummaryId  String            
+  labResultSummary    LabResultSummary   @relation("LabResultsForSummary", fields: [labResultSummaryId], references: [id], onDelete: Cascade)
+}
+
+model LabResultSummary {
+  id                 String       @id @default(uuid())
+  patientSummaryId   String      
+  patientSummary     PatientSummary @relation(fields: [patientSummaryId], references: [id])
+  labResults         LabResult[]  @relation("LabResultsForSummary") // <-- Added matching relation name
+  labReport          String
+  recommendations    Json
+  createdAt          DateTime @default(now())
+}
+
+model NutritionSummary {
+  id                String           @id @default(uuid())
+  patientSummaryId  String           @unique
+  patientSummary    PatientSummary   @relation(fields: [patientSummaryId], references: [id], onDelete: Cascade) 
+  foodIntollerances String[]
+  foodAllergies     String[]
+  foodILike         String[]
+  foodIDontLike         String[]
+  foodsToAvoid       String[]
+  foodsToIncrease   String[]
+  dietaryPreferences  String[]
+  hydrationHabits     String?
+  supplements     Supplement[] @relation("NutritionSupplements") 
+}
+
+model Supplement {
+  id              String           @id @default(uuid())
+  name            String
+  quantity        String
+  description     String
+  nutritionSummaryId String      
+  nutritionSummary NutritionSummary @relation(fields: [nutritionSummaryId], references: [id], onDelete: Cascade, name: "NutritionSupplements")
+}
+
+//Glucose trackers
+model GlucoseTracker {
+  id              String           @id @default(uuid())
+  userId          String           @unique
+  createdAt       DateTime         @default(now())
+  dailyEntries    DailyGlucose[]  @relation("TrackerToDaily") // Named relation
+  weeklyEntries   WeeklyGlucose[] @relation("TrackerToWeekly") // Named relation
+}
+
+model DailyGlucose {
+  id              String           @id @default(uuid())
+  userId          String
+  date            String
+  glucoseEntries  GlucoseEntry[]   @relation("TrackerToGlucoseEntry")  
+  weeklyTrackerId String            // Removed @unique
+  weeklyTracker   WeeklyGlucose    @relation("TrackerToDaily", fields: [weeklyTrackerId], references: [id], onDelete: Cascade)
+  trackerId       String          
+  tracker         GlucoseTracker   @relation("TrackerToDaily", fields: [trackerId], references: [id], onDelete: Cascade) // Cascade delete
+}
+
+model WeeklyGlucose {
+  id              String           @id @default(uuid())
+  userId          String
+  weekStartDate   String
+  weekEndDate     String
+  dailyEntries    DailyGlucose[]   @relation("TrackerToDaily")
+  trackerId       String          
+  tracker         GlucoseTracker   @relation("TrackerToWeekly", fields: [trackerId], references: [id], onDelete: Cascade) // Cascade delete
+}
+
+model GlucoseEntry {
+  id              String           @id @default(uuid())
+  value           Float
+  createdAt       String
+  dailyTrackerId  String          
+  dailyTracker    DailyGlucose     @relation("TrackerToGlucoseEntry", fields: [dailyTrackerId], references: [id], onDelete: Cascade)
+}
+
+// Blood Pressure Tracker
+model BloodPressureTracker {
+  id              String               @id @default(uuid())
+  userId          String               @unique
+  createdAt       DateTime             @default(now())
+  dailyEntries    DailyBloodPressure[] @relation("TrackerToDaily") // Named relation
+  weeklyEntries   WeeklyBloodPressure[] @relation("TrackerToWeekly") // Named relation
+}
+
+model DailyBloodPressure {
+  id              String               @id @default(uuid())
+  userId          String
+  date            String
+  bpEntries       BloodPressureEntry[] @relation("TrackerToBPEntry")  
+  weeklyTrackerId String                // Removed @unique
+  weeklyTracker   WeeklyBloodPressure  @relation("TrackerToDaily", fields: [weeklyTrackerId], references: [id], onDelete: Cascade)
+  trackerId       String              
+  tracker         BloodPressureTracker @relation("TrackerToDaily", fields: [trackerId], references: [id], onDelete: Cascade) // Cascade delete
+}
+
+model WeeklyBloodPressure {
+  id              String               @id @default(uuid())
+  userId          String
+  weekStartDate   String
+  weekEndDate     String
+  dailyEntries    DailyBloodPressure[] @relation("TrackerToDaily")
+  trackerId       String              
+  tracker         BloodPressureTracker @relation("TrackerToWeekly", fields: [trackerId], references: [id], onDelete: Cascade) // Cascade delete
+}
+
+model BloodPressureEntry {
+  id              String               @id @default(uuid())
+  systolic        Int
+  diastolic       Int
+  pulse           Int?                 // Optional, if you want to track pulse
+  createdAt       String
+  dailyTrackerId  String              
+  dailyTracker    DailyBloodPressure   @relation("TrackerToBPEntry", fields: [dailyTrackerId], references: [id], onDelete: Cascade)
+}
+
+
+// Calories Trackers
+model CaloriesTracker {
+  id              String           @id @default(uuid())
+  userId          String           @unique
+  createdAt       DateTime         @default(now())
+  dailyEntries    DailyCalories[]  @relation("TrackerToDaily") // Named relation
+  weeklyEntries   WeeklyCalories[] @relation("TrackerToWeekly") // Named relation
+}
+
+model DailyCalories {
+  id              String           @id @default(uuid())
+  userId          String
+  caloriesBurned  Int
+  caloriesIntake  Int
+  date            String
+  trackerId       String          
+  tracker         CaloriesTracker  @relation("TrackerToDaily", fields: [trackerId], references: [id], onDelete: Cascade) // Cascade delete
+}
+
+model WeeklyCalories {
+  id              String           @id @default(uuid())
+  userId          String
+  weekStartDate   String
+  weekEndDate     String
+  totalBurned     Int
+  totalIntake     Int
+  trackerId       String          
+  tracker         CaloriesTracker  @relation("TrackerToWeekly", fields: [trackerId], references: [id], onDelete: Cascade) // Cascade delete
+}
+// Exercises Trackers
+model ExerciseTracker {
+  id              String           @id @default(uuid())
+  userId          String           @unique
+  createdAt       DateTime         @default(now())
+  dailyEntries    DailyExercise[]  @relation("TrackerToDaily") // Named relation
+  weeklyEntries   WeeklyExercise[] @relation("TrackerToWeekly") // Named relation
+}
+
+model DailyExercise{
+  id              String           @id @default(uuid())
+  userId          String
+  minutesOfExercise Int
+  date            String
+  trackerId       String          
+  tracker         ExerciseTracker  @relation("TrackerToDaily", fields: [trackerId], references: [id], onDelete: Cascade) // Cascade delete
+}
+
+model WeeklyExercise {
+  id              String           @id @default(uuid())
+  userId          String
+  weekStartDate   String
+  weekEndDate     String
+  minutesOfExercise  Int
+  trackerId       String          
+  tracker         ExerciseTracker  @relation("TrackerToWeekly", fields: [trackerId], references: [id], onDelete: Cascade) // Cascade delete
+}
+// Weight Trackers
+model WeightTracker{
+  id              String           @id @default(uuid())
+  userId          String           @unique
+  createdAt       DateTime         @default(now())
+  weightEntries   WeightEntry[]     @relation("TrackerToWeightEntry")
+}
+
+model WeightEntry{
+    id          String     @id @default(uuid())
+    createdAt   String
+    weight      Float
+    unit        String
+    trackerId   String
+    tracker     WeightTracker      @relation("TrackerToWeightEntry", fields: [trackerId], references: [id], onDelete: Cascade)
+}
+// Body fat percentage Trackers
+model BFPTracker{
+  id              String           @id @default(uuid())
+  userId          String           @unique
+  createdAt       DateTime         @default(now())
+  BFPEntries   BFPEntry[]     @relation("TrackerToBFPEntry")
+}
+
+model BFPEntry{
+    id          String     @id @default(uuid())
+    createdAt   String
+    percentage  Float
+    trackerId   String
+    tracker     BFPTracker      @relation("TrackerToBFPEntry", fields: [trackerId], references: [id], onDelete: Cascade)
+}
+// Food Trackers
+model FoodTracker{
+  id              String           @id @default(uuid())
+  userId          String           @unique
+  createdAt       DateTime         @default(now())
+  dailyEntries    DailyFood[]      @relation("TrackerToDailyFood") // Named relation
+  weeklyEntries   WeeklyFood[]     @relation("TrackerToWeeklyFood") // Named relation
+}
+
+model FoodEntry {
+  id                String     @id @default(uuid())
+  description       String
+  quantity          String
+  calories         Int
+  dailyFoodId      String     // Foreign key to DailyFood
+  dailyFood        DailyFood  @relation(fields: [dailyFoodId], references: [id], onDelete: Cascade) // Cascade delete
+  mealType       String?       // (e.g., BREAKFAST, LUNCH, DINNER, SNACK)
+  favMealId        String?     
+  favMeal          FavMeal?   @relation(fields:[favMealId], references: [id]) 
+  carbohydrates    Float?
+  proteins        Float?
+  fats            Float?
+  fiber           Float?
+  sodium          Float?
+  naturalSugar    Float?
+  addedSugar      Float?
+  calcium         Float?
+  magnesium       Float?
+  iron           Float?
+  potassium       Float?
+  omega_3        Float?
+  cholesterol     Float?
+  zinc           Float?
+  vitaminD       Float?
+  vitaminC       Float?
+  vitaminB12     Float?
+  vitaminE       Float?
+  glycemicLoad   Float?       // NEW: Glycemic Load (calculated)
+  vegetableServings Float?    // NEW: Vegetable servings
+  fruitServings Float?        // NEW: Fruit servings
+  createdAt      String?
+  isProcessedFood Boolean?
+}
+
+
+model FavMeal{
+  id              String           @id @default(uuid())
+  userId          String           @unique
+  mealType        MealType
+  ingredients     FoodEntry[]
+  description String
+  quantity    String
+  calories    Int?
+  carbohydrates Float?
+  proteins Float?
+  fats Float?
+  fiber Float?
+  sodium Float?
+  naturalSugar Float?
+  addedSugar Float?
+  calcium Float?
+  magnesium Float?
+  iron Float?
+  potassium Float?
+  omega_3 Float?
+  cholesterol Float?
+  zinc Float?
+  vitaminD Float?
+  vitaminC Float?
+  vitaminB12 Float?
+  vitaminE Float?
+  glycemicLoad   Float?      
+  vegetableServings Float?   
+  fruitServings Float?       
+  createdAt      String?
+  isProcessedFood Boolean?
+  
+}
+
+enum MealType {
+  BREAKFAST
+  LUNCH
+  DINNER
+  SNACK
+}
+
+model FavFood {
+  id          String     @id @default(uuid())
+  patientId   String
+  description String
+  quantity    String
+  calories    Int
+  carbohydrates Float?
+  proteins Float?
+  fats Float?
+  fiber Float?
+  sodium Float?
+  naturalSugar Float?
+  addedSugar Float?
+  calcium Float?
+  magnesium Float?
+  iron Float?
+  potassium Float?
+  omega_3 Float?
+  cholesterol Float?
+  zinc Float?
+  vitaminD Float?
+  vitaminC Float?
+  vitaminB12 Float?
+  vitaminE Float?
+  createdAt String?
+  isProcessedFood Boolean?
+}
+
+model DailyFood {
+  id              String           @id @default(uuid())
+  userId          String
+  date            String
+  foodEntries     FoodEntry[]      
+  trackerId       String          
+  tracker         FoodTracker      @relation("TrackerToDailyFood", fields: [trackerId], references: [id], onDelete: Cascade) // Cascade delete
+}
+
+model WeeklyFood {
+  id              String           @id @default(uuid())
+  userId          String
+  weekStartDate   DateTime
+  weekEndDate     DateTime
+  trackerId       String          
+  tracker         FoodTracker      @relation("TrackerToWeeklyFood", fields: [trackerId], references: [id], onDelete: Cascade) // Cascade delete
+}
+// Nutrients Tracker
+model MacroNutrientsTracker {
+  id              String           @id @default(uuid())
+  userId          String           @unique
+  createdAt       DateTime         @default(now())
+  dailyEntries    DailyNutrients[] @relation("TrackerToDailyNutrients") // Named relation
+  weeklyEntries   WeeklyNutrients[] @relation("TrackerToWeeklyNutrients") // Named relation
+  carbohydratesLimit  Float @default(0)
+  proteinsLimit       Float @default(0)
+  fatsLimit           Float @default(0)
+  fiberLimit          Float @default(0)
+  sodiumLimit         Float @default(0)
+  naturalSugarLimit   Float @default(0)
+  addedSugarLimit     Float @default(0)
+  calciumLimit        Float @default(0)
+  magnesiumLimit      Float @default(0)
+  ironLimit           Float @default(0)
+  potassiumLimit      Float @default(0)
+  omega_3Limit        Float @default(0)
+  cholesterolLimit    Float @default(0)
+  zincLimit           Float @default(0)
+  vitaminDLimit       Float @default(0)
+  vitaminCLimit       Float @default(0)
+  vitaminB12Limit     Float @default(0)
+  vitaminELimit       Float @default(0)
+}
+
+model DailyNutrients {
+  id                  String           @id @default(uuid())
+  userId              String
+  date            String
+  trackerId           String          
+  tracker             MacroNutrientsTracker @relation("TrackerToDailyNutrients", fields: [trackerId], references: [id], onDelete: Cascade)
+  carbohydrates       Float @default(0)
+  proteins            Float @default(0)
+  fats                Float @default(0)
+  fiber               Float @default(0)
+  sodium              Float @default(0)
+  naturalSugar        Float @default(0)
+  addedSugar          Float @default(0)
+  calcium             Float @default(0)
+  magnesium           Float @default(0)
+  iron                Float? @default(0)
+  potassium           Float? @default(0)
+  omega_3             Float? @default(0)
+  cholesterol         Float? @default(0)
+  zinc                Float? @default(0)
+  vitaminD            Float? @default(0)
+  vitaminB12          Float? @default(0)
+  vitaminC            Float? @default(0)
+  vitaminE            Float? @default(0)
+  processedFoodCount  Int? @default(0)
+  glycemicLoad        Float? @default(0)        // ✅ NEW
+  vegetableServings   Float? @default(0)        // ✅ NEW
+  fruitServings       Float? @default(0)        // ✅ NEW
+}
+
+
+model WeeklyNutrients {
+  id                  String           @id @default(uuid())
+  userId              String
+  weekStartDate   DateTime
+  weekEndDate         DateTime
+  trackerId           String          
+  tracker             MacroNutrientsTracker @relation("TrackerToWeeklyNutrients", fields: [trackerId], references: [id], onDelete: Cascade)
+  carbohydrates       Float @default(0)
+  proteins            Float @default(0)
+  fats                Float @default(0)
+  fiber               Float @default(0)
+  sodium              Float @default(0)
+  naturalSugar        Float @default(0)
+  addedSugar          Float @default(0)
+  calcium             Float @default(0)
+  magnesium           Float @default(0)
+  iron                Float? @default(0)
+  potassium           Float? @default(0)
+  omega_3             Float? @default(0)
+  cholesterol         Float? @default(0)
+  zinc                Float? @default(0)
+  vitaminD            Float? @default(0)
+  vitaminB12          Float? @default(0)
+  vitaminC            Float? @default(0)
+  vitaminE            Float? @default(0)
+  processedFoodCount  Int? @default(0)
+  glycemicLoad        Float? @default(0)        // ✅ NEW
+  vegetableServings   Float? @default(0)        // ✅ NEW
+  fruitServings       Float? @default(0)        // ✅ NEW
+  missingDaysAdded    Boolean @default(false)
+}
+
+// Json and FCM Tokens
+model UserToken {
+  id        String @id @default(uuid())
+  userId    String @unique
+  token     String
+  isActive  Boolean
+  isDeleted Boolean
+  updatedAt DateTime
+  createdAt DateTime
+}
+
+model UserFCMToken {
+  id        String @id @default(uuid())
+  userId    String @unique
+  FCMToken     String
+  isActive  Boolean @default(true)
+  isDeleted Boolean @default(false)
+  updatedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+enum HealthGoalCategory{
+  MONITORING
+  TRACKABLE
+  HEALTH 
+  WELLNESS
+}
+// Health Goals
+model HealthGoal {
+  id            String     @id @default(uuid())
+  visitId       String?   
+  patientId     String    
+  patient       Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade, name: "PatientHealthGoals") // Establish relation with Patient
+  description   String     
+  status        GoalStatus @default(IN_PROGRESS) // "In Progress", "Achieved", etc.
+  reviewDate    DateTime?  
+  endDate       DateTime?
+  targetValue   String?
+  startingValue   String?
+  category      HealthGoalCategory?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  trackableMetrics TrackableMetric[] @relation("GoalMetrics")
+  visit         Visit?     @relation("VisitGoals", fields: [visitId], references: [id], onDelete: Cascade) // Opposite relation
+}
+
+model TrackableMetric {
+  id             String    @id @default(uuid())
+  healthGoalId   String   
+  description    String    // Specific action (e.g., "Walk 10,000 steps daily")
+  targetValue    String    // Target metric value (e.g., "10,000 steps", "20g saturated fat/day")
+  currentValue   String?   // Patient's current progress towards this metric
+  unit           String?   // Unit of measurement (e.g., steps, grams, etc.)
+  value          String?
+  patientId          String
+  category        MetricCategory // Category (e.g., "Diet", "Exercise", etc.)
+  frequency      String    // How often the action should be performed (e.g., "daily", "weekly")
+  reviewDate     DateTime? // When the metric should be reviewed
+  metricEntries  MetricEntry[] @relation // Logs of actual performance
+  status         GoalStatus @default(PENDING)
+  healthGoal     HealthGoal @relation("GoalMetrics", fields: [healthGoalId], references: [id], onDelete: Cascade) // Opposite relation
+}
+
+enum MetricCategory {
+  DIET
+  EXERCISE
+  MEDICATION
+  MONITORING
+  LIFESTYLE
+  SUPPLEMENTS
+}
+
+enum GoalStatus {
+  PENDING
+  IN_PROGRESS
+  ACHIEVED
+  NOT_ACHIEVED
+}
+
+model MetricEntry {
+  id             String    @id @default(uuid())
+  trackableMetricId String
+  entryDate      DateTime  @default(now())// Date of the entry (e.g., daily record)
+  value          Int    // Actual value for the day (e.g., "2100")
+  trackableMetric TrackableMetric @relation(fields: [trackableMetricId], references: [id], onDelete: Cascade)
+}
+
+
+// weekly report schemas
+model WeeklyReport {
+  id                         String     @id @default(uuid())
+  userId                     String
+  healthGoalProgress         HealthGoalProgress[] @relation
+  healthScore                Float?
+  weekStartDate             String
+  weekEndDate               String
+  nutritionScore            NutritionScore? @relation
+  exerciseScore             ExerciseScore? @relation
+  sleepScore                SleepScore? @relation
+  stressScore               StressScore? @relation
+  createdAt                 DateTime    @default(now())
+  updatedAt                 DateTime    @updatedAt
+}
+
+model HealthGoalProgress {
+  id                        String     @id @default(uuid())
+  healthGoalName            String
+  healthGoalId             String
+  healthGoalPercentageCompletion Float
+  weeklyReportId           String   
+  weeklyReport             WeeklyReport        @relation(fields: [weeklyReportId], references: [id], onDelete: Cascade)
+}
+
+model NutritionScore {
+  id                         String     @id @default(uuid())
+  nutritionScore             Float
+  macronutrientBalanceScore  Float
+  caloricIntakeScore        Float
+  dietQualityScore          Float
+  nutritionFeedback         String
+  weeklyReportId            String    @unique
+  weeklyReport              WeeklyReport @relation(fields: [weeklyReportId], references: [id], onDelete: Cascade)
+}
+
+model ExerciseScore {
+  id                         String     @id @default(uuid())
+  exerciseScore              Float
+  consistencyScore           Float
+  weeklyActivityScore       Float
+  exerciseFeedback          String
+  weeklyReportId           String    @unique
+  weeklyReport              WeeklyReport @relation(fields: [weeklyReportId], references: [id], onDelete: Cascade)
+}
+
+model SleepScore {
+  id                         String     @id @default(uuid())
+  sleepScore                 Float
+  durationScore              Float
+  qualityScore               Float
+  consistencyScore           Float
+  sleepFeedback              String
+  weeklyReportId           String    @unique
+  weeklyReport              WeeklyReport @relation(fields: [weeklyReportId], references: [id], onDelete: Cascade)
+}
+
+model StressScore {
+  id                         String     @id @default(uuid())
+  stressScore                Float
+  hrvScore                   Float
+  restingHrvScore            Float
+  stressFeedback             String
+  weeklyReportId            String    @unique
+  weeklyReport              WeeklyReport @relation(fields: [weeklyReportId], references: [id], onDelete: Cascade)
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELED
+  COMPLETED
+}
+
+model Booking {
+  id          String   @id @default(uuid())
+  doctorId    String  
+  patientId   String  
+  doctor      User     @relation(fields: [doctorId], references: [id])
+  patient     Patient  @relation(fields: [patientId], references: [id],onDelete: Cascade)
+  patientName     String?
+  doctorName      String?
+  appointmentDate String
+  durationMinutes Int        @default(30) 
+  reason          String?    
+  confirmed       Boolean    @default(false)
+  status          BookingStatus @default(PENDING) 
+  notes           String?    
+  isPaidByDoctor  Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+}
+
+model AuthorizedPhysicians{
+  id          String   @id @default(uuid())
+  fullName    String
+  email       String @unique
+  createdBy   String  
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+}
+
+model PatientInsurance {
+  id                 String   @id @default(uuid())
+  patientId          String   @unique  
+  patient            Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  insuranceProvider  String
+  planType           String
+  fullPlanName       String?
+  allowsAnyPCP       Boolean
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+
+model RecordingSession{
+  id        String   @id @default(uuid())
+  uniqueIdentifier  String@unique
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  userId    String?
+  chunks    RecordingChunk[]
+}
+model RecordingChunk {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  chunkIndex  Int      
+  transcript  String  
+  startTime   String @unique   
+  sessionId   String
+  session     RecordingSession @relation(fields: [sessionId], references: [id],onDelete: Cascade)
+}
+
+// Chat and Messages
+model Chat {
+  id        String    @id @default(uuid())
+  userId    String   
+  patientId String   
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  patient   Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  messages  Message[]
+  // Draft fields for doctor message drafting
+  doctorDraft String?
+  draftUpdatedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  @@unique([userId, patientId], name: "unique_user_patient_chat")
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  chatId    String  
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  content   String
+  senderId  String   // Can be either userId or patientId
+  senderType MessageSenderType
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum MessageSenderType {
+  DOCTOR
+  PATIENT
+}
+
+model PromoCode{
+    id        String   @id @default(uuid()) 
+    code String @unique
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+    isActive Boolean @default(true)
+    isDeleted Boolean @default(false)
+}
