@@ -152,7 +152,10 @@ class Server {
     }
 
     // scheduleWeeklyReportReminder();
-    const port = parseInt(process.env.NODE_SERVER_PORT || "5000");
+    // Railway (and most PaaS) inject PORT; NODE_SERVER_PORT covers local dev.
+    const port = parseInt(
+      process.env.PORT || process.env.NODE_SERVER_PORT || "5000"
+    );
     // const host = process.env.NODE_SERVER_HOST || "localhost";
     const host = "0.0.0.0";
 
