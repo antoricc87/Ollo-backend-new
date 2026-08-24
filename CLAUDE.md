@@ -21,6 +21,25 @@ Node/TypeScript, Express 4, ~183 endpoints across 27 feature modules under
 - Full `tsc` has pre-existing errors (langchain TS2589 depth, dead
   `src/middleware/auth.ts`) — runtime uses transpile-only, don't block on them.
 
+## Health Plan v1 (Aug 2026) — `src/services/plan/`
+
+Goal → pillar targets (SLEEP/EXERCISE/NUTRITION) + nutrition watch-outs.
+Models `HealthPlan`, `PlanTarget`, `PlanWatchOut` (legacy HealthGoal/
+TrackableMetric tables untouched, still used by the doctor portal).
+Endpoints (patient token; identity ONLY from `request.user.id`):
+GET `/api/plan/active`, POST `/api/plan/propose` (deterministic, no LLM —
+`model/plan.proposal.ts`: Mifflin-St Jeor TDEE from vitals, deficit + full
+macro split by outcome×intensity, sleep target from the client's HealthKit
+baseline, weekly sessions by intensity, watch-outs from flagged labs / BP),
+POST `/api/plan` (create; previous ACTIVE → REPLACED), PUT
+`/api/plan/:id/targets|watchouts|status`. Saving syncs calories/macros into
+`MacroNutrientsTracker.*Limit` + `PatientSummary.caloricAmount` (non-fatal).
+Progress is computed on the client (HealthKit lives there); nothing stored yet.
+
+Deploy note: `npm start` now runs `prisma db push --skip-generate` before boot
+so Railway applies schema changes (no migrations dir). It fails loudly on
+destructive changes instead of dropping data — handle those manually.
+
 ## Security state (IMPORTANT)
 
 - `env.mongo-era.LEAKED-SECRETS-ROTATE.bak` = the old env file that was
