@@ -34,6 +34,7 @@ import AdminRoutes from "./services/admin/admin.routes";
 import DexcomRoutes from "./services/dexcom/dexcom.routes";
 import VoiceRecordingRoutes from "./services/voice_recordings/voice_recordings.routes";
 import MessagingRoutes from "./services/messaging/messaging.routes";
+import PlanRoutes from "./services/plan/plan.routes";
 import "./workers/workers/notifications.worker";
 import {
   scheduleBreakfastJobs,
@@ -140,6 +141,7 @@ class Server {
     new DexcomRoutes(this.app).routesConfig();
     new VoiceRecordingRoutes(this.app).routesConfig();
     new MessagingRoutes(this.app).routesConfig();
+    new PlanRoutes(this.app).routesConfig();
   }
 
   startTheServer(callback?: (server: Server) => void) {

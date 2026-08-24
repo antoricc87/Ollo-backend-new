@@ -178,6 +178,7 @@ model Patient {
     onBoardingComplete Boolean @default(false)
     lastSectionCompleted  String?
     healthGoals     HealthGoal[]  @relation("PatientHealthGoals") 
+    healthPlans     HealthPlan[]  @relation("PatientPlans")
     createdAt DateTime? @default(now())
     conversations Conversation[]
     userGenerateddata UserGeneratedData[]
@@ -1101,4 +1102,93 @@ model PromoCode{
     updatedAt DateTime @updatedAt
     isActive Boolean @default(true)
     isDeleted Boolean @default(false)
+}
+// ---------------------------------------------------------------------------
+// Health Plan v1 (Aug 2026) — goal -> pillar targets + nutrition watch-outs.
+// Replaces the legacy HealthGoal/TrackableMetric flow for the mobile app;
+// legacy tables are left untouched for the doctor portal.
+// ---------------------------------------------------------------------------
+
+enum PlanOutcome {
+  LOSE_WEIGHT
+  RECOMPOSITION
+  GENERAL_HEALTH
+  FIX_LAB
+}
+
+enum PlanIntensity {
+  GENTLE
+  STEADY
+  AMBITIOUS
+}
+
+enum PlanStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  REPLACED
+}
+
+enum PlanPillar {
+  SLEEP
+  EXERCISE
+  NUTRITION
+}
+
+enum PlanCadence {
+  DAILY
+  WEEKLY
+}
+
+enum WatchOutLevel {
+  WATCH
+  LIMIT
+}
+
+model HealthPlan {
+  id            String        @id @default(uuid())
+  patientId     String
+  patient       Patient       @relation("PatientPlans", fields: [patientId], references: [id], onDelete: Cascade)
+  outcome       PlanOutcome
+  intensity     PlanIntensity
+  status        PlanStatus    @default(ACTIVE)
+  outcomeMetric String?       // "weight" | "bfp" | lab test type
+  outcomeStart  Float?
+  outcomeTarget Float?
+  outcomeUnit   String?
+  labKey        String?       // FIX_LAB: which lab test
+  startedAt     DateTime      @default(now())
+  endedAt       DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  targets       PlanTarget[]
+  watchOuts     PlanWatchOut[]
+}
+
+model PlanTarget {
+  id        String      @id @default(uuid())
+  planId    String
+  plan      HealthPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  pillar    PlanPillar
+  metricKey String      // sleep_minutes | exercise_sessions | calories | protein_g | carbs_g | fat_g
+  cadence   PlanCadence
+  min       Float?
+  max       Float?
+  unit      String
+  baseline  Float?
+  tolerance Float       @default(0)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}
+
+model PlanWatchOut {
+  id          String        @id @default(uuid())
+  planId      String
+  plan        HealthPlan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  nutrientKey String        // sodium | cholesterol | saturated_fat | added_sugar | alcohol
+  level       WatchOutLevel @default(WATCH)
+  limit       Float?
+  unit        String?
+  reason      String?
+  createdAt   DateTime      @default(now())
 }

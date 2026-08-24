@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "prisma generate",
-    "start": "ts-node --transpile-only src/index.ts",
+    "start": "prisma db push --skip-generate && ts-node --transpile-only src/index.ts",
     "dev": "nodemon --watch src --exec ts-node --transpile-only src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "jest",
