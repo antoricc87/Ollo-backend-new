@@ -1,0 +1,586 @@
+{
+  "_readme": "Reference values are USDA FoodData Central / manufacturer figures for the portion a careful dietitian would assume from the text. tolerance = allowed relative error on kcal (default 0.2). expectUser / expectAssumed = ingredient-name substrings whose portionSource must be 'user' vs anything else. Edit freely; keep ids stable.",
+  "defaultContext": {
+    "age": 34,
+    "gender": "male",
+    "weightKg": 82,
+    "heightCm": 180,
+    "conditions": []
+  },
+  "cases": [
+    {
+      "id": "t01-eggs-toast-oj",
+      "input": "2 scrambled eggs, 1 slice whole wheat toast with 1 tsp butter and 1 cup orange juice",
+      "expected": {
+        "kcal": 408,
+        "protein": 18,
+        "carbs": 42,
+        "fat": 19
+      },
+      "expectUser": [
+        "egg",
+        "toast",
+        "butter",
+        "orange"
+      ],
+      "notes": "everything explicit"
+    },
+    {
+      "id": "t02-banana",
+      "input": "a banana",
+      "expected": {
+        "kcal": 105,
+        "protein": 1.3,
+        "carbs": 27,
+        "fat": 0.4
+      },
+      "notes": "'a banana' = count of 1 from user; size (118 g) assumed",
+      "expectUser": [
+        "banana"
+      ]
+    },
+    {
+      "id": "t03-bigmac-fries",
+      "input": "Big Mac and medium fries",
+      "expected": {
+        "kcal": 910,
+        "protein": 29,
+        "carbs": 89,
+        "fat": 49
+      },
+      "tolerance": 0.15,
+      "notes": "McDonald's US published values"
+    },
+    {
+      "id": "t04-metric-plate",
+      "input": "100g grilled chicken breast with 150g white rice and steamed broccoli",
+      "expected": {
+        "kcal": 415,
+        "protein": 39,
+        "carbs": 53,
+        "fat": 4.6
+      },
+      "expectUser": [
+        "chicken",
+        "rice"
+      ],
+      "expectAssumed": [
+        "broccoli"
+      ],
+      "notes": "broccoli assumed ~1 cup"
+    },
+    {
+      "id": "t05-yogurt-honey-granola",
+      "input": "greek yogurt with honey and granola",
+      "expected": {
+        "kcal": 330,
+        "protein": 20,
+        "carbs": 41,
+        "fat": 9
+      },
+      "tolerance": 0.35,
+      "expectAssumed": [
+        "yogurt",
+        "honey",
+        "granola"
+      ]
+    },
+    {
+      "id": "t06-two-slices-pizza",
+      "input": "two slices of pepperoni pizza",
+      "expected": {
+        "kcal": 600,
+        "protein": 26,
+        "carbs": 68,
+        "fat": 26
+      },
+      "tolerance": 0.25,
+      "expectUser": [
+        "pizza"
+      ],
+      "notes": "14-inch regular-crust slices"
+    },
+    {
+      "id": "t07-oatmeal-blueberries",
+      "input": "oatmeal with blueberries",
+      "expected": {
+        "kcal": 208,
+        "protein": 6.5,
+        "carbs": 39,
+        "fat": 3.8
+      },
+      "tolerance": 0.35,
+      "expectAssumed": [
+        "oat",
+        "blueberr"
+      ],
+      "notes": "1 cup cooked + 1/2 cup berries"
+    },
+    {
+      "id": "t08-carbonara-bowl",
+      "input": "a bowl of spaghetti carbonara",
+      "expected": {
+        "kcal": 600,
+        "protein": 25,
+        "carbs": 60,
+        "fat": 28
+      },
+      "tolerance": 0.35,
+      "notes": "restaurant portion ~350 g",
+      "expectUser": [
+        "carbonara"
+      ]
+    },
+    {
+      "id": "t09-large-caesar",
+      "input": "large bowl of caesar salad with grilled chicken",
+      "expected": {
+        "kcal": 520,
+        "protein": 37,
+        "carbs": 22,
+        "fat": 31
+      },
+      "tolerance": 0.35,
+      "expectUser": [
+        "caesar",
+        "salad"
+      ],
+      "notes": "size word = user portion"
+    },
+    {
+      "id": "t10-protein-shake",
+      "input": "protein shake with one scoop whey and 300ml semi-skimmed milk",
+      "expected": {
+        "kcal": 270,
+        "protein": 34,
+        "carbs": 18,
+        "fat": 7.5
+      },
+      "tolerance": 0.25,
+      "expectUser": [
+        "whey",
+        "milk"
+      ]
+    },
+    {
+      "id": "t11-avocado-sourdough",
+      "input": "half an avocado on two slices of sourdough",
+      "expected": {
+        "kcal": 374,
+        "protein": 11,
+        "carbs": 56,
+        "fat": 12
+      },
+      "tolerance": 0.3,
+      "expectUser": [
+        "avocado",
+        "sourdough"
+      ]
+    },
+    {
+      "id": "t12-handful-almonds",
+      "input": "a handful of almonds",
+      "expected": {
+        "kcal": 164,
+        "protein": 6,
+        "carbs": 6,
+        "fat": 14
+      },
+      "tolerance": 0.3,
+      "notes": "handful = ~30 g",
+      "expectUser": [
+        "almond"
+      ]
+    },
+    {
+      "id": "t13-3tbsp-pb",
+      "input": "3 tbsp peanut butter",
+      "expected": {
+        "kcal": 282,
+        "protein": 12,
+        "carbs": 10,
+        "fat": 24
+      },
+      "expectUser": [
+        "peanut"
+      ]
+    },
+    {
+      "id": "t14-cheeseburger-coke",
+      "input": "cheeseburger with lettuce and tomato, plus a can of coke",
+      "expected": {
+        "kcal": 470,
+        "protein": 17,
+        "carbs": 69,
+        "fat": 15
+      },
+      "tolerance": 0.25,
+      "expectUser": [
+        "coke|cola"
+      ],
+      "notes": "12 oz can",
+      "expectAssumed": [
+        "cheeseburger"
+      ]
+    },
+    {
+      "id": "t15-cup-lentils",
+      "input": "one cup of cooked lentils",
+      "expected": {
+        "kcal": 230,
+        "protein": 18,
+        "carbs": 40,
+        "fat": 0.8
+      },
+      "expectUser": [
+        "lentil"
+      ]
+    },
+    {
+      "id": "t16-glass-red-wine",
+      "input": "a glass of red wine",
+      "expected": {
+        "kcal": 125,
+        "protein": 0.1,
+        "carbs": 4,
+        "fat": 0
+      },
+      "tolerance": 0.25,
+      "notes": "5 fl oz pour",
+      "expectUser": [
+        "wine"
+      ]
+    },
+    {
+      "id": "t17-salmon-dinner",
+      "input": "salmon fillet with roasted potatoes and asparagus",
+      "mealTypeHint": "DINNER",
+      "expected": {
+        "kcal": 570,
+        "protein": 43,
+        "carbs": 34,
+        "fat": 29
+      },
+      "tolerance": 0.3,
+      "expectAssumed": [
+        "salmon",
+        "potato",
+        "asparagus"
+      ]
+    },
+    {
+      "id": "t18-6oz-sirloin",
+      "input": "6 oz sirloin steak",
+      "expected": {
+        "kcal": 390,
+        "protein": 48,
+        "carbs": 0,
+        "fat": 20
+      },
+      "tolerance": 0.25,
+      "expectUser": [
+        "sirloin",
+        "steak"
+      ]
+    },
+    {
+      "id": "t19-cereal-milk",
+      "input": "bowl of cereal with milk",
+      "expected": {
+        "kcal": 280,
+        "protein": 10,
+        "carbs": 45,
+        "fat": 6
+      },
+      "tolerance": 0.4,
+      "expectAssumed": [
+        "milk"
+      ],
+      "expectUser": [
+        "cereal"
+      ],
+      "notes": "'bowl' is a user container; cereal type ambiguous \u2192 wide tolerance"
+    },
+    {
+      "id": "t20-slice-choc-cake",
+      "input": "a slice of chocolate cake",
+      "expected": {
+        "kcal": 350,
+        "protein": 4,
+        "carbs": 50,
+        "fat": 16
+      },
+      "tolerance": 0.35,
+      "expectUser": [
+        "cake"
+      ]
+    },
+    {
+      "id": "t21-two-beef-tacos",
+      "input": "two soft tacos with beef",
+      "expected": {
+        "kcal": 420,
+        "protein": 20,
+        "carbs": 30,
+        "fat": 24
+      },
+      "tolerance": 0.35,
+      "expectUser": [
+        "taco"
+      ]
+    },
+    {
+      "id": "t22-tikka-naan",
+      "input": "chicken tikka masala with naan",
+      "expected": {
+        "kcal": 710,
+        "protein": 41,
+        "carbs": 60,
+        "fat": 33
+      },
+      "tolerance": 0.35,
+      "expectAssumed": [
+        "tikka",
+        "naan"
+      ]
+    },
+    {
+      "id": "t23-apple-pb",
+      "input": "medium apple with 1 tbsp peanut butter",
+      "expected": {
+        "kcal": 189,
+        "protein": 4.5,
+        "carbs": 28,
+        "fat": 8.3
+      },
+      "expectUser": [
+        "apple",
+        "peanut"
+      ]
+    },
+    {
+      "id": "t24-salmon-roll",
+      "input": "sushi: 8 pieces of salmon roll",
+      "expected": {
+        "kcal": 300,
+        "protein": 12,
+        "carbs": 40,
+        "fat": 8
+      },
+      "tolerance": 0.35,
+      "expectUser": [
+        "salmon",
+        "roll",
+        "sushi"
+      ]
+    },
+    {
+      "id": "t25-grande-latte",
+      "input": "a grande latte with whole milk from Starbucks",
+      "expected": {
+        "kcal": 230,
+        "protein": 12,
+        "carbs": 19,
+        "fat": 12
+      },
+      "tolerance": 0.2,
+      "notes": "brand item"
+    },
+    {
+      "id": "t26-small-bag-chips",
+      "input": "small bag of potato chips",
+      "expected": {
+        "kcal": 155,
+        "protein": 2,
+        "carbs": 15,
+        "fat": 10
+      },
+      "tolerance": 0.3,
+      "notes": "1 oz bag",
+      "expectUser": [
+        "chip"
+      ]
+    },
+    {
+      "id": "t27-2cups-pasta-marinara",
+      "input": "2 cups of cooked pasta with marinara sauce",
+      "expected": {
+        "kcal": 510,
+        "protein": 18,
+        "carbs": 96,
+        "fat": 5
+      },
+      "tolerance": 0.25,
+      "expectUser": [
+        "pasta"
+      ],
+      "expectAssumed": [
+        "marinara"
+      ]
+    },
+    {
+      "id": "t28-pancakes-syrup",
+      "input": "pancakes with maple syrup",
+      "expected": {
+        "kcal": 362,
+        "protein": 7,
+        "carbs": 60,
+        "fat": 10.5
+      },
+      "tolerance": 0.35,
+      "expectAssumed": [
+        "pancake",
+        "syrup"
+      ]
+    },
+    {
+      "id": "t29-cup-cottage-cheese",
+      "input": "1 cup of cottage cheese",
+      "expected": {
+        "kcal": 190,
+        "protein": 25,
+        "carbs": 10,
+        "fat": 5
+      },
+      "tolerance": 0.25,
+      "expectUser": [
+        "cottage"
+      ]
+    },
+    {
+      "id": "t30-hummus-carrots",
+      "input": "hummus with carrot sticks",
+      "expected": {
+        "kcal": 150,
+        "protein": 6,
+        "carbs": 21,
+        "fat": 6
+      },
+      "tolerance": 0.35,
+      "expectAssumed": [
+        "hummus",
+        "carrot"
+      ]
+    },
+    {
+      "id": "t31-three-meals-yesterday",
+      "input": "Yesterday for breakfast I had 2 boiled eggs and a black coffee, for lunch a turkey sandwich, and for dinner grilled chicken with rice",
+      "expected": {
+        "kcal": 960,
+        "protein": 79,
+        "carbs": 81,
+        "fat": 29
+      },
+      "tolerance": 0.3,
+      "expectedMeals": 3,
+      "expectedDateReference": "yesterday",
+      "expectUser": [
+        "egg",
+        "sandwich",
+        "coffee"
+      ],
+      "expectAssumed": [
+        "chicken",
+        "rice"
+      ],
+      "notes": "agent path: 3 meals, one date"
+    },
+    {
+      "id": "t32-kid-mac-cheese",
+      "input": "my son had a bowl of mac and cheese",
+      "patientContext": {
+        "age": 6,
+        "gender": "male",
+        "weightKg": 21,
+        "heightCm": 116,
+        "conditions": []
+      },
+      "expected": {
+        "kcal": 350,
+        "protein": 10,
+        "carbs": 47,
+        "fat": 13
+      },
+      "tolerance": 0.35,
+      "notes": "'a bowl' = user container, sized for a 6-year-old (~1 cup)",
+      "expectUser": [
+        "mac"
+      ]
+    },
+    {
+      "id": "t33-big-plate-fried-rice",
+      "input": "a big plate of fried rice",
+      "expected": {
+        "kcal": 666,
+        "protein": 24,
+        "carbs": 76,
+        "fat": 26
+      },
+      "tolerance": 0.35,
+      "expectUser": [
+        "fried rice",
+        "rice"
+      ],
+      "notes": "size word \u2192 user"
+    },
+    {
+      "id": "t34-150g-strawberries",
+      "input": "150 g of strawberries",
+      "expected": {
+        "kcal": 48,
+        "protein": 1,
+        "carbs": 11.5,
+        "fat": 0.5
+      },
+      "expectUser": [
+        "strawberr"
+      ]
+    },
+    {
+      "id": "t35-chili-cornbread",
+      "input": "a bowl of chili con carne with a piece of cornbread",
+      "expected": {
+        "kcal": 470,
+        "protein": 26,
+        "carbs": 53,
+        "fat": 17
+      },
+      "tolerance": 0.35,
+      "expectUser": [
+        "chili",
+        "cornbread"
+      ]
+    },
+    {
+      "id": "t36-cappuccino-cornetto",
+      "input": "a cappuccino and a cornetto",
+      "expected": {
+        "kcal": 275,
+        "protein": 8,
+        "carbs": 31,
+        "fat": 14
+      },
+      "tolerance": 0.35,
+      "notes": "Italian breakfast; cornetto ~50 g",
+      "expectUser": [
+        "cappuccino",
+        "cornetto"
+      ]
+    },
+    {
+      "id": "t37-whole-pizza-margherita",
+      "input": "a whole pizza margherita",
+      "expected": {
+        "kcal": 1800,
+        "protein": 75,
+        "carbs": 200,
+        "fat": 70
+      },
+      "tolerance": 0.35,
+      "expectUser": [
+        "pizza"
+      ],
+      "notes": "'whole' = user; USDA 12-inch pan cheese pizza = 728 g \u2248 2 000 kcal, Italian 30 cm \u2248 850 \u2192 US-leaning midpoint, wide tolerance"
+    }
+  ]
+}

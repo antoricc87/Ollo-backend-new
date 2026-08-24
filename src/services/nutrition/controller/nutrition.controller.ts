@@ -236,7 +236,14 @@ class NutritionHandler {
   async fetchFavMeals(request: any, response: Response) {
     const { id } = request.user;
     try {
-      const where = { where: { userId: id } };
+      const where = {
+        where: { userId: id },
+        include: {
+          ingredients: {
+            include: { ingredients: { orderBy: { sortOrder: "asc" as const } } },
+          },
+        },
+      };
       const favMeals = await NutritionService.getFavMeals(where);
       if (favMeals) {
         return response

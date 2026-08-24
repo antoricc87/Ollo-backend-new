@@ -9,7 +9,8 @@
     "dev": "nodemon --watch src --exec ts-node --transpile-only src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "eval:nutrition": "ts-node --transpile-only src/eval/nutrition/run.ts"
   },
   "keywords": [],
   "author": "",

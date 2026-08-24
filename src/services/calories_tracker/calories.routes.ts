@@ -33,6 +33,11 @@ export default class Routes {
       verifyToken,
       caloriesApi.createFoodEntry
     );
+    this.app.put(
+      "/api/nutrition/update_food_entry_ingredients",
+      verifyToken,
+      caloriesApi.updateFoodEntryIngredients
+    );
     this.app.post(
       "/api/nutrition/fetchfoodtrackerbyid",
       verifyToken,

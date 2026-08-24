@@ -657,7 +657,8 @@ export class LogMealTool extends Tool {
               description: entry.mealName || "Meal",
               calories: totals.totalCalories,
               quantity: "1",
-              glycemicLoad: entry.glycemicLoad || 0,
+              ingredients: entry.ingredients, // Phase 3: persisted per ingredient (server recomputes totals)
+              glycemicLoad: entry.glycemicLoad || totals.totalGlycemicLoad,
               vegetableServings: totals.totalVegetableServings,
               fruitServings: totals.totalFruitServings,
               mealType: entry.mealType,
@@ -1305,6 +1306,8 @@ ${favMealList}
         where: {
           userId: patientId,
         },
+        // Phase 3: ingredient rows ride along so a re-logged favorite keeps its breakdown
+        include: { ingredients: { include: { ingredients: { orderBy: { sortOrder: "asc" } } } } },
         orderBy: {
           createdAt: "desc",
         },
@@ -1415,6 +1418,9 @@ ${favMealList}
             description: favMeal.description,
             calories: favMeal.calories || 0,
             quantity: favMeal.quantity || "1",
+            ingredients: Array.isArray(favMeal.ingredients)
+              ? favMeal.ingredients.flatMap((e: any) => e?.ingredients ?? [])
+              : [],
             glycemicLoad: favMeal.glycemicLoad || 0,
             vegetableServings: favMeal.vegetableServings || 0,
             fruitServings: favMeal.fruitServings || 0,
@@ -1512,7 +1518,8 @@ ${favMealList}
             description: meal.mealName || "Meal",
             calories: totals.totalCalories,
             quantity: "1",
-            glycemicLoad: meal.glycemicLoad || 0,
+            ingredients: meal.ingredients, // Phase 3
+            glycemicLoad: meal.glycemicLoad || totals.totalGlycemicLoad,
             vegetableServings: totals.totalVegetableServings,
             fruitServings: totals.totalFruitServings,
             mealType: meal.mealType,
@@ -1616,7 +1623,8 @@ ${favMealList}
               description: entry.mealName || "Meal",
               calories: totals.totalCalories,
               quantity: "1",
-              glycemicLoad: entry.glycemicLoad || 0,
+              ingredients: entry.ingredients, // Phase 3: persisted per ingredient (server recomputes totals)
+              glycemicLoad: entry.glycemicLoad || totals.totalGlycemicLoad,
               vegetableServings: totals.totalVegetableServings,
               fruitServings: totals.totalFruitServings,
               mealType: entry.mealType,
@@ -1701,6 +1709,7 @@ ${favMealList}
         totalVitaminE: 0,
         totalVegetableServings: 0,
         totalFruitServings: 0,
+        totalGlycemicLoad: 0,
         isProcessedFood: false,
       };
     }
@@ -1726,6 +1735,7 @@ ${favMealList}
     let totalVitaminE = 0;
     let totalVegetableServings = 0;
     let totalFruitServings = 0;
+    let totalGlycemicLoad = 0;
     let processedFoodCount = 0;
 
     entries.forEach((entry: any) => {
@@ -1750,6 +1760,10 @@ ${favMealList}
       totalVitaminE += entry.nutrients?.vitaminE || 0;
       totalVegetableServings += entry.vegetableServings || 0;
       totalFruitServings += entry.fruitServings || 0;
+      // Glycemic load per ingredient = GI x carbs / 100 (same formula the app uses client-side)
+      if (typeof entry.glycemicIndex === "number" && entry.nutrients?.carbohydrates) {
+        totalGlycemicLoad += (entry.glycemicIndex * entry.nutrients.carbohydrates) / 100;
+      }
 
       // Count processed food items
       if (entry.isProcessedFood) {
@@ -1779,6 +1793,7 @@ ${favMealList}
       totalVitaminE,
       totalVegetableServings,
       totalFruitServings,
+      totalGlycemicLoad,
       isProcessedFood: processedFoodCount > 0, // Set to true if any processed food was included
     };
   }

@@ -43,6 +43,32 @@ export class CaloriesHandler {
   }
   //------------------------food related--------------------------//
 
+  /** Phase 3: PUT /api/nutrition/update_food_entry_ingredients { entryId, ingredients[], timeZone } */
+  async updateFoodEntryIngredients(request: any, response: Response) {
+    const { entryId, ingredients, timeZone } = request.body;
+    const userId = request.user?.id || request.body.userId;
+    if (!entryId || !Array.isArray(ingredients) || !userId) {
+      return response
+        .status(400)
+        .json(Util.error({}, "entryId and ingredients are required"));
+    }
+    try {
+      const updated = await CaloriesService.updateFoodEntryIngredients(
+        userId,
+        entryId,
+        ingredients,
+        timeZone || "UTC"
+      );
+      return response
+        .status(200)
+        .json(Util.success(updated, "Food entry updated"));
+    } catch (error: any) {
+      return response
+        .status(400)
+        .json(Util.error({ error: error?.message }, "Error updating food entry"));
+    }
+  }
+
   async createFoodEntry(request: any, response: Response) {
     const { entries, userId, timeZone, date } = request.body;
 

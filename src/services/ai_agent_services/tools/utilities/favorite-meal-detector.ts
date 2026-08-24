@@ -38,6 +38,8 @@ export class FavoriteMealDetector {
       // Get all favorite meals for the patient
       const favMeals = await NutritionService.getFavMeals({
         where: { userId: patientId },
+        // Phase 3: ingredient rows ride along so a re-logged favorite keeps its breakdown
+        include: { ingredients: { include: { ingredients: { orderBy: { sortOrder: "asc" as const } } } } },
       });
 
       if (!favMeals || favMeals.length === 0) {

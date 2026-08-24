@@ -13,3 +13,9 @@ src/config/firebaseConfig.json
 
 # user-uploaded content
 uploads/
+
+# nutrition eval reports
+eval-results/
+
+# real lab reports used for local extraction evals (PHI — never commit)
+docs/lab-samples/

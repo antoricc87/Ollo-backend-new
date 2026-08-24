@@ -1,5 +1,12 @@
 import moment from "moment";
 import {
+  MealIngredientInput,
+  NUTRIENT_KEYS,
+  normalizeIngredientInputs,
+  toPrismaIngredient,
+  totalsFromIngredients,
+} from "./mealIngredients";
+import {
   CaloriesTrackerWhereUniqueInput,
   FoodTrackerWhereUniqueInput,
 } from "../../../types";
@@ -435,10 +442,36 @@ class CaloriesService {
       );
 
       if (dailyFoodTracker) {
+        // Phase 3: when a client sends per-ingredient rows, they are the source of
+        // truth — entry totals are recomputed from them before anything is stored.
+        entries = entries.map((entry: any) => {
+          const ingredients = normalizeIngredientInputs(entry.ingredients);
+          if (!ingredients.length) return { ...entry, ingredients: [] };
+          const t = totalsFromIngredients(ingredients);
+          return {
+            ...entry,
+            ingredients,
+            calories: t.calories,
+            nutrients: { ...(entry.nutrients || {}), ...t.nutrients },
+            glycemicLoad: t.glycemicLoad,
+            vegetableServings: t.vegetableServings,
+            fruitServings: t.fruitServings,
+            isProcessedFood: t.isProcessedFood,
+          };
+        });
+
         const foodEntries = await Promise.all(
           entries.map(async (entry: any) => {
             const foodEntry = await prisma.foodEntry.create({
+              include: { ingredients: { orderBy: { sortOrder: "asc" } } },
               data: {
+                ingredients: entry.ingredients.length
+                  ? {
+                      create: entry.ingredients.map((i: MealIngredientInput, idx: number) =>
+                        toPrismaIngredient(i, idx)
+                      ),
+                    }
+                  : undefined,
                 description: entry.description,
                 dailyFoodId: dailyFoodTracker.id,
                 quantity: entry.quantity,
@@ -481,7 +514,7 @@ class CaloriesService {
 
         // Check amount of processed food
         const totalProcessedFood = entries.reduce(
-          (acc: number, entry: any) => (acc + entry.isProcessedFood ? 1 : 0),
+          (acc: number, entry: any) => acc + (entry.isProcessedFood ? 1 : 0),
           0
         );
 
@@ -490,7 +523,7 @@ class CaloriesService {
         // Aggregate nutrients for daily tracking
         const reduceAmount = (section: string) => {
           return entries.reduce(
-            (acc: number, entry: any) => acc + entry.nutrients[section],
+            (acc: number, entry: any) => acc + (Number(entry.nutrients?.[section]) || 0),
             0
           );
         };
@@ -548,6 +581,72 @@ class CaloriesService {
       console.error("Error creating food entry", error);
       throw error;
     }
+  }
+
+  /**
+   * Phase 3 — replace the ingredient rows of a logged entry (portion edits),
+   * recompute the entry totals from them and move the daily/weekly trackers by
+   * the difference. Returns the updated entry with its ingredients.
+   */
+  async updateFoodEntryIngredients(
+    userId: string,
+    entryId: string,
+    rawIngredients: any[],
+    timeZone: string
+  ) {
+    const ingredients = normalizeIngredientInputs(rawIngredients);
+    if (!ingredients.length) throw new Error("At least one ingredient is required.");
+    const entry = await prisma.foodEntry.findUnique({
+      where: { id: entryId },
+      include: { dailyFood: true },
+    });
+    if (!entry) throw new Error("Food entry not found.");
+    if (entry.dailyFood.userId !== userId) throw new Error("Food entry does not belong to this user.");
+
+    const t = totalsFromIngredients(ingredients);
+    const deltaCalories = t.calories - (entry.calories || 0);
+    const deltaNutrients: any = {};
+    for (const k of NUTRIENT_KEYS) {
+      if (k === "saturatedFats") continue; // not tracked on the daily/weekly rows
+      deltaNutrients[k] = t.nutrients[k] - (Number((entry as any)[k]) || 0);
+    }
+    const deltaProcessed = (t.isProcessedFood ? 1 : 0) - (entry.isProcessedFood ? 1 : 0);
+    const deltaGl = t.glycemicLoad - (entry.glycemicLoad || 0);
+    const deltaVeg = t.vegetableServings - (entry.vegetableServings || 0);
+    const deltaFruit = t.fruitServings - (entry.fruitServings || 0);
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.mealIngredient.deleteMany({ where: { foodEntryId: entryId } });
+      return tx.foodEntry.update({
+        where: { id: entryId },
+        include: { ingredients: { orderBy: { sortOrder: "asc" } } },
+        data: {
+          calories: t.calories,
+          ...Object.fromEntries(
+            NUTRIENT_KEYS.filter((k) => k !== "saturatedFats").map((k) => [k, t.nutrients[k]])
+          ),
+          glycemicLoad: t.glycemicLoad,
+          vegetableServings: t.vegetableServings,
+          fruitServings: t.fruitServings,
+          isProcessedFood: t.isProcessedFood,
+          ingredients: { create: ingredients.map((i, idx) => toPrismaIngredient(i, idx)) },
+        },
+      });
+    });
+
+    const date = entry.createdAt;
+    if (deltaCalories !== 0) await this.updateDailyEntry(userId, deltaCalories, date, timeZone);
+    await NutritionService.updateDailyWeeklyNutrientTracker(
+      userId,
+      deltaNutrients,
+      date,
+      timeZone,
+      deltaProcessed,
+      deltaGl,
+      deltaVeg,
+      deltaFruit
+    );
+    return updated;
   }
 
   // delete foodentry
@@ -886,7 +985,9 @@ class CaloriesService {
         include: {
           dailyEntries: {
             include: {
-              foodEntries: true,
+              foodEntries: {
+                include: { ingredients: { orderBy: { sortOrder: "asc" } } },
+              },
             },
           },
           weeklyEntries: true,

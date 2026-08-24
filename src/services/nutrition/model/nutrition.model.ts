@@ -110,7 +110,7 @@ class NutritionService {
     Distribute the calories proportionally across all ingredients to meet the caloric target of ${mealCaloricTarget} kcal.
     Ensure the total calories of all ingredients combined do not exceed ${mealCaloricTarget} kcal.
     For each ingredient, provide the quantity in grams, its respective calories, and the micro and macro nutrients contained in the ingredient. 
-    For nutrients, calculate always in decimal numbers and always in grams except for sodium, calcium, iron, potassium, cholesterol, zinc, magnesium, and all the vitamins in mg.
+    For nutrients, calculate always in decimal numbers and always in grams except for sodium, calcium, iron, potassium, cholesterol, zinc, magnesium, vitamin C and vitamin E in mg, and vitamin D and vitamin B12 in µg (micrograms).
     Ensure the amount and calories provided are related and never 0.
     Ensure to alway use the unit, if not specified by the user use g as default.
     Generate a meal name based on the ingredients provided.
@@ -119,6 +119,7 @@ class NutritionService {
     try {
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
+        temperature: 0,
         messages: [
           {
             role: "system",
@@ -179,7 +180,8 @@ class NutritionService {
       
       The output should be in JSON format, including:
       - Grams for carbohydrates, proteins, fats, fiber, natural sugars, and added sugars.
-      - Milligrams for sodium, calcium, iron, potassium, cholesterol, zinc, magnesium, and all vitamins.
+      - Milligrams for sodium, calcium, iron, potassium, cholesterol, zinc, magnesium, vitamin C and vitamin E.
+      - Micrograms (µg) for vitamin D and vitamin B12.
 
       Ensure that the total amounts of macronutrients align with the updated caloric amount.
       `;
