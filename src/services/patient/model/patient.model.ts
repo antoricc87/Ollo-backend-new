@@ -25,6 +25,11 @@ import {
 import { calculatePhenotypicAge } from "../../../utils/risks_calculation_bio_age/calculateBioAge";
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
 import { mapLabResults } from "../../../utils/mapLabResult";
+import {
+  buildCurrentLabs,
+  currentLabEntries,
+  sortReportsNewestFirst,
+} from "../../../utils/labBiomarkers";
 import { getWeeklyNutritionOverview } from "../../../utility/nutrition/use_nutrition_utility";
 
 // Helper function to generate sub-account email
@@ -550,11 +555,11 @@ export const getPatientById = async (id: string) => {
               },
             },
             labResults: {
-              orderBy: {
-                createdAt: "desc",
-              },
+              orderBy: [
+                { collectedAt: { sort: "desc", nulls: "last" } },
+                { createdAt: "desc" },
+              ],
               include: {
-                // labResult: true,
                 labResults: true,
               },
             },
@@ -1170,6 +1175,7 @@ export const updatePatientSummarySection = async (
             labReport: data.labReport,
             recommendations: data.recommendations,
           },
+            collectedAt: data.collectedAt ? new Date(data.collectedAt) : null,
         });
         for (const lab of data.labResults) {
           await saveParsedLabData(
@@ -1245,9 +1251,10 @@ export const generateRisksOverviewDatasets = async (patientId: string) => {
         ? "F"
         : null;
 
-    const { biomarkers, diabetesRiskLabs, cvRiskLabs } = mapLabResults(
-      patientSummary.labResults[0]
-    );
+    // Merged latest-per-biomarker view across every report, not just the newest upload.
+    const { biomarkers, diabetesRiskLabs, cvRiskLabs } = mapLabResults({
+      labResults: currentLabEntries(patientSummary.labResults),
+    });
 
     const missingDiabetesLabs = Object.keys(diabetesRiskLabs).filter(
       (key) => diabetesRiskLabs[key] === undefined
@@ -1399,13 +1406,15 @@ export const fetchPatientLabs = async (patientId: string) => {
       where: { patientId: patientId },
     });
     const labResultSummaries = await prisma.labResultSummary.findMany({
+    if (!patientSummary) return [];
       where: { patientSummaryId: patientSummary.id },
       include: {
         labResults: true,
       },
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy: [
+        { collectedAt: { sort: "desc", nulls: "last" } },
+        { createdAt: "desc" },
+      ],
     });
     if (!labResultSummaries) {
       console.log("Lab result summaries not found");
@@ -1419,6 +1428,104 @@ export const fetchPatientLabs = async (patientId: string) => {
 };
 
 // ------------------- Patient Insurance Management ------------------- //
+/**
+ * The patient's current lab picture: latest value per biomarker across all
+ * reports (each dated by its report's collection date), plus the report list.
+ */
+export const fetchCurrentLabs = async (patientId: string) => {
+  const reports = await fetchPatientLabs(patientId);
+  const sorted = sortReportsNewestFirst(reports as any[]);
+  const biomarkers = buildCurrentLabs(sorted as any[]);
+  return {
+    biomarkers,
+    reports: sorted.map((r: any) => ({
+      id: r.id,
+      createdAt: r.createdAt,
+      collectedAt: r.collectedAt ?? r.createdAt,
+      labReport: r.labReport,
+      recommendations: r.recommendations,
+      resultCount: r.labResults?.length ?? 0,
+      flaggedCount: (r.labResults ?? []).filter((l: any) => l.isOutOfRange).length,
+    })),
+  };
+};
+
+/** Persist one parsed lab report as a new LabResultSummary. */
+export const createLabReport = async (
+  patientId: string,
+  data: {
+    labResults: Array<{
+      category: string;
+      testType: string;
+      referenceRange: string;
+      isOutOfRange: boolean;
+      result: string;
+      units?: string | null;
+      aboutTestType?: string | null;
+      needsReview?: boolean;
+      reviewReason?: string | null;
+      sourceRow?: string | null;
+    }>;
+    labReport: string;
+    recommendations: unknown;
+  },
+  collectedAt: Date | null
+) => {
+  const patientSummary = await prisma.patientSummary.findUnique({
+    where: { patientId },
+  });
+  if (!patientSummary) throw new Error("Patient summary not found");
+  return prisma.labResultSummary.create({
+    data: {
+      patientSummaryId: patientSummary.id,
+      labReport: data.labReport ?? "",
+      recommendations: (data.recommendations ?? {}) as any,
+      collectedAt,
+      labResults: {
+        create: data.labResults.map((lab) => ({
+          category: lab.category,
+          testType: lab.testType,
+          referenceRange: lab.referenceRange ?? "",
+          isOutOfRange: !!lab.isOutOfRange,
+          result: String(lab.result ?? ""),
+          units: lab.units ?? null,
+          aboutTestType: lab.aboutTestType ?? "",
+          needsReview: !!lab.needsReview,
+          reviewReason: lab.reviewReason ?? null,
+          sourceRow: lab.sourceRow ?? null,
+        })),
+      },
+    },
+    include: { labResults: true },
+  });
+};
+
+/** Set/correct the collection date of one of the patient's reports. */
+export const updateLabReportDate = async (
+  patientId: string,
+  reportId: string,
+  collectedAt: Date
+) => {
+  const report = await prisma.labResultSummary.findFirst({
+    where: { id: reportId, patientSummary: { patientId } },
+  });
+  if (!report) throw new Error("Lab report not found");
+  return prisma.labResultSummary.update({
+    where: { id: reportId },
+    data: { collectedAt },
+  });
+};
+
+/** Delete one of the patient's reports (and its results, via cascade). */
+export const deleteLabReport = async (patientId: string, reportId: string) => {
+  const report = await prisma.labResultSummary.findFirst({
+    where: { id: reportId, patientSummary: { patientId } },
+  });
+  if (!report) throw new Error("Lab report not found");
+  await prisma.labResult.deleteMany({ where: { labResultSummaryId: reportId } });
+  return prisma.labResultSummary.delete({ where: { id: reportId } });
+};
+
 
 export const createPatientInsurance = async ({
   patientId,

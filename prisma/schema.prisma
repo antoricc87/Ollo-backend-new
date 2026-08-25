@@ -416,6 +416,9 @@ model LabResult {
   category           String
   testType           String
   referenceRange     String
+  needsReview        Boolean          @default(false) // extraction could not verify this value against the PDF
+  reviewReason       String?
+  sourceRow          String? // the (redacted) PDF row the value was read from
   isOutOfRange       Boolean
   result             String
   units              String?
@@ -431,7 +434,8 @@ model LabResultSummary {
   labResults       LabResult[]    @relation("LabResultsForSummary") // <-- Added matching relation name
   labReport        String
   recommendations  Json
-  createdAt        DateTime       @default(now())
+  createdAt        DateTime       @default(now()) // upload time
+  collectedAt      DateTime? // when the sample was taken (test date); null on legacy rows → treated as createdAt
 }
 
 model NutritionSummary {
@@ -738,6 +742,42 @@ model FavFood {
   vitaminC        Float?
   vitaminB12      Float?
   vitaminE        Float?
+// ---------------------------------------------------------------------------
+// Meal ingredients (Phase 3) — one row per food inside a logged FoodEntry.
+// Totals on FoodEntry are recomputed from these whenever they are edited.
+// ---------------------------------------------------------------------------
+model MealIngredient {
+  id                   String    @id @default(uuid())
+  foodEntryId          String
+  foodEntry            FoodEntry @relation(fields: [foodEntryId], references: [id], onDelete: Cascade)
+  sortOrder            Int       @default(0)
+  name                 String
+  searchTerm           String?
+  brand                String?
+  quantity             Float
+  unit                 String
+  grams                Float
+  gramsLow             Float?
+  gramsHigh            Float?
+  portionSource        String? // user | brand | personalized_default | standard_serving
+  portionAssumption    String?
+  confidence           Float?
+  foodGroup            String?
+  isProcessedFood      Boolean?
+  glycemicIndex        Float?
+  calories             Float
+  nutrients            Json // nutrients for `grams` (carbohydrates, proteins, fats, saturatedFats, fiber, sodium, ...)
+  per100g              Json? // reference vector when nutrientSource = usda
+  nutrientSource       String? // usda | llm
+  referenceSource      String?
+  referenceId          String?
+  referenceDescription String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([foodEntryId])
+}
+
   createdAt       String?
   isProcessedFood Boolean?
 }
@@ -1201,42 +1241,6 @@ model PlanWatchOut {
   unit        String?
   reason      String?
   createdAt   DateTime      @default(now())
-}
-
-// ---------------------------------------------------------------------------
-// Meal ingredients (Phase 3) — one row per food inside a logged FoodEntry.
-// Totals on FoodEntry are recomputed from these whenever they are edited.
-// ---------------------------------------------------------------------------
-model MealIngredient {
-  id                   String    @id @default(uuid())
-  foodEntryId          String
-  foodEntry            FoodEntry @relation(fields: [foodEntryId], references: [id], onDelete: Cascade)
-  sortOrder            Int       @default(0)
-  name                 String
-  searchTerm           String?
-  brand                String?
-  quantity             Float
-  unit                 String
-  grams                Float
-  gramsLow             Float?
-  gramsHigh            Float?
-  portionSource        String? // user | brand | personalized_default | standard_serving
-  portionAssumption    String?
-  confidence           Float?
-  foodGroup            String?
-  isProcessedFood      Boolean?
-  glycemicIndex        Float?
-  calories             Float
-  nutrients            Json // nutrients for `grams` (carbohydrates, proteins, fats, saturatedFats, fiber, sodium, ...)
-  per100g              Json? // reference vector when nutrientSource = usda
-  nutrientSource       String? // usda | llm
-  referenceSource      String?
-  referenceId          String?
-  referenceDescription String?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-
-  @@index([foodEntryId])
 }
 
 // ---------------------------------------------------------------------------

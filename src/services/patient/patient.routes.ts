@@ -159,6 +159,21 @@ export default class Routes {
       verifyToken,
       patientApi.fetchPatientLabs
     );
+    this.app.get(
+      "/api/patients/labs/current",
+      verifyToken,
+      patientApi.fetchCurrentLabs
+    );
+    this.app.patch(
+      "/api/patients/labs/:id",
+      verifyToken,
+      patientApi.updateLabReportDate
+    );
+    this.app.delete(
+      "/api/patients/labs/:id",
+      verifyToken,
+      patientApi.deleteLabReport
+    );
     // Patient Insurance Routes
     this.app.post(
       "/api/patients/insurance/create",

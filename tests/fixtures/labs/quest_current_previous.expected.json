@@ -1,0 +1,80 @@
+{
+  "collectedAt": "2026-03-18",
+  "results": [
+    {
+      "testType": "TCL",
+      "result": "236",
+      "isOutOfRange": true
+    },
+    {
+      "testType": "HDL",
+      "result": "49",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Triglycerides",
+      "result": "496",
+      "isOutOfRange": true
+    },
+    {
+      "testType": "LDL",
+      "result": "128",
+      "isOutOfRange": true
+    },
+    {
+      "testType": "Glucose",
+      "result": "92",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Creatinine",
+      "result": "0.98",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Albumin",
+      "result": "4.3",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Alkaline Phosphatase",
+      "result": "112",
+      "isOutOfRange": true
+    },
+    {
+      "testType": "HbA1c",
+      "result": "5.8",
+      "isOutOfRange": true
+    },
+    {
+      "testType": "WBC",
+      "result": "6.2",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "RDW",
+      "result": "13.1",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "MCV",
+      "result": "89.5",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Lymphocytes",
+      "result": "1.9",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "CRP",
+      "result": "0.8",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Vitamin D",
+      "result": "19",
+      "isOutOfRange": true
+    }
+  ]
+}

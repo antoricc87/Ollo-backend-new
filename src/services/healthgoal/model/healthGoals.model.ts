@@ -1,4 +1,5 @@
 import moment from "moment";
+import { currentLabEntries } from "../../../utils/labBiomarkers";
 import OpenAI from "openai";
 import prisma from "../../../utility/prismaClient";
 import { getCurrentWeekRange } from "../../../utils/formatDate";
@@ -350,12 +351,9 @@ class HealthGoalService {
 
     const hasHealthCondition = patientSummary.conditions?.length > 0;
 
-    const abnormalLabs =
-      patientSummary.labResults && patientSummary.labResults.length > 0
-        ? patientSummary.labResults[0].labResults.filter(
-            (lab) => lab.isOutOfRange
-          )
-        : [];
+    // Latest value per biomarker across all reports (not just the newest upload)
+    const currentLabs = currentLabEntries(patientSummary.labResults);
+    const abnormalLabs = currentLabs.filter((lab) => lab.isOutOfRange);
 
     const medications = patientSummary.medications.map(
       (m) => `${m.medication.name}-${m.medication.dosage}`
@@ -372,14 +370,10 @@ class HealthGoalService {
         conditions.push(condition.condition.name)
       );
 
-      patientSummary.labResults &&
-        patientSummary.labResults.length > 0 &&
-        patientSummary.labResults[0].labResults.forEach((labResult) => {
-          if (labResult.isOutOfRange) {
-            const value = `${labResult.testType} ${labResult.result} ${labResult.units}`;
-            abnormalLabsFound.push(value);
-          }
-        });
+      abnormalLabs.forEach((labResult) => {
+        const value = `${labResult.testType} ${labResult.result} ${labResult.units}`;
+        abnormalLabsFound.push(value);
+      });
 
       const conditionList = hasHealthCondition
         ? `The patient has the following chronic conditions: ${conditions}.`
@@ -493,12 +487,9 @@ class HealthGoalService {
 
     const hasHealthCondition = patientSummary.conditions?.length > 0;
 
-    const abnormalLabs =
-      patientSummary.labResults && patientSummary.labResults.length > 0
-        ? patientSummary.labResults[0].labResults.filter(
-            (lab) => lab.isOutOfRange
-          )
-        : [];
+    // Latest value per biomarker across all reports (not just the newest upload)
+    const currentLabs = currentLabEntries(patientSummary.labResults);
+    const abnormalLabs = currentLabs.filter((lab) => lab.isOutOfRange);
 
     const medications = patientSummary.medications.map(
       (m) => `${m.medication.name}-${m.medication.dosage}`
@@ -514,14 +505,10 @@ class HealthGoalService {
         conditions.push(condition.condition.name)
       );
 
-      patientSummary.labResults &&
-        patientSummary.labResults.length > 0 &&
-        patientSummary.labResults[0].labResults.forEach((labResult) => {
-          if (labResult.isOutOfRange) {
-            const value = `${labResult.testType} ${labResult.result} ${labResult.units}`;
-            abnormalLabsFound.push(value);
-          }
-        });
+      abnormalLabs.forEach((labResult) => {
+        const value = `${labResult.testType} ${labResult.result} ${labResult.units}`;
+        abnormalLabsFound.push(value);
+      });
 
       const conditionList = hasHealthCondition
         ? `The patient has the following chronic conditions: ${conditions}.`

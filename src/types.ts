@@ -335,7 +335,8 @@ export type FavFood = {
 export interface LabResultSummary {
   id: string;
   patientSummaryId: string;
-
+  createdAt?: Date | string; // upload time
+  collectedAt?: Date | string | null; // test date (null on legacy rows)
   labReport: string;
   patientSummary?: PatientSummary; // Add the type for `PatientSummary` if needed
   labResults: LabResult[]; // Relation to the `LabResult`

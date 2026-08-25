@@ -1,0 +1,70 @@
+{
+  "collectedAt": "2026-02-05",
+  "results": [
+    {
+      "testType": "Hemoglobin",
+      "result": "15,1",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "WBC",
+      "result": "6,20",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Platelets",
+      "result": "242",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "MCV",
+      "result": "88,0",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Glucose",
+      "result": "104",
+      "isOutOfRange": true
+    },
+    {
+      "testType": "Creatinine",
+      "result": "0,95",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "TCL",
+      "result": "198",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "HDL",
+      "result": "58",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Triglycerides",
+      "result": "96",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Ferritin",
+      "result": "42",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "TSH",
+      "result": "2,10",
+      "isOutOfRange": false
+    },
+    {
+      "testType": "Vitamin D",
+      "result": "19",
+      "isOutOfRange": true
+    },
+    {
+      "testType": "CRP",
+      "result": "< 0,5",
+      "isOutOfRange": false
+    }
+  ]
+}

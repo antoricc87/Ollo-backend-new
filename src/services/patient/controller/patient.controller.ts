@@ -10,7 +10,11 @@ import {
   sendMulticast,
   sendSingleNotification,
 } from "../../../utils/push_notifications";
-import { PDFParseAndRedactPII } from "../../../utils/redactPI";
+import { parseLabPdf } from "../../../utils/redactPI";
+import {
+  extractLabReport,
+  ScannedPdfError,
+} from "../../lab_extraction/extractLabs";
 import { Util } from "../../../utils/response";
 import { generateLabDataJSON } from "../../openAI/model/openai.model";
 import {
@@ -39,6 +43,12 @@ import {
   updatePatientSummarySection,
 } from "../model/patient.model";
 
+import {
+  createLabReport,
+  fetchCurrentLabs,
+  updateLabReportDate,
+  deleteLabReport,
+} from "../model/patient.model";
 export class PatientHandler {
   //notification test
   async testNotifications(request: Request, response: Response) {
@@ -685,25 +695,38 @@ export class PatientHandler {
   }
 
   async uploadPatientLab(req: any, res: Response) {
-    const { firstName, lastName, dob, patientId } = req.body;
+    const { firstName, lastName, dob, patientId, collectedAt } = req.body;
     const { id } = req.user;
     const patientIdToUse = patientId ? patientId : id;
-    const file = req.files.file as UploadedFile;
+    const file = req.files?.file as UploadedFile;
     if (!file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
     try {
-      // Redact PII and generate structured lab data
-      const redactedText = await PDFParseAndRedactPII(
-        file,
-        firstName,
-        lastName,
-        dob
-      );
-      const labDataJSON = await generateLabDataJSON(
-        redactedText,
-        patientIdToUse
-      );
+      let labDataJSON: any;
+      let detectedCollectedAt: Date | null = null;
+      let extraction: any = undefined;
+      if (process.env.LAB_EXTRACTION_ENGINE === "legacy") {
+        // Old path: pdf-parse text → gpt-4o-mini prompt (no validation)
+        const parsed = await parseLabPdf(file, firstName, lastName, dob);
+        detectedCollectedAt = parsed.detectedCollectedAt;
+        labDataJSON = await generateLabDataJSON(parsed.redactedText, patientIdToUse);
+      } else {
+        // Layout-aware extraction with code-side validation (see lab_extraction/)
+        const result = await extractLabReport(file.data, {
+          firstName,
+          lastName,
+          dob,
+          patientId: patientIdToUse,
+        });
+        detectedCollectedAt = result.collectedAt;
+        extraction = result.extraction;
+        labDataJSON = {
+          labResults: result.labResults,
+          labReport: result.labReport,
+          recommendations: result.recommendations,
+        };
+      }
 
       // Ensure labDataJSON is structured as expected
       if (labDataJSON && Array.isArray(labDataJSON.labResults)) {
@@ -721,7 +744,9 @@ export class PatientHandler {
         }
         return res
           .status(200)
-          .json(Util.success(labDataJSON, "Lab data successfully generated"));
+          .json(
+            Util.success(responsePayload, "Lab data successfully generated")
+          );
       } else {
         console.error(
           "Expected labDataJSON to contain labResults array, received:",
@@ -755,6 +780,9 @@ export class PatientHandler {
         return res
           .status(201)
           .json(Util.success(patientOverview, "Overview created successfully"));
+      if (error instanceof ScannedPdfError) {
+        return res.status(422).json({ success: false, message: error.message });
+      }
       }
     } catch (error) {
       console.error("Error calculating patient overview:", error);
@@ -820,6 +848,64 @@ export class PatientHandler {
         .status(201)
         .json(Util.success(insurance, "Insurance record created successfully"));
     } catch (error: any) {
+  /** Latest value per biomarker across all reports + the report list. */
+  async fetchCurrentLabs(req: any, res: Response) {
+    const { id } = req.user;
+    try {
+      const current = await fetchCurrentLabs(id);
+      return res
+        .status(200)
+        .json(Util.success(current, "Current labs fetched successfully"));
+    } catch (error: unknown) {
+      console.error("Error fetching current labs", error);
+      return res
+        .status(500)
+        .json(Util.error(error, "Error fetching current labs"));
+    }
+  }
+
+  /** PATCH /labs/:id — set or correct a report's collection (test) date. */
+  async updateLabReportDate(req: any, res: Response) {
+    const { id } = req.user;
+    const { id: reportId } = req.params;
+    const { collectedAt } = req.body ?? {};
+    const date = collectedAt ? new Date(collectedAt) : null;
+    if (!reportId || !date || isNaN(date.getTime()))
+      return res
+        .status(400)
+        .json(Util.error({}, "A valid collectedAt date is required"));
+    if (date.getTime() > Date.now() + 86400000)
+      return res
+        .status(400)
+        .json(Util.error({}, "collectedAt cannot be in the future"));
+    try {
+      const report = await updateLabReportDate(id, reportId, date);
+      return res
+        .status(200)
+        .json(Util.success(report, "Lab report date updated"));
+    } catch (error: any) {
+      const notFound = error?.message === "Lab report not found";
+      return res
+        .status(notFound ? 404 : 500)
+        .json(Util.error(error, notFound ? error.message : "Error updating lab report"));
+    }
+  }
+
+  /** DELETE /labs/:id — remove a report the patient uploaded by mistake. */
+  async deleteLabReport(req: any, res: Response) {
+    const { id } = req.user;
+    const { id: reportId } = req.params;
+    try {
+      await deleteLabReport(id, reportId);
+      return res.status(200).json(Util.success({}, "Lab report deleted"));
+    } catch (error: any) {
+      const notFound = error?.message === "Lab report not found";
+      return res
+        .status(notFound ? 404 : 500)
+        .json(Util.error(error, notFound ? error.message : "Error deleting lab report"));
+    }
+  }
+
       console.error("Error creating insurance:", error);
       return res
         .status(400)

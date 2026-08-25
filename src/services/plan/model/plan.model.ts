@@ -1,4 +1,5 @@
 import prisma from "../../../utility/prismaClient";
+import { currentLabEntries } from "../../../utils/labBiomarkers";
 import NutritionService from "../../nutrition/model/nutrition.model";
 import { updatePatientSummarySection } from "../../patient/model/patient.model";
 import { buildProposal, PlanProposal } from "./plan.proposal";
@@ -61,8 +62,6 @@ class PlanService {
             exercise: true,
             labResults: {
               include: { labResults: true },
-              orderBy: { createdAt: "desc" },
-              take: 1,
             },
           },
         },
@@ -70,7 +69,8 @@ class PlanService {
     });
     if (!patient) throw new Error("Patient not found");
     const summary: any = patient.patientSummary;
-    const latestLabs: any[] = summary?.labResults?.[0]?.labResults ?? [];
+    // Latest value per biomarker across all reports, not just the newest upload
+    const latestLabs: any[] = currentLabEntries(summary?.labResults ?? []);
 
     return buildProposal({
       outcome: args.outcome,

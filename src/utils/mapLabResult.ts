@@ -1,6 +1,6 @@
-import { LabResultSummary } from "../types";
-
-export function mapLabResults(labResults: LabResultSummary): {
+export function mapLabResults(labResults: {
+  labResults: Array<{ testType: string; result: string }>;
+}): {
   biomarkers: Record<string, number>;
   diabetesRiskLabs: Record<string, number>;
   cvRiskLabs: Record<string, number>;
