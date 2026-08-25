@@ -24,7 +24,6 @@ import WeightRoutes from "./services/weight_tracker/weight.routes";
 import GlucoseRoutes from "./services/glucose_tracker/glucose.routes";
 import BFPRoutes from "./services/bodyFatPercentage/bfp.routes";
 import BloodPressureRoutes from "./services/bp_tracker/bloodpressure.routes";
-import AIAgentRoutes from "./services/ai_agent_services/ai_agent.routes";
 import UserGeneratedDataRoutes from "./services/user_generated_data/user_Generated_data.routes";
 import PasswordRoutes from "./services/password/password.routes";
 import UtilsRoutes from "./services/utils/utils.routes";
@@ -35,6 +34,9 @@ import DexcomRoutes from "./services/dexcom/dexcom.routes";
 import VoiceRecordingRoutes from "./services/voice_recordings/voice_recordings.routes";
 import MessagingRoutes from "./services/messaging/messaging.routes";
 import PlanRoutes from "./services/plan/plan.routes";
+import AgentRoutes from "./services/agent/agent.routes";
+import "./services/agent/proactive/agent.worker";
+import { scheduleAgentProactiveTick } from "./services/agent/proactive/agent.scheduler";
 import "./workers/workers/notifications.worker";
 import {
   scheduleBreakfastJobs,
@@ -131,7 +133,6 @@ class Server {
     new GlucoseRoutes(this.app).routesConfig();
     new BFPRoutes(this.app).routesConfig();
     new BloodPressureRoutes(this.app).routesConfig();
-    new AIAgentRoutes(this.app).routesConfig();
     new UserGeneratedDataRoutes(this.app).routesConfig();
     new PasswordRoutes(this.app).routesConfig();
     new UtilsRoutes(this.app).routesConfig();
@@ -142,6 +143,7 @@ class Server {
     new VoiceRecordingRoutes(this.app).routesConfig();
     new MessagingRoutes(this.app).routesConfig();
     new PlanRoutes(this.app).routesConfig();
+    new AgentRoutes(this.app).routesConfig();
   }
 
   startTheServer(callback?: (server: Server) => void) {
@@ -151,6 +153,7 @@ class Server {
       scheduleBreakfastJobs();
       scheduleLunchJobs();
       scheduleDinnerJobs();
+      scheduleAgentProactiveTick();
     }
 
     // scheduleWeeklyReportReminder();

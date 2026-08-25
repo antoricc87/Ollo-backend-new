@@ -27,7 +27,7 @@ import {
   portionResponseTool,
 } from "../schemas/nutrition.schema";
 import { getUserToken } from "../../../utils/auth_token";
-import { mealPlanSchema } from "../../ai_agent_services/schemas/ai_agent.schemas";
+import { mealPlanSchema } from "../schemas/mealPlan.schema";
 import { calculateCaloricAdjustment } from "../../../utils/calculateAdjustedTDEE";
 dotenv.config();
 

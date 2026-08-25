@@ -5,6 +5,8 @@ import admin from "firebase-admin";
 // placeholder. Load it lazily and fail soft either way so the server can
 // boot without push notifications.
 let serviceAccount: any = null;
+/** True only when a real service account initialised the SDK — callers can skip sends otherwise. */
+export let pushEnabled = false;
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   serviceAccount = require("./firebaseConfig.json");
@@ -19,6 +21,7 @@ if (serviceAccount) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount as admin.ServiceAccount),
     });
+    pushEnabled = true;
   } catch (err) {
     console.warn(
       "[firebase] firebaseConfig.json is a placeholder — push notifications are disabled:",

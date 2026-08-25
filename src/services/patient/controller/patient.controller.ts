@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { triggerWatchOut } from "../../agent/proactive/proactive.service";
 import { ObjectId } from "../../../utils/idValidation";
 import { Request, Response } from "express";
 import { UploadedFile } from "express-fileupload"; // Import UploadedFile if the package has types
@@ -42,13 +43,13 @@ import {
   updatePatientPassword,
   updatePatientSummarySection,
 } from "../model/patient.model";
-
 import {
   createLabReport,
   fetchCurrentLabs,
   updateLabReportDate,
   deleteLabReport,
 } from "../model/patient.model";
+
 export class PatientHandler {
   //notification test
   async testNotifications(request: Request, response: Response) {
@@ -730,7 +731,29 @@ export class PatientHandler {
 
       // Ensure labDataJSON is structured as expected
       if (labDataJSON && Array.isArray(labDataJSON.labResults)) {
-        await updatePatientSummarySection(patientIdToUse, "labs", labDataJSON);
+        // Priority: explicit date from the client > date read off the PDF > null
+        // (null is treated as upload time until the user confirms a date).
+        const explicit = collectedAt ? new Date(collectedAt) : null;
+        const resolvedCollectedAt =
+          explicit && !isNaN(explicit.getTime())
+            ? explicit
+            : detectedCollectedAt;
+        const report = await createLabReport(
+          patientIdToUse,
+          labDataJSON,
+          resolvedCollectedAt
+        );
+        // Ollie: event-driven note about the new report (fire-and-forget, respects the user's preferences).
+        const flaggedCount = labDataJSON.labResults.filter((l: any) => l.isOutOfRange).length;
+        void triggerWatchOut(patientIdToUse, `new lab report uploaded on ${new Date().toISOString().slice(0, 10)} (${labDataJSON.labResults.length} values, ${flaggedCount} outside the reference range)`);
+        const responsePayload = {
+          ...labDataJSON,
+          reportId: report.id,
+          collectedAt: report.collectedAt ?? report.createdAt,
+          collectedAtDetected: !!resolvedCollectedAt,
+          reviewCount: labDataJSON.labResults.filter((l: any) => l.needsReview).length,
+          extraction,
+        };
         if (patientId) {
           const patientFCM = await prisma.userFCMToken.findUnique({
             where: { userId: patientId },
@@ -757,6 +780,9 @@ export class PatientHandler {
           .json({ success: false, message: "Lab data format is incorrect." });
       }
     } catch (error) {
+      if (error instanceof ScannedPdfError) {
+        return res.status(422).json({ success: false, message: error.message });
+      }
       console.error("Error processing lab report:", error);
       return res
         .status(500)
@@ -780,9 +806,6 @@ export class PatientHandler {
         return res
           .status(201)
           .json(Util.success(patientOverview, "Overview created successfully"));
-      if (error instanceof ScannedPdfError) {
-        return res.status(422).json({ success: false, message: error.message });
-      }
       }
     } catch (error) {
       console.error("Error calculating patient overview:", error);
@@ -825,29 +848,6 @@ export class PatientHandler {
     }
   }
 
-  // Create new patient insurance
-  async createPatientInsurance(req: Request, res: Response) {
-    const {
-      patientId,
-      insuranceProvider,
-      planType,
-      fullPlanName,
-      allowsAnyPCP,
-    } = req.body;
-
-    try {
-      const insurance = await createPatientInsurance({
-        patientId,
-        insuranceProvider,
-        planType,
-        fullPlanName,
-        allowsAnyPCP,
-      });
-
-      return res
-        .status(201)
-        .json(Util.success(insurance, "Insurance record created successfully"));
-    } catch (error: any) {
   /** Latest value per biomarker across all reports + the report list. */
   async fetchCurrentLabs(req: any, res: Response) {
     const { id } = req.user;
@@ -906,6 +906,29 @@ export class PatientHandler {
     }
   }
 
+  // Create new patient insurance
+  async createPatientInsurance(req: Request, res: Response) {
+    const {
+      patientId,
+      insuranceProvider,
+      planType,
+      fullPlanName,
+      allowsAnyPCP,
+    } = req.body;
+
+    try {
+      const insurance = await createPatientInsurance({
+        patientId,
+        insuranceProvider,
+        planType,
+        fullPlanName,
+        allowsAnyPCP,
+      });
+
+      return res
+        .status(201)
+        .json(Util.success(insurance, "Insurance record created successfully"));
+    } catch (error: any) {
       console.error("Error creating insurance:", error);
       return res
         .status(400)

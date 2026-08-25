@@ -183,7 +183,6 @@ model Patient {
   healthGoals          HealthGoal[]          @relation("PatientHealthGoals")
   healthPlans          HealthPlan[]          @relation("PatientPlans")
   createdAt            DateTime?             @default(now())
-  conversations        Conversation[]
   userGenerateddata    UserGeneratedData[]
   resetPassword        ResetPassword[]
   timeZone             String?
@@ -203,6 +202,11 @@ model Patient {
   parentPatient        Patient?              @relation("SubAccounts", fields: [subAccountOf], references: [id], onDelete: NoAction, onUpdate: NoAction)
   subAccounts          Patient[]             @relation("SubAccounts")
   chats                Chat[]
+  agentThreads         AgentThread[]
+  agentMemories        AgentMemory[]
+  agentAuditLogs       AgentAuditLog[]
+  agentProposals       AgentProposal[]
+  agentPreference      AgentPreference?
 }
 
 model DexcomToken {
@@ -265,14 +269,6 @@ model InstacartPreferences {
   retailer_key      String
   retailer_logo_url String
   retailer_name     String
-}
-
-model Conversation {
-  id        String   @id @default(uuid())
-  patientId String
-  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  messages  String[] // Store messages as an array or structure based on your needs
-  createdAt DateTime @default(now())
 }
 
 model PatientSummary {
@@ -416,13 +412,13 @@ model LabResult {
   category           String
   testType           String
   referenceRange     String
-  needsReview        Boolean          @default(false) // extraction could not verify this value against the PDF
-  reviewReason       String?
-  sourceRow          String? // the (redacted) PDF row the value was read from
   isOutOfRange       Boolean
   result             String
   units              String?
   aboutTestType      String
+  needsReview        Boolean          @default(false) // extraction could not verify this value against the PDF
+  reviewReason       String?
+  sourceRow          String? // the (redacted) PDF row the value was read from
   labResultSummaryId String
   labResultSummary   LabResultSummary @relation("LabResultsForSummary", fields: [labResultSummaryId], references: [id], onDelete: Cascade)
 }
@@ -742,6 +738,10 @@ model FavFood {
   vitaminC        Float?
   vitaminB12      Float?
   vitaminE        Float?
+  createdAt       String?
+  isProcessedFood Boolean?
+}
+
 // ---------------------------------------------------------------------------
 // Meal ingredients (Phase 3) — one row per food inside a logged FoodEntry.
 // Totals on FoodEntry are recomputed from these whenever they are edited.
@@ -776,10 +776,6 @@ model MealIngredient {
   updatedAt            DateTime  @updatedAt
 
   @@index([foodEntryId])
-}
-
-  createdAt       String?
-  isProcessedFood Boolean?
 }
 
 model DailyFood {
@@ -1275,4 +1271,141 @@ model FoodReferenceAlias {
   createdAt   DateTime       @default(now())
 
   @@unique([term, brand])
+}
+
+// ---------------------------------------------------------------------------
+// Ollie agent (Aug 2026) — persisted conversations, long-term memory, audit.
+// Replaces the in-process Map the LangGraph agents kept per threadId.
+// ---------------------------------------------------------------------------
+enum AgentThreadSource {
+  CHAT // opened by the user in the app
+  PROACTIVE // opened by a job (weekly plan review, daily check-in, watch-out)
+}
+
+enum AgentRole {
+  USER
+  ASSISTANT
+  TOOL
+  SYSTEM
+}
+
+enum AgentMemoryCategory {
+  PREFERENCE // "hates cilantro", "prefers 20-min workouts"
+  ROUTINE // "travels Tuesdays, eats out", "trains at 7am"
+  CONSTRAINT // "no dairy at home", "shift work — sleeps 9am-4pm"
+  CONTEXT // "mom has T2D", "wedding on Oct 12"
+  FEEDBACK // "found the last meal plan too repetitive"
+}
+
+model AgentThread {
+  id             String            @id @default(uuid())
+  patientId      String
+  patient        Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  source         AgentThreadSource @default(CHAT)
+  title          String?
+  summary        String? // rolling summary of turns older than the verbatim window
+  summarizedUpTo Int? // highest message seq folded into `summary`
+  lastMessageAt  DateTime?
+  archivedAt     DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  messages       AgentMessage[]
+
+  @@index([patientId, lastMessageAt])
+}
+
+model AgentMessage {
+  id         String      @id @default(uuid())
+  threadId   String
+  thread     AgentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  seq        Int // 1-based position in the thread
+  role       AgentRole
+  content    String      @default("") // user/assistant text, or the tool result (JSON string) for TOOL rows
+  toolCalls  Json? // ASSISTANT: [{ id, name, input }]
+  toolCallId String? // TOOL: id of the call this row answers
+  toolName   String?
+  cards      Json? // typed UI cards emitted with this message
+  meta       Json? // model, usage, latencyMs, safety verdict, snapshotHash
+  createdAt  DateTime    @default(now())
+
+  @@unique([threadId, seq])
+  @@index([threadId, createdAt])
+}
+
+model AgentMemory {
+  id         String              @id @default(uuid())
+  patientId  String
+  patient    Patient             @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  category   AgentMemoryCategory @default(CONTEXT)
+  content    String // one short fact, in the user's terms
+  sourceMsg  String? // AgentMessage id the fact was learned from
+  active     Boolean             @default(true)
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@index([patientId, active])
+}
+
+model AgentAuditLog {
+  id        String   @id @default(uuid())
+  patientId String
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  threadId  String?
+  messageId String?
+  event     String // tool_call | tool_commit | safety_flag | red_flag | response | error
+  toolName  String?
+  payload   Json? // input/output/verdict — never raw PHI beyond what the tool needed
+  createdAt DateTime @default(now())
+
+  @@index([patientId, createdAt])
+  @@index([threadId])
+}
+
+enum AgentProposalStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+  FAILED
+}
+
+/// A write the agent wants to make, awaiting the user's confirmation in the
+/// app. `preview` is what the user sees (and can edit); `commit` re-validates
+/// the edited input and runs the same service code the app's own UI uses.
+model AgentProposal {
+  id          String              @id @default(uuid())
+  patientId   String
+  patient     Patient             @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  threadId    String?
+  toolName    String
+  title       String
+  summary     String
+  input       Json // validated tool input the proposal was built from
+  preview     Json // tool-specific preview payload shown in the card
+  status      AgentProposalStatus @default(PENDING)
+  result      Json? // commit result (or error)
+  expiresAt   DateTime
+  confirmedAt DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([patientId, status, createdAt])
+  @@index([threadId])
+}
+
+/// Per-user switches for the agent's proactive runs. Absent row = defaults.
+model AgentPreference {
+  id                 String    @id @default(uuid())
+  patientId          String    @unique
+  patient            Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  proactiveEnabled   Boolean   @default(true) // master switch
+  dailyCheckinHour   Int? // local hour 0-23; null = off
+  weeklyReviewEnabled Boolean  @default(true) // Monday morning plan review
+  watchOutsEnabled   Boolean   @default(true) // event-driven nudges (new labs, BP)
+  lastDailyCheckinAt DateTime?
+  lastWeeklyReviewAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 }

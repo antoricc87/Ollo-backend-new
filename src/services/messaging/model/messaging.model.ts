@@ -1,9 +1,19 @@
 import { MessageSenderType } from "@prisma/client";
 import prisma from "../../../utility/prismaClient";
-import {
-  getPatientNutritionAndHealthInformation,
-  getPatientSoapNotes,
-} from "../../ai_agent_services/tools/patient_data/retrieve_patient_data";
+import { buildPatientSnapshot } from "../../agent/context/snapshot";
+
+/** Post-visit (SOAP) notes for the doctor's draft context. Moved here from the retired agent module. */
+const getPatientSoapNotes = async (patientId: string) => {
+  try {
+    return await prisma.visit.findMany({
+      where: { OR: [{ patientId }, { fhirPatientId: patientId }] },
+      select: { visitType: true, visitTime: true, postVisitNote: true },
+    });
+  } catch (error: unknown) {
+    console.error("Error fetching the soap notes", error);
+    throw error;
+  }
+};
 import dotenv from "dotenv";
 import OpenAI from "openai";
 import { AllergySummary, ConditionSummary } from "../../../types";
@@ -134,27 +144,17 @@ export class MessagingService {
       // }
       const contextMessages = conversation.messages;
       console.log(contextMessages);
-      const patientData = await getPatientNutritionAndHealthInformation(
-        conversation.patientId
-      );
-
-      // Check if patient data is available
-      if (typeof patientData !== "object" || !patientData) {
-        throw new Error("Patient data not available");
-      }
+      // Ollie's per-turn snapshot is the one source of patient context now.
+      const snapshot = await buildPatientSnapshot(conversation.patientId);
+      if (!snapshot) throw new Error("Patient data not available");
 
       // Extract only the most relevant health data for message context
       const relevantHealthData = {
-        conditions:
-          patientData.conditions?.map((c: any) => c.condition?.name || c) || [],
-        allergies:
-          patientData.allergies?.map((a: any) => a.allergy?.substance || a) ||
-          [],
-        currentWeekCalories: patientData.weeks?.[0]?.caloriesTotal || null,
-        nutritionStatus: patientData.isTodayNutritionMissing
-          ? "Missing today's nutrition data"
-          : "Nutrition data available",
-        timezone: patientData.timezone,
+        conditions: snapshot.records.conditions,
+        allergies: snapshot.records.allergies,
+        currentWeekCalories: snapshot.week.avgCalories ? `${snapshot.week.avgCalories} kcal/day avg (${snapshot.week.daysLogged} days logged)` : null,
+        nutritionStatus: snapshot.today_log.calories === null ? "Missing today's nutrition data" : "Nutrition data available",
+        timezone: snapshot.timeZone,
       };
 
       const prompt = `You are a primary care physician responding to a patient in a chat conversation. 
@@ -246,28 +246,18 @@ Chat message:`;
         }
       }
 
-      const patientData = await getPatientNutritionAndHealthInformation(
-        conversation.patientId
-      );
-
-      // Check if patient data is available
-      if (typeof patientData !== "object" || !patientData) {
-        throw new Error("Patient data not available");
-      }
+      // Ollie's per-turn snapshot is the one source of patient context now.
+      const snapshot = await buildPatientSnapshot(conversation.patientId);
+      if (!snapshot) throw new Error("Patient data not available");
 
       // Extract only the most relevant health data for message context
       const visitsNotes = await getPatientSoapNotes(conversation.patientId);
       const relevantHealthData = {
-        conditions:
-          patientData.conditions?.map((c: any) => c.condition?.name || c) || [],
-        allergies:
-          patientData.allergies?.map((a: any) => a.allergy?.substance || a) ||
-          [],
-        currentWeekCalories: patientData.weeks?.[0]?.caloriesTotal || null,
-        nutritionStatus: patientData.isTodayNutritionMissing
-          ? "Missing today's nutrition data"
-          : "Nutrition data available",
-        timezone: patientData.timezone,
+        conditions: snapshot.records.conditions,
+        allergies: snapshot.records.allergies,
+        currentWeekCalories: snapshot.week.avgCalories ? `${snapshot.week.avgCalories} kcal/day avg (${snapshot.week.daysLogged} days logged)` : null,
+        nutritionStatus: snapshot.today_log.calories === null ? "Missing today's nutrition data" : "Nutrition data available",
+        timezone: snapshot.timeZone,
       };
 
       const prompt = `You are a primary care physician responding to a patient in a chat conversation. 

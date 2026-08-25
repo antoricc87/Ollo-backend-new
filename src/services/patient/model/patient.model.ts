@@ -595,7 +595,8 @@ export const getPatientById = async (id: string) => {
     }
     const patientWithToken = {
       ...patient,
-      token: token.token,
+      // Patients who never logged in (fixtures, imported records) have no token row.
+      token: token?.token ?? null,
     };
     return patientWithToken;
   } catch (error: any) {
@@ -1174,8 +1175,8 @@ export const updatePatientSummarySection = async (
             patientSummaryId,
             labReport: data.labReport,
             recommendations: data.recommendations,
-          },
             collectedAt: data.collectedAt ? new Date(data.collectedAt) : null,
+          },
         });
         for (const lab of data.labResults) {
           await saveParsedLabData(
@@ -1405,8 +1406,8 @@ export const fetchPatientLabs = async (patientId: string) => {
     const patientSummary = await prisma.patientSummary.findUnique({
       where: { patientId: patientId },
     });
-    const labResultSummaries = await prisma.labResultSummary.findMany({
     if (!patientSummary) return [];
+    const labResultSummaries = await prisma.labResultSummary.findMany({
       where: { patientSummaryId: patientSummary.id },
       include: {
         labResults: true,
@@ -1427,7 +1428,6 @@ export const fetchPatientLabs = async (patientId: string) => {
   }
 };
 
-// ------------------- Patient Insurance Management ------------------- //
 /**
  * The patient's current lab picture: latest value per biomarker across all
  * reports (each dated by its report's collection date), plus the report list.
@@ -1526,6 +1526,7 @@ export const deleteLabReport = async (patientId: string, reportId: string) => {
   return prisma.labResultSummary.delete({ where: { id: reportId } });
 };
 
+// ------------------- Patient Insurance Management ------------------- //
 
 export const createPatientInsurance = async ({
   patientId,
