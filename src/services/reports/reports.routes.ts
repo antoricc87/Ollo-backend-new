@@ -7,21 +7,6 @@ export default class Routes {
   }
   appRoutes() {
     this.app.post(
-      "/api/reports/generateWeeklyReport",
-      verifyToken,
-      reportsApi.generateWeeklyReport
-    );
-    this.app.get(
-      "/api/reports/fetchReportsById",
-      verifyToken,
-      reportsApi.fetchPatientReports
-    );
-    this.app.post(
-      "/api/reports/deleteReportsById",
-      verifyToken,
-      reportsApi.deleteReportById
-    );
-    this.app.post(
       "/api/reports/doctor/generateCheckupReport",
       verifyDoctorToken,
       reportsApi.generateCheckupReport

@@ -6,7 +6,6 @@ export default class Routes {
     this.app = app;
   }
   appRoutes() {
-    this.app.post("/api/utils/parsePDF", UtilsHandler.parsePDF);
 
     this.app.post(
       "/api/utils/getAffordableTests",
@@ -18,17 +17,6 @@ export default class Routes {
       verifyToken,
       UtilsHandler.getInstacartRetailers
     );
-    this.app.post(
-      "/api/utils/validateCode",
-      verifyToken,
-      UtilsHandler.validatePromoCode
-    );
-    this.app.post(
-      "/api/utils/getFoodInfo",
-      verifyToken,
-      UtilsHandler.getFoodProductInfo
-    );
-    this.app.post("/transcribe", UtilsHandler.transcribe);
   }
   routesConfig() {
     this.appRoutes();

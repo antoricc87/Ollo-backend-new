@@ -12,16 +12,6 @@ export default class Routes {
       verifyDoctorToken,
       openAiApi.generateNote
     );
-    this.app.post(
-      "/api/openai/generate-diagnosis",
-      verifyToken,
-      openAiApi.generateDiagnosis
-    );
-    this.app.post(
-      "/api/openai/generate-record-summary",
-      verifyToken,
-      openAiApi.generateRecordsSummary
-    );
 
     this.app.post(
       "/api/openai/generate-medical-coding",
@@ -49,11 +39,6 @@ export default class Routes {
       openAiApi.generateCaloriesAmount
     );
     this.app.post(
-      "/api/openai/calculatecaloriestest",
-      verifyToken,
-      openAiApi.generateCaloriesAmountTest
-    );
-    this.app.post(
       "/api/openai/caloriesFromImage",
       verifyToken,
       openAiApi.generateCaloriesFromImage
@@ -64,11 +49,6 @@ export default class Routes {
       openAiApi.generateCaloriesFromAudio
     );
 
-    this.app.post(
-      "/api/openai/generate-lab-data",
-      verifyToken,
-      openAiApi.generateLabData
-    );
   }
 
   routesConfig() {

@@ -355,6 +355,31 @@ Railway after deploy).
   nutrition agent tool, multi-account aggregator, risk/bio-age datasets).
   Never go back to `labResults[0]` — a partial upload would hide the rest.
 
+## Legacy removal round 1 (Aug 27 2026)
+
+Deleted modules: `symptoms_checker`, `user_generated_data`, `fitBit`,
+`voice_recordings`, `patients_risk_scores` (never registered), and the
+`metric` routes + controller (`metric/model` stays — healthgoal, nutrition
+and openAI models still import it). Routes removed: all patient-token
+`healthGoals/*` except `calculateCaloricAmount` (parked onboarding chain
+calls it) and the doctor `fetchHealthGoals`; `utils` parsePDF / validateCode
+/ getFoodInfo / `/transcribe`; openAI generate-diagnosis, generate-record-
+summary, calculatecaloriestest, generate-lab-data; nutrition generate_meals,
+portion_calculator, get_nutrients_tracker(+weekly), delete_nutrients_tracker,
+addGeneratedNutritionValues, saveMealPlan; reports patient routes (doctor
+checkup report stays); patient `sendNotification`, `checkpatient`,
+`updatePatientPassword` (all unauthenticated). Handlers/model code behind
+the removed routes were left in place where the file also serves live
+routes — a follow-up sweep. NO schema changes: tables of retired features
+(`TrackableMetric`, `MetricEntry`, `UserGeneratedData`, `RecordingSession/
+Chunk`, `PromoCode`, `Alert`, `UserAlert`, `LabReport`) still exist because
+the boot-time `prisma db push` refuses destructive changes — drop them in a
+deliberate migration. PARKED (user, Aug 27): the physician-app surface
+(visits, letters, doctor messaging, admin, FHIR), `risks_calculation_bio_age`
++ `patientoverview`, `tests-screening` + `getAffordableTests`, insurance CRUD,
+Instacart client, dexcom. A backend split for the physician app is a separate
+decision.
+
 ## Security state (IMPORTANT)
 
 - `env.mongo-era.LEAKED-SECRETS-ROTATE.bak` = the old env file that was

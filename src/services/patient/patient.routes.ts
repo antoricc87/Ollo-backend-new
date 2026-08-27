@@ -10,7 +10,6 @@ export default class Routes {
   }
 
   appRoutes() {
-    this.app.post("/api/sendNotification", patientApi.testNotifications);
     this.app.post(
       "/api/fetchpatients",
       verifyDoctorToken,
@@ -110,14 +109,6 @@ export default class Routes {
     );
 
     //-------------Patient Facing App---------------------//
-    this.app.post(
-      "/api/patients/checkpatient",
-      patientApi.checkForExistingPatient
-    );
-    this.app.post(
-      "/api/patients/updatePatientPassword",
-      patientApi.updatePatientPasswordById
-    );
     this.app.post(
       "/api/patients/updatePatient",
       verifyToken,
