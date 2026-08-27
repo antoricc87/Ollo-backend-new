@@ -224,6 +224,77 @@ Follow-ups done 2026-08-25:
   `Message` row, booking → confirm → `Booking` PENDING (SES mail fails
   softly locally), and a portion-edited meal commit.
 
+## Workouts (Aug 26 2026) — `src/services/workouts/`
+
+One physical training session = one `WorkoutSession` row (+ `WorkoutExercise`
+→ `WorkoutSet`). `source` HEALTHKIT (synced watch summary) | OLLIE (described
+in chat, optionally linked to a watch workout via `externalId` = HealthKit
+UUID, `@@unique([patientId, externalId])`) | MANUAL. Metrics (calories, avg/
+peak/low HR, `zoneSeconds[5]`, distance) come from the watch when linked
+(`metricsSource: "watch"`), else a MET estimate from body weight
+(`"estimate"`). Heart-rate TRACES are never stored — the phone reads them.
+Layout (keep it): `domain/` pure code shared by REST + agent —
+`activity.catalog.ts` (canonical activity keys ↔ HealthKit names, MET,
+`activitiesCompatible`), `exercise.catalog.ts` (~65 canonical lifts with
+aliases incl. Italian; `canonicalExercise()` → key or `custom:<slug>`; extend
+aliases when the parser invents spellings), `workout.schema.ts` (zod:
+`WatchWorkoutSummary`, `SyncRequest`, `SessionInput`, `PreviewEdits`),
+`workout.matching.ts` (described session ↔ watch workout: time overlap, then
+same-day compatible activity, else `ambiguous`), `workout.metrics.ts`
+(`estimateCalories`, `fmtSets`, `summarizeSession`). `parsing/
+workoutParse.service.ts` = the ONE LLM call (strict schema, `WORKOUT_PARSE_
+MODEL`, default the agent model); the model only transcribes — units, catalog
+resolution, day resolution and "ran 5k is the session, not an exercise"
+folding happen in code. `model/workouts.model.ts` `WorkoutService`: `list/
+get/softDelete`, `syncFromHealthKit` (upsert by externalId, writes METRIC
+fields only so titles/exercises survive; summaries missing from the window →
+unlink, or soft-delete when watch-only), `createSession` (enriches an
+already-synced watch row instead of duplicating), `previousExercises`
+("vs last time"). Routes: `GET /api/workouts?from&to`, `POST
+/api/workouts/sync {windowStart, windowEnd, workouts[]}`, `GET/DELETE
+/api/workouts/:id`.
+Agent: `tools/workout.tools.ts` — `log_workout` (write; parse → match against
+`ctx.client.recentWorkouts` (HealthKit summaries the app sends with each turn,
+validated in the controller) → proposal with editable sets; `applyPreviewEdits`
+= `PreviewEdits`; the parser's reading of the user's own time words beats the
+model's `date`, and nothing lands in the future) and `get_workouts` (read;
+`exerciseKey` for one lift's history). `ToolContext.client` carries the
+phone data (null on commit/proactive). Snapshot renders this week's sessions
+(with sets) and the unlogged watch workouts. `get_activity` is now explicitly
+"ring minutes"; the weekly proactive instruction also calls `get_workouts`.
+Smoke: `scripts/agent-workout-smoke.ts` (parser, matching, agent turn with
+client context, set edit + confirm, sync keeps detail, watch-only removal,
+no-watch estimate — all pass 2026-08-26); eval scenarios
+`log_workout_proposal` + `workout_not_hypothetical`. Known: the legacy
+`DailyExercise` minutes tracker (Apple exercise ring) still feeds Trends and
+the weekly report — sessions do not yet derive those minutes.
+
+## Labs journey (Aug 27 2026) — `src/services/labs_journey/`
+
+How a patient gets labs done. `domain/screening.rules.ts` `buildPanel(profile)`
+is a deterministic, CITED rules table (USPSTF grade + recommendation URL,
+ACC/AHA, ADA, KDIGO, ATA, NLA, USMSTF): blood labs with canonical biomarker
+keys, non-blood screenings, and "at the visit" items, each with a personalised
+`reason`, `cadence` and `priority` DUE | CONSIDER | DISCUSS. Verify the
+citations before public release. `domain/profile.ts`
+`buildScreeningProfile(getPatientById result)` (age, sex, BMI, smoking from
+smokingHabit/isSmoker, lower-cased conditions/medications/diet, family flags
+from FamilyHistorySummary) and `applyCoverage(items, reports)` (a LAB item is
+covered when one of its biomarkers exists ≤12 mo via `buildCurrentLabs`;
+stale = due) and `checklistText()` (plain text for Share / booking notes).
+Model `LabJourney` (route OWN_DOCTOR | DTC | OLLO_DOCTOR, status RECOMMENDED →
+ORDERED → RESULTED | CANCELLED, `panel` snapshot, `bookingId`). Routes
+(patient token only): `GET /api/labs/panel` (profile summary, items with
+coverage, counts, checklistText, open journey), `GET/POST/PUT
+/api/labs/journey` (`{route}` starts one and cancels the open one;
+`{status}` or `{bookingId}` advances — a bookingId sets ORDERED and writes
+the checklist into `Booking.notes` when empty). `uploadPatientLab` calls
+`LabsJourneyService.markResulted` (fire-and-forget). The old
+`getRecommendedScreenings` / `POST /utils/getAffordableTests` still exist for
+the unreachable legacy onboarding screen — delete with it. Script:
+`scripts/labs-panel.ts <email> [--json]`. Restart the dev server after
+`prisma generate` (nodemon doesn't watch node_modules — `touch src/index.ts`).
+
 ## Labs — merged "current picture" (Aug 2026)
 
 Each uploaded PDF is one `LabResultSummary` (report) with `LabResult` rows;
@@ -307,6 +378,13 @@ Railway after deploy).
   on TrackableMetric) — they broke multi-day tracking under Postgres.
 - VitalsSummary gained `smokingHabit`, `caffeine`, `activityLevel` (new
   onboarding Habits set writes them).
+- Patient gained `consentAcceptedAt` (2026-08-27; the app's registration
+  checkbox). `createPatientMobile` now whitelists client fields (email,
+  password, timeZone, firstName, lastName, consentAcceptedAt) — it used to
+  spread the whole body into `prisma.patient.create`.
+- `src/utils/calculateTDEE.ts` accepts three `exercise.frequency`
+  vocabularies (legacy onboarding, "Your body" editor = canonical, Set 02
+  labels written before 2026-08-27).
 - New endpoint: POST `/api/exercises/fetch_tracker_daily` (auth: patient token;
   returns tracker incl. dailyEntries) — added for the Trends page.
 - Postgres enforces FKs Mongo ignored: some summary tables (ExerciseSummary →

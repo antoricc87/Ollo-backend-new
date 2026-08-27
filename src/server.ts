@@ -35,6 +35,8 @@ import VoiceRecordingRoutes from "./services/voice_recordings/voice_recordings.r
 import MessagingRoutes from "./services/messaging/messaging.routes";
 import PlanRoutes from "./services/plan/plan.routes";
 import AgentRoutes from "./services/agent/agent.routes";
+import WorkoutRoutes from "./services/workouts/workouts.routes";
+import LabsJourneyRoutes from "./services/labs_journey/labsJourney.routes";
 import "./services/agent/proactive/agent.worker";
 import { scheduleAgentProactiveTick } from "./services/agent/proactive/agent.scheduler";
 import "./workers/workers/notifications.worker";
@@ -144,6 +146,8 @@ class Server {
     new MessagingRoutes(this.app).routesConfig();
     new PlanRoutes(this.app).routesConfig();
     new AgentRoutes(this.app).routesConfig();
+    new WorkoutRoutes(this.app).routesConfig();
+    new LabsJourneyRoutes(this.app).routesConfig();
   }
 
   startTheServer(callback?: (server: Server) => void) {

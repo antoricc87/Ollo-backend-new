@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import { triggerWatchOut } from "../../agent/proactive/proactive.service";
+import LabsJourneyService from "../../labs_journey/model/labsJourney.model";
 import { ObjectId } from "../../../utils/idValidation";
 import { Request, Response } from "express";
 import { UploadedFile } from "express-fileupload"; // Import UploadedFile if the package has types
@@ -745,6 +746,8 @@ export class PatientHandler {
         );
         // Ollie: event-driven note about the new report (fire-and-forget, respects the user's preferences).
         const flaggedCount = labDataJSON.labResults.filter((l: any) => l.isOutOfRange).length;
+        // Labs journey: a new report resolves any open journey (fire-and-forget).
+        void LabsJourneyService.markResulted(patientIdToUse).catch(() => undefined);
         void triggerWatchOut(patientIdToUse, `new lab report uploaded on ${new Date().toISOString().slice(0, 10)} (${labDataJSON.labResults.length} values, ${flaggedCount} outside the reference range)`);
         const responsePayload = {
           ...labDataJSON,
