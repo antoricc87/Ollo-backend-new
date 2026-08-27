@@ -181,18 +181,38 @@ export const getParentPatient = async (subAccountId: string) => {
 
 //create patient from mobile
 
+// Only these client-supplied columns are accepted at sign-up; everything else
+// (onBoardingComplete, isProUser, doctorIds, ...) must be set server-side.
+const MOBILE_SIGNUP_FIELDS = [
+  "email",
+  "password",
+  "timeZone",
+  "firstName",
+  "lastName",
+  "consentAcceptedAt",
+] as const;
+
 export const createPatientMobile = async (patientData: any) => {
   try {
+    const allowed: Record<string, unknown> = {};
+    for (const key of MOBILE_SIGNUP_FIELDS) {
+      if (patientData?.[key] !== undefined) allowed[key] = patientData[key];
+    }
+    if (typeof allowed.consentAcceptedAt === "string") {
+      allowed.consentAcceptedAt = new Date(allowed.consentAcceptedAt);
+    }
     // Hash the password if it exists
-    const updatedPatientData = patientData.password
+    const updatedPatientData = allowed.password
       ? {
-          ...patientData,
-          password: await bcrypt.hash(patientData.password, 10),
+          ...allowed,
+          password: await bcrypt.hash(String(allowed.password), 10),
         }
-      : { ...patientData };
+      : { ...allowed };
 
     // Create the patient
-    const patient = await prisma.patient.create({ data: updatedPatientData });
+    const patient = await prisma.patient.create({
+      data: updatedPatientData as Prisma.PatientUncheckedCreateInput,
+    });
 
     if (!patient) {
       throw new Error("Patient creation failed.");
