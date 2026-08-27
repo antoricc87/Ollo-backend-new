@@ -1,6 +1,7 @@
 import { z, ZodTypeAny } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { ToolSpec } from "../llm/types";
+import type { ClientContext } from "../context/snapshot";
 
 /**
  * Typed tool registry. A tool is a zod-validated function over the existing
@@ -22,6 +23,8 @@ export type ToolContext = {
   today: string; // local YYYY-MM-DD
   /** Resolve a model-supplied subjectId (self or one of the patient's sub-accounts). */
   resolveSubject: (subjectId?: string | null) => Promise<{ id: string; name: string; isSelf: boolean }>;
+  /** Phone-side data sent with this turn (HealthKit); null when not a user turn. */
+  client?: ClientContext | null;
 };
 
 export type ToolOutcome = {

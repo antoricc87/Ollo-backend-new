@@ -275,6 +275,9 @@ export const getCaloriesFromAudio = async (
   return { ...toLegacySingleMeal(result), transcript };
 };
 
+/** ~0.8 s of AAC at the app's HIGH_QUALITY preset. */
+const MIN_AUDIO_BYTES = 8000;
+
 export const speechToText = async (base64Audio: string) => {
   const tempId = randomUUID();
   const tempRawPath = path.join(os.tmpdir(), `ollo-audio-${tempId}.raw`);
@@ -285,6 +288,9 @@ export const speechToText = async (base64Audio: string) => {
       base64Audio.replace(/^data:audio\/\w+;base64,/, ""),
       "base64"
     );
+    // A tap-tap on the mic yields a few KB of silence; the transcription model
+    // then hallucinates a greeting in a random language. Refuse it up front.
+    if (audioBuffer.length < MIN_AUDIO_BYTES) throw new Error("Recording too short");
     await writeFile(tempRawPath, audioBuffer);
 
     // Convert to MP3 using ffmpeg
@@ -299,9 +305,13 @@ export const speechToText = async (base64Audio: string) => {
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tempConvertedPath),
       model: "gpt-4o-mini-transcribe",
+      // No `prompt` hint: on near-silent clips the model echoes the hint back
+      // as the transcript (seen 2026-08-26). Silence is rejected below instead.
     });
-
-    return transcription.text;
+    const text = (transcription.text ?? "").trim();
+    // No Latin letters or digits at all = nothing intelligible was said.
+    if (!/[A-Za-z0-9À-ÿ]/.test(text)) throw new Error("Nothing intelligible in the recording");
+    return text;
   } catch (error: unknown) {
     console.error("Error transcribing the audio", error);
     throw error;

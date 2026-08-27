@@ -5,7 +5,7 @@ import { clampRange, dateRange, defineTool, shiftDay, subjectField } from "./reg
 export const getActivity = defineTool({
   name: "get_activity",
   description:
-    "Exercise minutes per day in a range (default: last 7 days; max 31) with session count (a day with ≥10 min counts as a session) and the plan's weekly exercise target. Steps/sleep/heart data live on the phone and arrive in the snapshot, not here.",
+    "Exercise MINUTES per day from the Apple exercise ring in a range (default: last 7 days; max 31), with a day count (≥10 min) and the plan's weekly exercise target. For actual training sessions — exercises, sets, weights, heart rate — use get_workouts. Steps/sleep/HRV live on the phone and arrive in the snapshot, not here.",
   schema: dateRange.extend({ subjectId: subjectField }),
   risk: "read",
   async run(ctx, input) {

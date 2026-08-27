@@ -23,6 +23,10 @@ export interface MealAnalysisInput {
   caption?: string;
   /** BREAKFAST | LUNCH | DINNER | SNACK when the UI already knows it. */
   mealTypeHint?: string;
+  /** Local calendar day (YYYY-MM-DD) so explicit dates ("on the 24th") can be emitted as ISO. */
+  todayLocal?: string;
+  /** Day the whole description refers to when the caller already knows it (a batch segment). */
+  dayHint?: string;
 }
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high";

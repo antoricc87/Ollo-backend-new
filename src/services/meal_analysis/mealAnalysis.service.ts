@@ -47,7 +47,7 @@ export function isModelUnavailableError(err: any): boolean {
 export const DEFAULT_RESOLVER = (process.env.NUTRITION_RESOLVER || "usda") as "usda" | "llm";
 
 let client: OpenAI | null = null;
-const getClient = () => {
+export const getClient = () => {
   if (!client) {
     client = new OpenAI({
       apiKey: process.env.REACT_APP_OPENAI_API_KEY || "",

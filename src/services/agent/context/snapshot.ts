@@ -1,3 +1,8 @@
+import WorkoutService from "../../workouts/model/workouts.model";
+import { activityByKey, activityKeyFromHealthKit } from "../../workouts/domain/activity.catalog";
+import { fmtSets } from "../../workouts/domain/workout.metrics";
+import type { WatchWorkoutSummary } from "../../workouts/domain/workout.schema";
+import moment from "moment-timezone";
 import prisma from "../../../utility/prismaClient";
 import { buildCurrentLabs, labFreshness, LabFreshness } from "../../../utils/labBiomarkers";
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
@@ -35,6 +40,8 @@ export type ClientContext = {
   hrvMs?: number;
   weekSleepAvgMinutes?: number;
   weekStepsAvg?: number;
+  /** HealthKit workouts from the last ~48 h (summaries only) so log_workout can link heart rate and calories. */
+  recentWorkouts?: WatchWorkoutSummary[];
 };
 
 export type SnapshotTarget = {
@@ -94,6 +101,8 @@ export type PatientSnapshot = {
     avgProtein_g: number | null;
     exerciseSessions: number;
     exerciseMinutes: number;
+    /** WorkoutSession rows this ISO week (synced watch workouts + described sessions). */
+    workouts: { id: string; day: string; activity: string; title: string | null; durationMin: number; calories: number | null; avgHr: number | null; source: string; exercises: string[] }[];
   };
   vitals: {
     weight: { value: number; unit: string; at: string; change30d: number | null } | null;
@@ -278,6 +287,7 @@ export async function buildPatientSnapshot(
   const exerciseByDay = new Map<string, number>();
   for (const e of weekExercise)
     exerciseByDay.set(e.date.slice(0, 10), (exerciseByDay.get(e.date.slice(0, 10)) ?? 0) + e.minutesOfExercise);
+  const weekSessions = await WorkoutService.list(patientId, { from: moment.tz(week.start, "YYYY-MM-DD", tz).toDate(), to: moment.tz(week.next, "YYYY-MM-DD", tz).toDate() }, { limit: 30 });
   const weekOut: PatientSnapshot["week"] = {
     start: week.start,
     end: week.end,
@@ -286,6 +296,17 @@ export async function buildPatientSnapshot(
     avgProtein_g: loggedDays.length ? round(sum(loggedDays.map((d) => d.protein)) / loggedDays.length) : null,
     exerciseSessions: Array.from(exerciseByDay.values()).filter((m) => m >= SESSION_MIN_MINUTES).length,
     exerciseMinutes: sum(Array.from(exerciseByDay.values())),
+    workouts: weekSessions.map((s) => ({
+      id: s.id,
+      day: moment(s.startedAt).tz(tz).format("ddd D"),
+      activity: activityByKey(s.activityKey).label,
+      title: s.title,
+      durationMin: Math.round(s.durationSec / 60),
+      calories: s.calories,
+      avgHr: s.avgHr,
+      source: s.source,
+      exercises: s.exercises.map((e) => `${e.name} ${fmtSets(e.sets.map((x) => ({ reps: x.reps, weightKg: x.weightKg, durationSec: x.durationSec, distanceM: x.distanceM, toFailure: x.toFailure, isWarmup: x.isWarmup })))}`.trim()),
+    })),
   };
 
   /* ----------------------------- vitals ---------------------------- */
@@ -508,6 +529,22 @@ export function renderSnapshot(s: PatientSnapshot): string {
       `; ${w.exerciseSessions} exercise sessions (${w.exerciseMinutes} min)` +
       (s.client?.weekSleepAvgMinutes !== undefined ? `; sleep avg ${(s.client.weekSleepAvgMinutes / 60).toFixed(1)}h` : "")
   );
+  if (w.workouts.length)
+    L.push(
+      `  sessions: ` +
+        w.workouts
+          .map((x) => `${x.day} ${x.title ?? x.activity}${x.title ? ` (${x.activity})` : ""} ${x.durationMin} min${x.calories != null ? `, ${x.calories} kcal` : ""}${x.avgHr ? `, avg ${x.avgHr} bpm` : ""}${x.exercises.length ? ` — ${x.exercises.slice(0, 6).join("; ")}` : ""}`)
+          .join(" | ")
+    );
+  if (s.client?.recentWorkouts?.length) {
+    L.push(
+      `  watch workouts (last 48 h, from the phone; use log_workout to add detail): ` +
+        s.client.recentWorkouts
+          .slice(0, 6)
+          .map((x) => `${activityByKey(activityKeyFromHealthKit(x.activityName)).label} ${moment(x.startedAt).tz(s.timeZone).format("ddd HH:mm")} ${Math.round(x.durationSec / 60)} min${x.calories ? `, ${Math.round(x.calories)} kcal` : ""}${x.avgHr ? `, avg ${x.avgHr}` : ""}`)
+          .join(" | ")
+    );
+  }
 
   const v = s.vitals;
   L.push(

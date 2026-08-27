@@ -168,6 +168,7 @@ async function* runLoop(p: {
     timeZone: tz,
     today: dayKey(tz),
     resolveSubject: makeSubjectResolver(patientId),
+    client: p.client,
   };
 
   const cards: Card[] = [];

@@ -180,6 +180,7 @@ model Patient {
   patientSummary       PatientSummary?
   onBoardingComplete   Boolean               @default(false)
   lastSectionCompleted String?
+  consentAcceptedAt    DateTime?
   healthGoals          HealthGoal[]          @relation("PatientHealthGoals")
   healthPlans          HealthPlan[]          @relation("PatientPlans")
   createdAt            DateTime?             @default(now())
@@ -206,7 +207,9 @@ model Patient {
   agentMemories        AgentMemory[]
   agentAuditLogs       AgentAuditLog[]
   agentProposals       AgentProposal[]
+  workoutSessions      WorkoutSession[]      @relation("PatientWorkouts")
   agentPreference      AgentPreference?
+  labJourneys          LabJourney[]          @relation("PatientLabJourneys")
 }
 
 model DexcomToken {
@@ -1408,4 +1411,111 @@ model AgentPreference {
   lastWeeklyReviewAt DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+}
+
+/* ------------------------------ Workouts ------------------------------- */
+
+/// Where the session record came from. HEALTHKIT = synced summary of a watch/
+/// phone workout; OLLIE = described to the agent (may be linked to a HealthKit
+/// workout via externalId); MANUAL = entered in the app.
+enum WorkoutSource {
+  HEALTHKIT
+  OLLIE
+  MANUAL
+}
+
+/// One physical training session. Metrics (calories, heart rate, zones) come
+/// from the linked HealthKit workout when there is one, otherwise estimated.
+/// Heart-rate traces are never stored — the phone reads them from HealthKit.
+model WorkoutSession {
+  id            String            @id @default(uuid())
+  patientId     String
+  patient       Patient           @relation("PatientWorkouts", fields: [patientId], references: [id], onDelete: Cascade)
+  source        WorkoutSource
+  externalId    String? // HealthKit workout UUID (dedup key for sync)
+  activityKey   String // canonical activity kind (domain/activity.catalog.ts)
+  title         String? // "Push day" — user/agent naming, optional
+  startedAt     DateTime
+  endedAt       DateTime
+  durationSec   Int
+  calories      Int?
+  metricsSource String? // watch | estimate | user
+  distanceKm    Float?
+  avgHr         Int?
+  peakHr        Int?
+  lowHr         Int?
+  zoneSeconds   Int[] // 5 entries, Easy → Peak
+  rpe           Int? // 1–10, user-reported
+  notes         String?
+  description   String? // what the user said, verbatim
+  deletedAt     DateTime? // soft delete (removed from Health, or by the user)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  exercises     WorkoutExercise[]
+
+  @@unique([patientId, externalId])
+  @@index([patientId, startedAt])
+}
+
+model WorkoutExercise {
+  id          String         @id @default(uuid())
+  sessionId   String
+  session     WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sortOrder   Int            @default(0)
+  exerciseKey String // canonical key (domain/exercise.catalog.ts) or "custom:<slug>"
+  name        String // display name as logged
+  muscleGroup String?
+  equipment   String?
+  notes       String?
+  sets        WorkoutSet[]
+
+  @@index([sessionId])
+  @@index([exerciseKey])
+}
+
+model WorkoutSet {
+  id          String          @id @default(uuid())
+  exerciseId  String
+  exercise    WorkoutExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  sortOrder   Int             @default(0)
+  reps        Int?
+  weightKg    Float?
+  durationSec Int?
+  distanceM   Float?
+  rpe         Float?
+  toFailure   Boolean         @default(false)
+  isWarmup    Boolean         @default(false)
+
+  @@index([exerciseId])
+}
+
+/// Labs journey (Aug 2026): one row per attempt to get labs. The panel is
+/// recomputed live from the profile; `panel` is the snapshot at start.
+enum LabRoute {
+  OWN_DOCTOR
+  DTC
+  OLLO_DOCTOR
+}
+
+enum LabJourneyStatus {
+  RECOMMENDED
+  ORDERED
+  RESULTED
+  CANCELLED
+}
+
+model LabJourney {
+  id         String           @id @default(uuid())
+  patientId  String
+  patient    Patient          @relation("PatientLabJourneys", fields: [patientId], references: [id], onDelete: Cascade)
+  route      LabRoute
+  status     LabJourneyStatus @default(RECOMMENDED)
+  panel      Json
+  bookingId  String?
+  orderedAt  DateTime?
+  resultedAt DateTime?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@index([patientId, status])
 }

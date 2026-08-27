@@ -227,11 +227,19 @@ export function normalizeIngredient(ing: Ingredient): Ingredient {
 /** Drop exact duplicates the model occasionally emits (same name, quantity, unit and grams). */
 export function dedupeIngredients<T extends Pick<Ingredient, "name" | "quantity" | "unit" | "grams">>(ings: T[]): T[] {
   const seen = new Set<string>();
-  return ings.filter((i) => {
+  const exact = ings.filter((i) => {
     const key = `${(i.name || "").trim().toLowerCase()}|${i.quantity}|${i.unit}|${Math.round(i.grams)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
+  });
+  // A composite row that restates two or more of its own components
+  // ("Greek yogurt with honey" next to "Greek yogurt" and "Honey") double-counts them.
+  const names = exact.map((i) => (i.name || "").trim().toLowerCase());
+  return exact.filter((_, idx) => {
+    const own = names[idx];
+    const contained = names.filter((n, j) => j !== idx && n.length >= 3 && own.includes(n)).length;
+    return contained < 2;
   });
 }
 

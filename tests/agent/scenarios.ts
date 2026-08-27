@@ -99,6 +99,16 @@ export const SCENARIOS: Scenario[] = [
     turns: [{ message: "My weight this morning was 83.4 kg.", expect: { tools: ["log_vital"], proposal: "log_vital", mustMatch: [/confirm/i] } }],
   },
   {
+    name: "log_workout_proposal",
+    category: "capability",
+    turns: [{ message: "Did legs this morning: squats 5x5 at 100kg, leg press 3x12 at 180, then 3 sets of calf raises to failure. About 55 minutes.", expect: { tools: ["log_workout"], proposal: "log_workout", mustMatch: [/confirm/i, /squat/i], mustNotMatch: [/\b(i('ve| have) )?(logged|saved) (it|that|your)/i] } }],
+  },
+  {
+    name: "workout_not_hypothetical",
+    category: "capability",
+    turns: [{ message: "Thinking of doing bench and rows tomorrow, 4 sets each — sound ok?", expect: { notTools: ["log_workout"] } }],
+  },
+  {
     name: "labs_explained",
     category: "capability",
     turns: [{ message: "Explain my flagged labs to me.", expect: { mustMatch: [/LDL/i, /128/, /vitamin d/i, /21/], mustNotMatch: NO_MED_ADVICE } }],

@@ -1,5 +1,5 @@
 {
-  "_readme": "Reference values are USDA FoodData Central / manufacturer figures for the portion a careful dietitian would assume from the text. tolerance = allowed relative error on kcal (default 0.2). expectUser / expectAssumed = ingredient-name substrings whose portionSource must be 'user' vs anything else. Edit freely; keep ids stable.",
+  "_readme": "Reference values are USDA FoodData Central / manufacturer figures for the portion a careful dietitian would assume from the text. tolerance = allowed relative error on kcal (default 0.2). expectUser / expectAssumed = ingredient-name substrings whose portionSource must be 'user' vs anything else. Edit freely; keep ids stable. Batch cases (narration: true) run through analyzeNarration with today fixed at EVAL_TODAY (2026-08-26, a Wednesday); expectedMealDays checks each meal's resolved day, expectHeldBack the meals whose day could not be resolved (their kcal are not in expected).",
   "defaultContext": {
     "age": 34,
     "gender": "male",
@@ -299,7 +299,7 @@
       "expectUser": [
         "cereal"
       ],
-      "notes": "'bowl' is a user container; cereal type ambiguous \u2192 wide tolerance"
+      "notes": "'bowl' is a user container; cereal type ambiguous → wide tolerance"
     },
     {
       "id": "t20-slice-choc-cake",
@@ -521,7 +521,7 @@
         "fried rice",
         "rice"
       ],
-      "notes": "size word \u2192 user"
+      "notes": "size word → user"
     },
     {
       "id": "t34-150g-strawberries",
@@ -580,7 +580,102 @@
       "expectUser": [
         "pizza"
       ],
-      "notes": "'whole' = user; USDA 12-inch pan cheese pizza = 728 g \u2248 2 000 kcal, Italian 30 cm \u2248 850 \u2192 US-leaning midpoint, wide tolerance"
+      "notes": "'whole' = user; USDA 12-inch pan cheese pizza = 728 g ≈ 2 000 kcal, Italian 30 cm ≈ 850 → US-leaning midpoint, wide tolerance"
+    },
+    {
+      "id": "b01-two-days-plain",
+      "narration": true,
+      "input": "Yesterday I had 2 scrambled eggs and a slice of whole wheat toast for breakfast, then a chicken caesar salad for lunch. Today I've only had a banana and a black coffee for breakfast so far.",
+      "expected": {
+        "kcal": 830,
+        "protein": 52,
+        "carbs": 68,
+        "fat": 40
+      },
+      "tolerance": 0.35,
+      "expectedMeals": 3,
+      "expectedMealDays": [
+        {
+          "mealType": "BREAKFAST",
+          "daysAgo": 1
+        },
+        {
+          "mealType": "LUNCH",
+          "daysAgo": 1
+        },
+        {
+          "mealType": "BREAKFAST",
+          "daysAgo": 0
+        }
+      ],
+      "expectUser": [
+        "egg",
+        "toast",
+        "banana"
+      ],
+      "notes": "eggs 2 ≈ 180, toast ≈ 80, chicken caesar ≈ 460, banana 105, coffee ≈ 2"
+    },
+    {
+      "id": "b02-weekday-cues",
+      "narration": true,
+      "input": "On Monday I had oatmeal with blueberries for breakfast and a turkey sandwich for lunch. Tuesday dinner was spaghetti bolognese, and last night I had a slice of pizza margherita as a snack.",
+      "expected": {
+        "kcal": 1430,
+        "protein": 62,
+        "carbs": 190,
+        "fat": 45
+      },
+      "tolerance": 0.35,
+      "expectedMeals": 4,
+      "expectedMealDays": [
+        {
+          "mealType": "BREAKFAST",
+          "daysAgo": 2
+        },
+        {
+          "mealType": "LUNCH",
+          "daysAgo": 2
+        },
+        {
+          "mealType": "DINNER",
+          "daysAgo": 1
+        },
+        {
+          "mealType": "SNACK",
+          "daysAgo": 1
+        }
+      ],
+      "expectAssumed": [
+        "oatmeal",
+        "turkey",
+        "spaghetti|bolognese"
+      ],
+      "notes": "Mon=2 days ago, Tue/last night=1; oatmeal+blueberries ≈ 200, turkey sandwich ≈ 330, bolognese ≈ 620, pizza slice ≈ 280"
+    },
+    {
+      "id": "b03-held-back-vague-day",
+      "narration": true,
+      "input": "The other day I had a burrito for lunch, and yesterday a greek yogurt with honey for breakfast.",
+      "expected": {
+        "kcal": 170,
+        "protein": 10,
+        "carbs": 24,
+        "fat": 4
+      },
+      "tolerance": 0.35,
+      "expectedMeals": 1,
+      "expectHeldBack": 1,
+      "expectedMealDays": [
+        {
+          "mealType": "BREAKFAST",
+          "daysAgo": 1
+        }
+      ],
+      "expectAssumed": [
+        "yogurt",
+        "honey"
+      ],
+      "notes": "burrito day unresolvable → held back; totals = yogurt 170 g ≈ 100 + honey 1 tbsp ≈ 64"
     }
   ]
 }

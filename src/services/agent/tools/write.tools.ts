@@ -1,7 +1,17 @@
 import moment from "moment-timezone";
 import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
-import { analyzeMeal } from "../../meal_analysis/mealAnalysis.service";
+import {
+  analyzeNarration,
+  applyMealEdits,
+  buildMealPreview,
+  markDuplicates,
+  missingSlots,
+  normalizePreview,
+  type BatchMeal,
+  type ExistingEntry,
+  type MealPreview,
+} from "../../meal_analysis/mealBatch";
 import CaloriesService from "../../calories_tracker/model/calories.model";
 import WeightService from "../../weight_tracker/model/weight.model";
 import BFPService from "../../bodyFatPercentage/model/bfp.model";
@@ -9,7 +19,7 @@ import BloodPressureService from "../../bp_tracker/model/bloodpressure.model";
 import GlucoseService from "../../glucose_tracker/model/glucose.model";
 import MessagingService from "../../messaging/model/messaging.model";
 import BookingService from "../../bookings/model/bookings.model";
-import { DAY_RE, dayString, defineTool, subjectField } from "./registry";
+import { dayString, defineTool, subjectField } from "./registry";
 
 /**
  * Confirm-gated write tools. `run` prepares a proposal (what will happen,
@@ -18,144 +28,122 @@ import { DAY_RE, dayString, defineTool, subjectField } from "./registry";
  * and notifications stay consistent.
  */
 
-const r1 = (n: number) => Math.round(n * 10) / 10;
 const sum = (xs: (number | null | undefined)[]) => xs.reduce<number>((a, b) => a + (b ?? 0), 0);
 
 /* ------------------------------- log_meal -------------------------------- */
 
 const MEAL_TYPES = ["BREAKFAST", "LUNCH", "DINNER", "SNACK"] as const;
 
-const mealPreview = (meals: any[], date: string) => ({
-  date,
-  meals: meals.map((m) => ({
-    name: m.mealName || "Meal",
-    mealType: m.mealType,
-    calories: Math.round(sum(m.ingredients.map((i: any) => i.calories))),
-    protein_g: r1(sum(m.ingredients.map((i: any) => i.nutrients?.proteins))),
-    carbs_g: r1(sum(m.ingredients.map((i: any) => i.nutrients?.carbohydrates))),
-    fat_g: r1(sum(m.ingredients.map((i: any) => i.nutrients?.fats))),
-    ingredients: m.ingredients.map((i: any) => ({
-      name: i.name,
-      quantity: i.quantity,
-      unit: i.unit,
-      grams: i.grams,
-      calories: Math.round(i.calories ?? 0),
-      portionSource: i.portionSource ?? null,
-      nutrientSource: i.nutrientSource ?? null,
-    })),
-  })),
-});
-
-/**
- * Portion edits from the card: `{ meals: [{ index, ingredients: [{ index, grams }] }] }`
- * — `grams: null` removes the ingredient. Calories and every numeric nutrient
- * scale linearly with grams (works for USDA- and model-sourced rows alike).
- */
-const PortionEdits = z.object({
-  meals: z.array(
-    z.object({
-      index: z.number().int().min(0),
-      ingredients: z.array(z.object({ index: z.number().int().min(0), grams: z.number().min(0).max(5000).nullable() })).max(60),
-    })
-  ).max(10),
-});
-
-export const applyPortionEdits = (preview: any, rawEdits: unknown) => {
-  const edits = PortionEdits.parse(rawEdits);
-  const analysed: any[] = preview?.analysis?.meals ?? [];
-  if (!analysed.length) throw new Error("preview has no analysed meals to edit");
-  const meals = analysed.map((m) => ({ ...m, ingredients: m.ingredients.map((i: any) => ({ ...i })) }));
-  for (const me of edits.meals) {
-    const meal = meals[me.index];
-    if (!meal) throw new Error(`no meal at index ${me.index}`);
-    const removed = new Set<number>();
-    for (const ie of me.ingredients) {
-      const ing = meal.ingredients[ie.index];
-      if (!ing) throw new Error(`no ingredient at index ${ie.index}`);
-      if (ie.grams === null || ie.grams === 0) {
-        removed.add(ie.index);
-        continue;
-      }
-      const factor = ing.grams > 0 ? ie.grams / ing.grams : 1;
-      ing.grams = ie.grams;
-      ing.quantity = Math.round((ing.quantity ?? 1) * factor * 100) / 100;
-      ing.calories = Math.round((ing.calories ?? 0) * factor * 10) / 10;
-      ing.portionSource = "user";
-      if (ing.nutrients && typeof ing.nutrients === "object")
-        for (const k of Object.keys(ing.nutrients)) if (typeof ing.nutrients[k] === "number") ing.nutrients[k] = Math.round(ing.nutrients[k] * factor * 1000) / 1000;
-    }
-    meal.ingredients = meal.ingredients.filter((_: any, i: number) => !removed.has(i));
-    if (!meal.ingredients.length) throw new Error("a meal must keep at least one ingredient");
-  }
-  return { ...preview, analysis: { ...preview.analysis, meals }, ...mealPreview(meals, preview.date), edited: true };
+/** What is already logged on each of `dates` (for duplicate notes and gap questions). */
+const existingMealsByDay = async (userId: string, dates: string[]): Promise<Record<string, ExistingEntry[]>> => {
+  if (!dates.length) return {};
+  const days = await prisma.dailyFood.findMany({
+    where: { userId, OR: dates.map((d) => ({ date: { startsWith: d } })) },
+    select: { date: true, foodEntries: { select: { mealType: true, description: true, calories: true } } },
+  });
+  const out: Record<string, ExistingEntry[]> = {};
+  for (const d of days) (out[d.date.slice(0, 10)] ??= []).push(...d.foodEntries);
+  return out;
 };
+
+const modelDays = (preview: MealPreview) =>
+  preview.days.map((d) => ({
+    date: d.date,
+    label: d.label,
+    meals: d.meals.map((m) => ({ mealType: m.mealType, name: m.name, calories: m.calories, included: m.included, ...(m.duplicateOf ? { alreadyLogged: m.duplicateOf } : {}) })),
+  }));
 
 export const logMeal = defineTool({
   name: "log_meal",
   description:
-    "Log food the user ate (their own or a family member's). Pass the meal exactly as described — foods, portions, brand names, and any time reference ('yesterday's lunch'). The tool analyses it into ingredients with calories and macros and returns a PREVIEW; the user confirms it in the app before anything is saved. Do not call it for hypothetical meals or meal ideas.",
+    "Log food the user ate (their own or a family member's) — a single meal or a catch-up over several days ('yesterday I had…, Tuesday dinner was…'). Pass the user's words verbatim in ONE call: foods, portions, brand names and every day/time reference. The tool analyses them into dated meals with calories and macros and returns a PREVIEW the user confirms in the app (ticking meals on/off, editing portions) before anything is saved. Meals whose day it cannot pin down come back as heldBack: ask the user which day and call the tool again for those with `date` set. Do not call it for hypothetical meals or meal ideas.",
   schema: z.object({
-    description: z.string().min(3).max(1500).describe("What was eaten, verbatim from the user, incl. portions"),
-    mealType: z.enum(MEAL_TYPES).optional().describe("If the user said or it is obvious from time of day"),
-    date: dayString.optional().describe("Day the meal was eaten. Omit for today, or when the description says 'yesterday' etc. (the analyser reads it)"),
+    description: z.string().min(3).max(4000).describe("What was eaten, verbatim from the user, incl. portions and day references"),
+    mealType: z.enum(MEAL_TYPES).optional().describe("Only for a single meal, if the user said or it is obvious from time of day"),
+    date: dayString.optional().describe("Day ALL meals in this call were eaten. Omit when the description carries its own day words ('yesterday', 'Monday'); set it when re-sending a held-back meal after the user said which day"),
     subjectId: subjectField,
   }),
   risk: "write",
-  applyPreviewEdits: applyPortionEdits,
+  applyPreviewEdits: applyMealEdits,
   async run(ctx, input) {
     const subject = await ctx.resolveSubject(input.subjectId);
-    const analysis = await analyzeMeal(
-      { text: input.description, mealTypeHint: input.mealType },
-      { patientId: subject.id }
-    );
-    const meals = analysis.meals.filter((m) => m.ingredients?.length);
-    if (!meals.length) return { result: { error: "I couldn't identify any food in that description — could you describe the meal again with the main items?" } };
-    const date =
-      input.date ??
-      (analysis.dateReference && DAY_RE.test(analysis.dateReference) && analysis.dateReference <= ctx.today ? analysis.dateReference : ctx.today);
-    const preview = { ...mealPreview(meals, date), subject: subject.name, subjectId: subject.id, analysis: { model: analysis.model, meals } };
-    const totalKcal = preview.meals.reduce((a, m) => a + m.calories, 0);
-    const summary = `${preview.meals.map((m) => `${m.mealType?.toLowerCase() ?? "meal"}: ${m.name} (${m.calories} kcal)`).join("; ")} on ${date}${subject.isSelf ? "" : ` for ${subject.name}`}`;
+    if (input.date && input.date > ctx.today) return { result: { error: "That day is in the future — meals can only be logged for today or earlier." } };
+    const analysis = await analyzeNarration(input.description, {
+      patientId: subject.id,
+      today: ctx.today,
+      timeZone: ctx.timeZone,
+      mealTypeHint: input.mealType,
+      dateOverride: input.date,
+    });
+    if (!analysis.meals.length && !analysis.heldBack.length)
+      return { result: { error: "I couldn't identify any food in that description — could you describe the meal again with the main items?" } };
+
+    const existing = await existingMealsByDay(subject.id, [...new Set(analysis.meals.map((m) => m.date))]);
+    const meals = markDuplicates(analysis.meals, existing);
+    const preview = buildMealPreview(meals, { today: ctx.today, timeZone: ctx.timeZone, subject: subject.name, subjectId: subject.id, model: analysis.model, heldBack: analysis.heldBack });
+    const missing = missingSlots(meals, existing);
+
+    if (!meals.length) {
+      return {
+        result: {
+          proposed: false,
+          heldBack: analysis.heldBack,
+          note: "Nothing proposed: I couldn't tell which day these were eaten. Ask the user which day, then call log_meal again with `date` set and the description below.",
+        },
+      };
+    }
+    const forWhom = subject.isSelf ? "" : ` for ${subject.name}`;
+    const summary =
+      preview.days.length === 1
+        ? `${preview.days[0].meals.map((m) => `${m.mealType.toLowerCase()}: ${m.name} (${m.calories} kcal)`).join("; ")} on ${preview.days[0].date}${forWhom}`
+        : `${preview.totals.included} meals over ${preview.days.length} days (${preview.days[0].date} → ${preview.days[preview.days.length - 1].date})${forWhom}`;
+    const title =
+      preview.days.length > 1 ? `Log ${preview.totals.meals} meals · ${preview.days.length} days` : preview.totals.meals === 1 ? `Log ${preview.days[0].meals[0].mealType.toLowerCase()}` : `Log ${preview.totals.meals} meals`;
+    const duplicates = meals.filter((m) => m.duplicateOf).length;
     return {
-      result: { previewFor: subject.name, date, totalCalories: totalKcal, meals: preview.meals.map(({ ingredients, ...m }) => ({ ...m, ingredientCount: ingredients.length })) },
-      proposal: { title: preview.meals.length === 1 ? `Log ${preview.meals[0].mealType?.toLowerCase() ?? "meal"}` : `Log ${preview.meals.length} meals`, summary, preview },
+      result: {
+        previewFor: subject.name,
+        days: modelDays(preview),
+        totalCalories: preview.totals.calories,
+        ...(duplicates ? { note: `${duplicates} meal(s) look already logged for that slot and are unticked by default — mention it briefly; the user can tick them back.` } : {}),
+        ...(analysis.heldBack.length ? { heldBack: analysis.heldBack, heldBackNote: "Not in the card: I couldn't tell which day. Ask the user, then call log_meal again with `date` and the description given." } : {}),
+        ...(Object.keys(missing).length ? { missingSlots: missing, missingNote: "Slots with nothing logged or proposed. Ask about at most one, only if it seems useful; never invent meals." } : {}),
+      },
+      proposal: { title, summary, preview },
     };
   },
-  async commit(ctx, input, preview: any) {
+  async commit(ctx, input, rawPreview: any) {
     // Re-analyse only if the stored preview is missing (edited input) — the
     // preview the user confirmed is the one that gets saved.
-    let analysed: any[] = preview?.analysis?.meals ?? [];
+    let preview: MealPreview | null = rawPreview?.analysis?.meals?.length ? normalizePreview(rawPreview) : null;
     let subjectId: string = preview?.subjectId ?? (await ctx.resolveSubject(input.subjectId)).id;
-    let date: string = preview?.date ?? input.date ?? ctx.today;
-    if (!analysed.length) {
+    if (!preview) {
       const subject = await ctx.resolveSubject(input.subjectId);
       subjectId = subject.id;
-      const analysis = await analyzeMeal({ text: input.description, mealTypeHint: input.mealType }, { patientId: subject.id });
-      analysed = analysis.meals.filter((m) => m.ingredients?.length);
-      date = input.date ?? (analysis.dateReference && DAY_RE.test(analysis.dateReference) ? analysis.dateReference : ctx.today);
+      const analysis = await analyzeNarration(input.description, { patientId: subject.id, today: ctx.today, timeZone: ctx.timeZone, mealTypeHint: input.mealType, dateOverride: input.date });
+      preview = buildMealPreview(analysis.meals, { today: ctx.today, timeZone: ctx.timeZone, subject: subject.name, subjectId, model: analysis.model, heldBack: analysis.heldBack });
     }
-    if (!analysed.length) throw new Error("nothing to log");
-    const when = moment.tz(date, "YYYY-MM-DD", ctx.timeZone).hour(12);
-    const saved: any[] = [];
-    for (const m of analysed) {
-      const entries = [
-        {
-          description: m.mealName || "Meal",
-          quantity: "1",
-          calories: Math.round(sum(m.ingredients.map((i: any) => i.calories))),
-          mealType: input.mealType ?? m.mealType,
-          ingredients: m.ingredients, // server recomputes totals from these
-          nutrients: {},
-          glycemicLoad: m.glycemicLoad ?? 0,
-        },
-      ];
+    const toSave = preview.analysis.meals.filter((m) => m.included && m.ingredients?.length);
+    if (!toSave.length) throw new Error("nothing to log — every meal is unticked");
+    const byDay = new Map<string, BatchMeal[]>();
+    for (const m of toSave) (byDay.get(m.date) ?? byDay.set(m.date, []).get(m.date)!).push(m);
+    const days: { date: string; meals: { id: string; description: string; mealType: string; calories: number; ingredients: number }[] }[] = [];
+    for (const [date, meals] of [...byDay.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+      const when = moment.tz(date, "YYYY-MM-DD", ctx.timeZone).hour(12);
+      const entries = meals.map((m) => ({
+        description: m.mealName || "Meal",
+        quantity: "1",
+        calories: Math.round(sum(m.ingredients.map((i: any) => i.calories))),
+        mealType: m.mealType,
+        ingredients: m.ingredients, // server recomputes totals from these
+        nutrients: {},
+        glycemicLoad: m.glycemicLoad ?? 0,
+      }));
       const rows = await CaloriesService.createFoodEntry(subjectId, entries, when, ctx.timeZone);
-      if (Array.isArray(rows)) saved.push(...rows);
+      days.push({ date, meals: (Array.isArray(rows) ? rows : []).map((e: any) => ({ id: e.id, description: e.description, mealType: e.mealType, calories: e.calories, ingredients: e.ingredients?.length ?? 0 })) });
     }
-    const result = {
-      logged: saved.map((e) => ({ id: e.id, description: e.description, mealType: e.mealType, calories: e.calories, ingredients: e.ingredients?.length ?? 0 })),
-      date,
-    };
+    const logged = days.flatMap((d) => d.meals.map((m) => ({ ...m, date: d.date })));
+    const result = { logged, days, date: days.length === 1 ? days[0].date : undefined, totalCalories: logged.reduce((a, m) => a + (m.calories ?? 0), 0) };
     return { result, cards: [{ type: "meal_logged", title: "Logged", data: result }] };
   },
 });

@@ -57,7 +57,7 @@ const recentlyActive = async (patientId: string) => {
 
 const weeklyInstruction = (tz: string) => {
   const lastWeek = isoWeekRange(tz, moment().tz(tz).subtract(1, "week"));
-  return `[Weekly plan review for the week ${lastWeek.start} → ${lastWeek.end}. Use get_nutrition_summary and get_activity for that exact range (from=${lastWeek.start}, to=${lastWeek.end}) before judging. Compare against the plan targets. If a target should change, call update_plan_targets with the full new target list.]`;
+  return `[Weekly plan review for the week ${lastWeek.start} → ${lastWeek.end}. Use get_nutrition_summary, get_activity and get_workouts for that exact range (from=${lastWeek.start}, to=${lastWeek.end}) before judging. Compare against the plan targets. If a target should change, call update_plan_targets with the full new target list.]`;
 };
 
 const dailyInstruction = (tz: string) =>

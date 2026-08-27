@@ -18,6 +18,8 @@ import {
   DEFAULT_MEAL_MODEL,
 } from "../../services/meal_analysis/mealAnalysis.service";
 import { MealAnalysisResult } from "../../services/meal_analysis/mealAnalysis.schema";
+import { analyzeNarration } from "../../services/meal_analysis/mealBatch";
+import { resolveMealDate } from "../../services/meal_analysis/mealDate";
 import {
   PatientContext,
   ReasoningEffort,
@@ -32,6 +34,12 @@ interface EvalCase {
   tolerance?: number;
   expectedMeals?: number;
   expectedDateReference?: string;
+  /** Batch path: run through analyzeNarration (segmentation + code-side date resolution). */
+  narration?: boolean;
+  /** Per-meal day checks, relative to EVAL_TODAY (a meal of that type must land daysAgo days back). */
+  expectedMealDays?: { mealType: string; daysAgo: number }[];
+  /** How many meals must be held back (unresolvable day). Totals cover resolved meals only. */
+  expectHeldBack?: number;
   expectUser?: string[];
   expectAssumed?: string[];
   notes?: string;
@@ -49,12 +57,25 @@ interface CaseResult {
   withinTolerance: boolean;
   mealCountOk: boolean | null;
   dateOk: boolean | null;
+  datesOk: boolean | null;
+  heldBackOk: boolean | null;
   portionChecks: { passed: number; total: number; failures: string[] };
   duplicates: string[];
   items: { name: string; quantity: string; grams: number; portionSource: string; kcal: number; nutrientSource: string; reference: string | null; reason: string | null }[];
   usdaItems: number;
   totalItems: number;
 }
+
+// Fixed "today" so weekday phrases in the cases resolve the same way every run (2026-08-26 is a Wednesday).
+const EVAL_TODAY = process.env.EVAL_TODAY || "2026-08-26";
+const EVAL_TZ = "Europe/Rome";
+const daysAgo = (n: number) => {
+  const d = new Date(`${EVAL_TODAY}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+};
+// Batch results carry a resolved `date`; plain analyzeMeal results carry the phrase.
+const mealDay = (m: any): string | null => m.date ?? resolveMealDate(m.mealDate, EVAL_TODAY, EVAL_TZ).date;
 
 // $ per 1M tokens [input, output] — update as pricing changes.
 const PRICING: Record<string, [number, number]> = {
@@ -92,11 +113,19 @@ async function runCase(
 ): Promise<CaseResult> {
   const started = Date.now();
   let result: MealAnalysisResult;
+  let heldBack = 0;
   try {
-    result = await analyzeMeal(
-      { text: c.input, mealTypeHint: c.mealTypeHint },
-      { patientContext: c.patientContext ?? ctx, model, reasoningEffort: effort, resolver }
-    );
+    if (c.narration) {
+      // Batch path: segmentation + per-meal date resolution, no DB.
+      const n = await analyzeNarration(c.input, { patientContext: c.patientContext ?? ctx, today: EVAL_TODAY, timeZone: EVAL_TZ, mealTypeHint: c.mealTypeHint });
+      heldBack = n.heldBack.length;
+      result = { meals: n.meals, dateReference: null, dateConfidence: 1, model: n.model, latencyMs: Date.now() - started, usage: null };
+    } else {
+      result = await analyzeMeal(
+        { text: c.input, mealTypeHint: c.mealTypeHint, todayLocal: EVAL_TODAY },
+        { patientContext: c.patientContext ?? ctx, model, reasoningEffort: effort, resolver }
+      );
+    }
   } catch (e: any) {
     return {
       id: c.id,
@@ -110,6 +139,8 @@ async function runCase(
       withinTolerance: false,
       mealCountOk: null,
       dateOk: null,
+      datesOk: null,
+      heldBackOk: null,
       portionChecks: { passed: 0, total: 0, failures: [] },
       duplicates: [],
       items: [],
@@ -182,6 +213,8 @@ async function runCase(
       c.expectedDateReference != null
         ? (result.dateReference || "").toLowerCase().includes(c.expectedDateReference.toLowerCase())
         : null,
+    datesOk: c.expectedMealDays ? c.expectedMealDays.every((e) => result!.meals.some((m) => m.mealType === e.mealType && mealDay(m) === daysAgo(e.daysAgo))) : null,
+    heldBackOk: c.expectHeldBack != null ? heldBack === c.expectHeldBack : null,
     portionChecks: { passed, total, failures },
     duplicates,
     items: ings.map((i) => ({
@@ -246,6 +279,8 @@ const median = (xs: number[]) => {
     if (!r.ok) flags.push(`ERROR ${r.error}`);
     if (r.mealCountOk === false) flags.push("meals!");
     if (r.dateOk === false) flags.push("date!");
+    if (r.datesOk === false) flags.push("mealDays!");
+    if (r.heldBackOk === false) flags.push("heldBack!");
     if (r.duplicates.length) flags.push(`dup:${r.duplicates.join(",")}`);
     flags.push(...r.portionChecks.failures);
     console.log(

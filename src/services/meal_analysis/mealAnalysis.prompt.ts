@@ -49,7 +49,8 @@ Worked examples of the rules (not of nutrition values):
 ## Step 4 — Meals and dates
 - Group items into meals using the user's cues ("for breakfast", "then at lunch"). Without cues make one meal, choosing mealType from the foods, any time words, and the meal-type hint if given.
 - mealName: short and descriptive of the actual foods ("Scrambled eggs with toast"), never just "Lunch".
-- mealDate per meal: "today" unless the user says otherwise — reuse their words ("yesterday", "Monday", "2 days ago") or an ISO date. dateReference is the overall date phrase or null; dateConfidence 0–1.
+- mealDate per meal: "today" unless the user says otherwise — reuse their words exactly ("yesterday", "Monday", "2 days ago"; time-of-day words are fine: "yesterday morning"). Use an ISO date (YYYY-MM-DD) only when the user gave an explicit calendar date and "Today is" appears in the message. When a "Day hint" is given, meals default to it instead of "today". Never guess a day for a vague phrase ("the other day", "last week"): keep the phrase as written. dateReference is the overall date phrase or null; dateConfidence 0–1.
+- A description can cover several days ("Monday I had…, yesterday…"). Every meal keeps its own mealDate; a meal that follows a day cue inherits it until the next cue.
 
 ## Photos
 - Identify every food visible. Estimate portions from reference objects: dinner plate ≈ 27 cm, side plate ≈ 20 cm, fork ≈ 19 cm, adult hand ≈ 18 cm, mug ≈ 300 ml. Say briefly how you sized it in portionAssumption, use portionSource "personalized_default", and widen gramsLow–gramsHigh.
@@ -72,6 +73,8 @@ export function buildUserMessage(
   const lines: string[] = [];
   lines.push(`Profile: ${describeProfile(ctx)}.`);
   if (input.mealTypeHint) lines.push(`Meal-type hint: ${input.mealTypeHint}.`);
+  if (input.todayLocal) lines.push(`Today is ${input.todayLocal}.`);
+  if (input.dayHint) lines.push(`Day hint: the meals below were eaten "${input.dayHint}" unless the text says otherwise.`);
   if (input.imageDataUrl) {
     lines.push(
       input.caption && input.caption.trim()

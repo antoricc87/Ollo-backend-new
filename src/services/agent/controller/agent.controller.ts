@@ -8,6 +8,8 @@ import { registry } from "../tools";
 import proposalStore from "../memory/proposals.store";
 import { getPreference, runProactiveFor, setPreference } from "../proactive/proactive.service";
 import { speechToText } from "../../openAI/model/openai.model";
+import { z } from "zod";
+import { WatchWorkoutSummary } from "../../workouts/domain/workout.schema";
 
 const MAX_MESSAGE_CHARS = 4000;
 
@@ -18,7 +20,7 @@ const MAX_MESSAGE_CHARS = 4000;
 
 const pickClientContext = (raw: any): ClientContext | null => {
   if (!raw || typeof raw !== "object") return null;
-  const keys: (keyof ClientContext)[] = [
+  const keys: Exclude<keyof ClientContext, "recentWorkouts">[] = [
     "sleepMinutesLastNight",
     "stepsToday",
     "activeEnergyToday",
@@ -32,6 +34,8 @@ const pickClientContext = (raw: any): ClientContext | null => {
     const v = Number(raw[k]);
     if (raw[k] !== undefined && raw[k] !== null && isFinite(v)) out[k] = v;
   }
+  const rw = z.array(WatchWorkoutSummary).max(20).safeParse(raw.recentWorkouts);
+  if (rw.success && rw.data.length) out.recentWorkouts = rw.data;
   return Object.keys(out).length ? out : null;
 };
 
