@@ -21,7 +21,25 @@ async function main() {
   const pid = p.id;
   const createdEntryIds: string[] = [];
   let threadId: string | null = null;
+  let bpEntryId: string | null = null;
+  let bpDaily: string | null = null;
   const t0 = Date.now();
+
+  const cleanup = async () => {
+    // Through the service so DailyCalories / DailyNutrients / weekly totals are decremented too.
+    for (const id of createdEntryIds) await CaloriesService.deleteFoodEntry(pid, id).catch(() => null);
+    if (bpEntryId) await prisma.bloodPressureEntry.delete({ where: { id: bpEntryId } }).catch(() => null);
+    if (bpDaily && (await prisma.bloodPressureEntry.count({ where: { dailyTrackerId: bpDaily } })) === 0)
+      await prisma.dailyBloodPressure.delete({ where: { id: bpDaily } }).catch(() => null);
+    await unlinkDoctor(pid).catch(() => null);
+    // Only THIS run's proposals/audit rows — never the account's whole history.
+    if (threadId) {
+      await prisma.agentProposal.deleteMany({ where: { patientId: pid, threadId } });
+      await prisma.agentAuditLog.deleteMany({ where: { patientId: pid, threadId } });
+      await threadStore.remove(pid, threadId).catch(() => null);
+    }
+    log("cleaned up");
+  };
 
   const turn = async (message: string) => {
     const r = await runTurnCollect({ patientId: pid, threadId, message });
@@ -34,6 +52,7 @@ async function main() {
     return { ...r, proposals };
   };
 
+  try {
   /* 1. log a meal → proposal → confirm → FoodEntry + ingredients exist */
   const a = await turn("I just had lunch: a chicken caesar salad with a small bread roll and a black coffee.");
   assert.equal(a.proposals.length, 1, "one proposal expected");
@@ -41,12 +60,16 @@ async function main() {
   assert.equal(prop.toolName, "log_meal");
   assert(!/logged|saved/i.test(a.done!.text) || /confirm/i.test(a.done!.text), "must not claim it is logged before confirmation");
   log(`  proposal ${prop.proposalId}: ${prop.title} — ${prop.summary}`);
+  // Preview shape (multi-day log_meal): `days[].meals[]` rows, `index` addresses `analysis.meals`.
   const preview: any = prop.preview;
-  assert(preview.meals[0].ingredients.length >= 2, "ingredients in preview");
+  const rows: any[] = preview.days.flatMap((d: any) => d.meals);
+  assert(rows.length >= 1 && rows[0].ingredients.length >= 2, "ingredients in preview");
   const pending = await proposalStore.list(pid, { status: "PENDING" });
   assert(pending.some((x) => x.id === prop.proposalId));
 
-  const c = await proposalStore.confirm(pid, prop.proposalId);
+  // A lunch already logged today makes the duplicate check untick this one —
+  // tick it back on, as the user would on the card.
+  const c = await proposalStore.confirm(pid, prop.proposalId, null, rows[0].included ? undefined : { meals: [{ index: rows[0].index, included: true }] });
   assert.equal(c.status, 200, JSON.stringify(c));
   const logged = (c as any).result.logged;
   assert(logged.length >= 1);
@@ -70,7 +93,8 @@ async function main() {
   const bp = await prisma.bloodPressureEntry.findUnique({ where: { id: (vc as any).result.id } });
   assert(bp && bp.diastolic === 84 && bp.systolic === 128, "edited value saved");
   log(`  ✓ BP saved ${bp!.systolic}/${bp!.diastolic} (edited) at ${bp!.createdAt}`);
-  const bpDaily = bp!.dailyTrackerId;
+  bpEntryId = bp!.id;
+  bpDaily = bp!.dailyTrackerId;
 
   /* 4. cancel path */
   const w = await turn("Also log my weight at 77.4 kg.");
@@ -81,13 +105,13 @@ async function main() {
   assert(!/saved|logged/i.test(after.done!.text) || /not|didn|declin|cancel/i.test(after.done!.text), "should know the weight was declined");
 
   /* 5. no care team → graceful, no proposal */
-  const m = await turn("Send my flagged labs to my doctor please.");
+  const m = await turn("Message my doctor and ask whether I should be worried about my cholesterol.");
   assert.equal(m.proposals.length, 0, "no proposal without a care team");
   assert(/care team|clinician|doctor/i.test(m.done!.text));
 
   /* 5b. with a doctor linked: message → confirm → Message row; booking → confirm → Booking row */
   const { doctorId } = await seedDoctorFor(email);
-  const msg = await turn("Now that Dr. Rossi is on my care team, send her my flagged labs with a note asking what she thinks.");
+  const msg = await turn("Now that Dr. Rossi is on my care team, send her a message asking whether my cholesterol results look ok to her.");
   assert.equal(msg.proposals[0]?.toolName, "message_care_team", "message proposal");
   const mc: any = await proposalStore.confirm(pid, msg.proposals[0].proposalId);
   assert.equal(mc.status, 200, JSON.stringify(mc));
@@ -107,17 +131,18 @@ async function main() {
   const pe = await turn("Log a snack: a handful of almonds and a small apple.");
   assert.equal(pe.proposals[0]?.toolName, "log_meal");
   const pv: any = pe.proposals[0].preview;
-  const ings = pv.meals[0].ingredients;
+  const snack: any = pv.days.flatMap((d: any) => d.meals)[0];
+  const ings = snack.ingredients;
   assert(ings.length >= 2, "two ingredients expected");
   const half = Math.round(ings[0].grams / 2);
-  const edited: any = await proposalStore.confirm(pid, pe.proposals[0].proposalId, null, { meals: [{ index: 0, ingredients: [{ index: 0, grams: half }, { index: ings.length - 1, grams: null }] }] });
+  const edited: any = await proposalStore.confirm(pid, pe.proposals[0].proposalId, null, { meals: [{ index: snack.index, included: true, ingredients: [{ index: 0, grams: half }, { index: ings.length - 1, grams: null }] }] });
   assert.equal(edited.status, 200, JSON.stringify(edited));
   const row2 = await prisma.foodEntry.findUnique({ where: { id: edited.result.logged[0].id }, include: { ingredients: true } });
   createdEntryIds.push(row2!.id);
   assert.equal(row2!.ingredients.length, ings.length - 1, "one ingredient removed");
   assert(Math.abs(row2!.ingredients[0].grams - half) < 1, "grams edited");
-  assert(row2!.calories < pv.meals[0].calories, "calories dropped after edits");
-  log(`  ✓ portion edits applied: ${pv.meals[0].calories} → ${row2!.calories} kcal, ${row2!.ingredients.length} ingredients`);
+  assert(row2!.calories < snack.calories, "calories dropped after edits");
+  log(`  ✓ portion edits applied: ${snack.calories} → ${row2!.calories} kcal, ${row2!.ingredients.length} ingredients`);
 
   /* 6. generation: meal plan then grocery list */
   const g = await turn("Make me a 2-day meal plan, Mediterranean, quick weeknight dinners.");
@@ -130,18 +155,9 @@ async function main() {
   assert.equal(bad.status, 404);
 
   log(`\nall write-path checks passed in ${Math.round((Date.now() - t0) / 1000)} s`);
-
-  /* cleanup */
-  // Through the service so DailyCalories / DailyNutrients / weekly totals are decremented too.
-  for (const id of createdEntryIds) await CaloriesService.deleteFoodEntry(pid, id);
-  await prisma.bloodPressureEntry.delete({ where: { id: bp!.id } });
-  const remaining = await prisma.bloodPressureEntry.count({ where: { dailyTrackerId: bpDaily } });
-  if (remaining === 0) await prisma.dailyBloodPressure.delete({ where: { id: bpDaily } }).catch(() => null);
-  if (threadId) await threadStore.remove(pid, threadId);
-  await prisma.agentProposal.deleteMany({ where: { patientId: pid } });
-  await prisma.agentAuditLog.deleteMany({ where: { patientId: pid } });
-  // DailyFood/DailyNutrients/DailyCalories totals for today were bumped by createFoodEntry; recompute is the app's job — note it.
-  log("cleaned up");
+  } finally {
+    await cleanup();
+  }
 }
 
 main()

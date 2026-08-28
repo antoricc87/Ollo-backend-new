@@ -181,6 +181,9 @@ model Patient {
   onBoardingComplete   Boolean               @default(false)
   lastSectionCompleted String?
   consentAcceptedAt    DateTime?
+  /// Annual physical (onboarding Set 04): "within_year" | "over_year" | "never"
+  lastPhysicalStatus   String?
+  lastPhysicalAt       DateTime?
   healthGoals          HealthGoal[]          @relation("PatientHealthGoals")
   healthPlans          HealthPlan[]          @relation("PatientPlans")
   createdAt            DateTime?             @default(now())
@@ -1497,6 +1500,11 @@ enum LabRoute {
   OLLO_DOCTOR
 }
 
+enum LabJourneyReason {
+  ANNUAL_PHYSICAL
+  LABS_ONLY
+}
+
 enum LabJourneyStatus {
   RECOMMENDED
   ORDERED
@@ -1509,6 +1517,7 @@ model LabJourney {
   patientId  String
   patient    Patient          @relation("PatientLabJourneys", fields: [patientId], references: [id], onDelete: Cascade)
   route      LabRoute
+  reason     LabJourneyReason @default(LABS_ONLY)
   status     LabJourneyStatus @default(RECOMMENDED)
   panel      Json
   bookingId  String?

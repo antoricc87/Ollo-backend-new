@@ -93,6 +93,10 @@ function* chunks(text: string) {
 
 /* ============================== entry points ============================== */
 
+/** Phrases that only make sense after a write tool produced a proposal card. */
+const CLAIMS_CARD =
+  /\b(prepar\w*|ready)\b[^.!?\n]{0,80}\b(card|entry|log|logged|confirm)\b|\bcard\b[^.!?\n]{0,60}\b(confirm|edit|review)\b|\byou'?ll see a card\b|\bconfirm\b[^.!?\n]{0,40}\b(in|on) the app\b|\breview and confirm\b|\btap confirm\b/i;
+
 export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
   const { patientId } = input;
   const message = input.message.trim();
@@ -176,6 +180,9 @@ async function* runLoop(p: {
   let model: string | null = null;
   let steps = 0;
   let draft = "";
+  let proposedThisTurn = false;
+  let usedTools = false;
+  let nudged = false;
 
   try {
     while (steps < MAX_STEPS) {
@@ -186,6 +193,33 @@ async function* runLoop(p: {
       model = res.model;
 
       if (res.finishReason !== "tool_calls" || res.toolCalls.length === 0) {
+        // A reply that talks about a card or asks for confirmation when no
+        // write tool ran this turn is a hallucinated proposal (seen 2026-08-27:
+        // "I've prepared a card to log…" with tools=[]). Nudge once to call it.
+        // Weekly review: the snapshot is THIS week; judging last week without
+        // reading it (seen 2026-08-27: no tool calls, this week's numbers quoted
+        // as last week's) is wrong. Force the reads once.
+        if (!nudged && p.proactive === "weekly_review" && !usedTools) {
+          nudged = true;
+          void audit(patientId, "error", { threadId, payload: { stage: "weekly_review_without_reads", text: (res.text ?? "").slice(0, 300) } });
+          messages.push({ role: "assistant", content: res.text ?? "" });
+          messages.push({
+            role: "user",
+            content: "[System: the snapshot describes the CURRENT week, not the week under review. Call get_nutrition_summary, get_activity and get_workouts for the exact range given in the review instruction, then write the review from those results.]",
+          });
+          continue;
+        }
+        if (!nudged && !proposedThisTurn && !p.proactive && CLAIMS_CARD.test(res.text ?? "")) {
+          nudged = true;
+          void audit(patientId, "error", { threadId, payload: { stage: "claim_without_proposal", text: (res.text ?? "").slice(0, 300) } });
+          messages.push({ role: "assistant", content: res.text ?? "" });
+          messages.push({
+            role: "user",
+            content:
+              "[System: your reply describes a card or asks the user to confirm, but no tool was called this turn — nothing was prepared. Call the right tool now with the user's words verbatim (log_meal, log_workout, log_vital, message_care_team, book_appointment, update_plan_targets), or answer plainly without claiming anything was prepared.]",
+          });
+          continue;
+        }
         draft = res.text;
         break;
       }
@@ -193,6 +227,7 @@ async function* runLoop(p: {
       await threadStore.append(threadId, [{ role: "ASSISTANT", content: res.text ?? "", toolCalls: res.toolCalls, meta: { model } }]);
       messages.push({ role: "assistant", content: res.text ?? "", toolCalls: res.toolCalls });
       for (const call of res.toolCalls) {
+        usedTools = true;
         yield { type: "tool_start", id: call.id, name: call.name, input: call.input };
         const tool = registry.get(call.name);
         void audit(patientId, tool?.risk === "memory" ? "memory_write" : "tool_call", { threadId, toolName: call.name, payload: { input: call.input } });
@@ -203,6 +238,7 @@ async function* runLoop(p: {
           const pr = await proposalStore.create(patientId, threadId, call.name, out.input, out.proposal);
           const card: Card = { type: "proposal", title: pr.title, data: { proposalId: pr.id, toolName: call.name, summary: pr.summary, preview: pr.preview, expiresAt: pr.expiresAt.toISOString() } };
           cards.push(card);
+          proposedThisTurn = true;
           yield { type: "proposal", proposalId: pr.id, toolName: call.name, title: pr.title, summary: pr.summary, preview: pr.preview, expiresAt: pr.expiresAt.toISOString() };
           yield { type: "card", card };
           modelResult = { proposed: true, proposalId: pr.id, summary: pr.summary, preview: out.result, note: "NOT saved yet — the user must confirm the card in the app. Tell them what you prepared and ask them to confirm; do not say it is logged/sent/booked." };

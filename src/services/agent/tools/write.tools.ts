@@ -34,6 +34,17 @@ const sum = (xs: (number | null | undefined)[]) => xs.reduce<number>((a, b) => a
 
 const MEAL_TYPES = ["BREAKFAST", "LUNCH", "DINNER", "SNACK"] as const;
 
+/** Typical local time per meal type, used when the user didn't say when they
+ *  ate. Mirrors the Nutrition page (dinner slot shows 19:00). A default that
+ *  would land in the future today is clamped to "now". */
+const MEAL_DEFAULT_TIME: Record<string, [number, number]> = { BREAKFAST: [8, 0], LUNCH: [13, 0], SNACK: [16, 0], DINNER: [19, 0] };
+export const mealTime = (date: string, mealType: string | null | undefined, tz: string) => {
+  const [h, m] = MEAL_DEFAULT_TIME[mealType ?? ""] ?? [12, 0];
+  const at = moment.tz(date, "YYYY-MM-DD", tz).hour(h).minute(m).second(0);
+  const now = moment.tz(tz);
+  return at.isAfter(now) && at.isSame(now, "day") ? now : at;
+};
+
 /** What is already logged on each of `dates` (for duplicate notes and gap questions). */
 const existingMealsByDay = async (userId: string, dates: string[]): Promise<Record<string, ExistingEntry[]>> => {
   if (!dates.length) return {};
@@ -124,23 +135,35 @@ export const logMeal = defineTool({
       preview = buildMealPreview(analysis.meals, { today: ctx.today, timeZone: ctx.timeZone, subject: subject.name, subjectId, model: analysis.model, heldBack: analysis.heldBack });
     }
     const toSave = preview.analysis.meals.filter((m) => m.included && m.ingredients?.length);
-    if (!toSave.length) throw new Error("nothing to log — every meal is unticked");
+    if (!toSave.length) throw new Error("Nothing is ticked — tick at least one meal on the card before confirming");
     const byDay = new Map<string, BatchMeal[]>();
     for (const m of toSave) (byDay.get(m.date) ?? byDay.set(m.date, []).get(m.date)!).push(m);
     const days: { date: string; meals: { id: string; description: string; mealType: string; calories: number; ingredients: number }[] }[] = [];
     for (const [date, meals] of [...byDay.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
-      const when = moment.tz(date, "YYYY-MM-DD", ctx.timeZone).hour(12);
-      const entries = meals.map((m) => ({
-        description: m.mealName || "Meal",
-        quantity: "1",
-        calories: Math.round(sum(m.ingredients.map((i: any) => i.calories))),
-        mealType: m.mealType,
-        ingredients: m.ingredients, // server recomputes totals from these
-        nutrients: {},
-        glycemicLoad: m.glycemicLoad ?? 0,
-      }));
-      const rows = await CaloriesService.createFoodEntry(subjectId, entries, when, ctx.timeZone);
-      days.push({ date, meals: (Array.isArray(rows) ? rows : []).map((e: any) => ({ id: e.id, description: e.description, mealType: e.mealType, calories: e.calories, ingredients: e.ingredients?.length ?? 0 })) });
+      // One create per meal so each carries a plausible time for its type
+      // (the day view lists entries by time; a shared noon made them all "12:00").
+      const rows: any[] = [];
+      for (const m of meals) {
+        const when = mealTime(date, m.mealType, ctx.timeZone);
+        const saved = await CaloriesService.createFoodEntry(
+          subjectId,
+          [
+            {
+              description: m.mealName || "Meal",
+              quantity: "1",
+              calories: Math.round(sum(m.ingredients.map((i: any) => i.calories))),
+              mealType: m.mealType,
+              ingredients: m.ingredients, // server recomputes totals from these
+              nutrients: {},
+              glycemicLoad: m.glycemicLoad ?? 0,
+            },
+          ],
+          when,
+          ctx.timeZone
+        );
+        if (Array.isArray(saved)) rows.push(...saved);
+      }
+      days.push({ date, meals: rows.map((e: any) => ({ id: e.id, description: e.description, mealType: e.mealType, calories: e.calories, ingredients: e.ingredients?.length ?? 0 })) });
     }
     const logged = days.flatMap((d) => d.meals.map((m) => ({ ...m, date: d.date })));
     const result = { logged, days, date: days.length === 1 ? days[0].date : undefined, totalCalories: logged.reduce((a, m) => a + (m.calories ?? 0), 0) };

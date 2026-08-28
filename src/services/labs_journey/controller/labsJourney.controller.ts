@@ -4,6 +4,7 @@ import LabsJourneyService from "../model/labsJourney.model";
 
 const ROUTES = ["OWN_DOCTOR", "DTC", "OLLO_DOCTOR"];
 const STATUSES = ["RECOMMENDED", "ORDERED", "RESULTED", "CANCELLED"];
+const REASONS = ["ANNUAL_PHYSICAL", "LABS_ONLY"];
 
 /** Patient identity always comes from the verified token — never from the body. */
 class LabsJourneyHandler {
@@ -31,15 +32,34 @@ class LabsJourneyHandler {
 
   async startJourney(request: any, response: Response) {
     const { id } = request.user;
-    const { route } = request.body ?? {};
+    const { route, reason } = request.body ?? {};
     if (!ROUTES.includes(route))
       return response.status(400).json(Util.error({}, "route must be OWN_DOCTOR, DTC or OLLO_DOCTOR"));
+    if (reason !== undefined && !REASONS.includes(reason))
+      return response.status(400).json(Util.error({}, "reason must be ANNUAL_PHYSICAL or LABS_ONLY"));
     try {
-      const journey = await LabsJourneyService.startJourney(id, route);
+      const journey = await LabsJourneyService.startJourney(id, route, reason ?? "LABS_ONLY");
       return response.status(200).json(Util.success(journey, "Labs journey started"));
     } catch (error) {
       console.error("Error starting labs journey", error);
       return response.status(400).json(Util.error({ error }, "Error starting journey"));
+    }
+  }
+
+  async setInsurance(request: any, response: Response) {
+    const { id } = request.user;
+    const { provider, planType } = request.body ?? {};
+    if (typeof provider !== "string" || !provider.trim() || typeof planType !== "string" || !planType.trim())
+      return response.status(400).json(Util.error({}, "provider and planType are required"));
+    try {
+      const insurance = await LabsJourneyService.setInsurance(id, {
+        provider: provider.trim().slice(0, 80),
+        planType: planType.trim().slice(0, 80),
+      });
+      return response.status(200).json(Util.success(insurance, "Insurance saved"));
+    } catch (error) {
+      console.error("Error saving insurance", error);
+      return response.status(400).json(Util.error({ error }, "Error saving insurance"));
     }
   }
 

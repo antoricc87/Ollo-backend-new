@@ -501,6 +501,7 @@ export const fetchAllPatients = async (where: object) => {
     const patients = await prisma.patient.findMany({
       where: where,
       include: {
+        insurance: true,
         healthCheckUp: {
           take: 1,
           orderBy: {
@@ -589,6 +590,7 @@ export const getPatientById = async (id: string) => {
             familyHistory: true,
           },
         },
+        insurance: true,
         healthCheckUp: {
           take: 1,
           orderBy: {

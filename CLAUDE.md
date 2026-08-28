@@ -224,6 +224,37 @@ Follow-ups done 2026-08-25:
   `Message` row, booking → confirm → `Booking` PENDING (SES mail fails
   softly locally), and a portion-edited meal commit.
 
+## Agent hardening (Aug 27 2026)
+
+- **Claim-without-proposal guard** (`agent.service.ts` `CLAIMS_CARD`): when
+  the model's final text talks about a card / "confirm in the app" but no write
+  tool ran this turn (seen live: "I've prepared a card to log…" with tools=[]),
+  the loop nudges it ONCE with a bracketed user message to call the tool or
+  answer plainly; audited as `error` stage `claim_without_proposal`. Trigger
+  was a lunch already logged for the day making the model skip `log_meal`.
+- **Weekly-review read guard** (same place, `usedTools`): a `weekly_review`
+  run that reaches its final text without any tool call is nudged once to
+  call get_nutrition_summary / get_activity / get_workouts for the review
+  range (seen 2026-08-27: it quoted THIS week's snapshot numbers as last
+  week's). Audited as stage `weekly_review_without_reads`; the weekly prompt
+  section now says the snapshot is the current week. Proactive smoke passes.
+- `log_meal` commit gives each meal a type-based time (`mealTime()`:
+  breakfast 08:00, lunch 13:00, snack 16:00, dinner 19:00; clamped to "now"
+  when the default would be in the future today) and creates one FoodEntry
+  per meal — the day view orders by time, so a shared noon put every meal at
+  12:00.
+- Voice: `speechToText` refuses clips < 8 KB and transcripts with no Latin
+  letters/digits (silent clips hallucinate a greeting in Korean/Chinese), and
+  passes NO `prompt` hint — the model echoed the hint back as the transcript.
+  The app now prefers on-device live dictation and sends text; server STT is
+  the fallback.
+- `scripts/agent-write-smoke.ts`: updated to the multi-day `log_meal` preview
+  (`days[].meals[]`, `index` into `analysis.meals`; ticks a duplicate-unticked
+  lunch back on), care-team steps no longer assume flagged labs, and cleanup
+  runs in `finally` scoped to the run's own thread (it used to delete EVERY
+  proposal/audit row on the account, and only on success). All steps pass
+  2026-08-27; `npm run eval:agent` 24/24; safety 7/7.
+
 ## Workouts (Aug 26 2026) — `src/services/workouts/`
 
 One physical training session = one `WorkoutSession` row (+ `WorkoutExercise`
@@ -294,6 +325,15 @@ the checklist into `Booking.notes` when empty). `uploadPatientLab` calls
 the unreachable legacy onboarding screen — delete with it. Script:
 `scripts/labs-panel.ts <email> [--json]`. Restart the dev server after
 `prisma generate` (nodemon doesn't watch node_modules — `touch src/index.ts`).
+
+Annual physical (Aug 28 2026): `Patient.lastPhysicalStatus`
+("within_year" | "over_year" | "never") + `lastPhysicalAt` (written through
+`updatePatient`); `GET /labs/panel` adds `physical {status, lastAt,
+nextDueAt (+12 mo), overdue}` and `insurance {provider, planType,
+allowsAnyPCP}`; `PUT /api/labs/insurance {provider, planType}` upserts
+`PatientInsurance` (allowsAnyPCP = PPO | EPO | out of pocket); `POST
+/labs/journey` takes `reason` ANNUAL_PHYSICAL | LABS_ONLY (`LabJourney.reason`,
+default LABS_ONLY). `getPatientById` now includes `insurance`.
 
 ## Labs — merged "current picture" (Aug 2026)
 

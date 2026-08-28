@@ -1,4 +1,4 @@
-import { LabJourneyStatus, LabRoute } from "@prisma/client";
+import { LabJourneyReason, LabJourneyStatus, LabRoute } from "@prisma/client";
 import prisma from "../../../utility/prismaClient";
 import { getPatientById } from "../../patient/model/patient.model";
 import { buildPanel } from "../domain/screening.rules";
@@ -31,11 +31,20 @@ export type PanelResponse = {
   counts: { due: number; consider: number; covered: number };
   checklistText: string;
   journey: JourneyView | null;
+  /** Annual physical (Set 04): what the patient told us and when the next one is due. */
+  physical: {
+    status: "within_year" | "over_year" | "never" | null;
+    lastAt: string | null;
+    nextDueAt: string | null;
+    overdue: boolean;
+  };
+  insurance: { provider: string; planType: string; allowsAnyPCP: boolean } | null;
 };
 
 export type JourneyView = {
   id: string;
   route: LabRoute;
+  reason: LabJourneyReason;
   status: LabJourneyStatus;
   bookingId: string | null;
   orderedAt: string | null;
@@ -46,6 +55,7 @@ export type JourneyView = {
 const toView = (j: any): JourneyView => ({
   id: j.id,
   route: j.route,
+  reason: j.reason ?? "LABS_ONLY",
   status: j.status,
   bookingId: j.bookingId ?? null,
   orderedAt: j.orderedAt ? new Date(j.orderedAt).toISOString() : null,
@@ -76,7 +86,17 @@ class LabsJourneyService {
           (fh.historyOfHereditaryConditions?.length ?? 0) > 0)
     );
     const journey = await LabsJourneyService.activeJourney(patientId);
+    const lastAt: Date | null = patient.lastPhysicalAt ?? null;
+    const nextDue = lastAt ? new Date(new Date(lastAt).setFullYear(new Date(lastAt).getFullYear() + 1)) : null;
+    const ins = patient.insurance ?? null;
     return {
+      physical: {
+        status: (patient.lastPhysicalStatus as any) ?? null,
+        lastAt: lastAt ? new Date(lastAt).toISOString() : null,
+        nextDueAt: nextDue ? nextDue.toISOString() : null,
+        overdue: patient.lastPhysicalStatus === "over_year" || patient.lastPhysicalStatus === "never" || (nextDue ? nextDue.getTime() < Date.now() : false),
+      },
+      insurance: ins ? { provider: ins.insuranceProvider, planType: ins.planType, allowsAnyPCP: ins.allowsAnyPCP } : null,
       profile: {
         age: profile.age,
         sex: profile.sex,
@@ -102,7 +122,11 @@ class LabsJourneyService {
   }
 
   /** Pick (or switch) a route. Any open journey is cancelled first. */
-  static async startJourney(patientId: string, route: LabRoute): Promise<JourneyView> {
+  static async startJourney(
+    patientId: string,
+    route: LabRoute,
+    reason: LabJourneyReason = "LABS_ONLY"
+  ): Promise<JourneyView> {
     const panel = await LabsJourneyService.getPanel(patientId);
     const row = await prisma.$transaction(async (tx) => {
       await tx.labJourney.updateMany({
@@ -113,6 +137,7 @@ class LabsJourneyService {
         data: {
           patientId,
           route,
+          reason,
           status: "RECOMMENDED",
           panel: panel.items as any,
         },
@@ -161,6 +186,25 @@ class LabsJourneyService {
 
     const row = await prisma.labJourney.update({ where: { id: j.id }, data });
     return toView(row);
+  }
+
+  /**
+   * Insurance for the booking branch. Plan type decides whether the patient can
+   * book any in-network doctor (PPO/EPO, out of pocket) or needs their
+   * insurer-assigned PCP (HMO/POS/Medicare Advantage HMO).
+   */
+  static async setInsurance(
+    patientId: string,
+    input: { provider: string; planType: string }
+  ) {
+    const plan = input.planType.toUpperCase();
+    const allowsAnyPCP = /PPO|EPO|OUT OF POCKET|SELF/.test(plan);
+    const row = await prisma.patientInsurance.upsert({
+      where: { patientId },
+      update: { insuranceProvider: input.provider, planType: input.planType, allowsAnyPCP },
+      create: { patientId, insuranceProvider: input.provider, planType: input.planType, allowsAnyPCP },
+    });
+    return { provider: row.insuranceProvider, planType: row.planType, allowsAnyPCP: row.allowsAnyPCP };
   }
 
   /** Called after a lab report is saved: the open journey is done. */

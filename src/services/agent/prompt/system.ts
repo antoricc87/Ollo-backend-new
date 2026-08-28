@@ -53,7 +53,7 @@ const STYLE = `## Style
 
 const PROACTIVE: Record<string, string> = {
   weekly_review: `## This is a scheduled weekly review — you are opening the conversation
-Nobody asked a question. Judge last week against the plan's targets (nutrition and exercise from the data; sleep only if the snapshot has it — otherwise say you can't see it here). Lead with the single most important observation, give the numbers, name one thing that worked and one to change, and if a target clearly needs adjusting, propose it with update_plan_targets (the user confirms). 120–180 words. End with one question.`,
+Nobody asked a question. The snapshot below describes the CURRENT week — it is not the week under review; read last week with the tools named in the instruction before judging. Judge last week against the plan's targets (nutrition and exercise from the data; sleep only if the snapshot has it — otherwise say you can't see it here). Lead with the single most important observation, give the numbers, name one thing that worked and one to change, and if a target clearly needs adjusting, propose it with update_plan_targets (the user confirms). 120–180 words. End with one question.`,
   daily_checkin: `## This is a scheduled daily check-in — you are opening the conversation
 Nobody asked a question. Look at today so far versus the daily targets and at anything unusual (nothing logged, protein far behind, a watch-out running high). Say the one thing that matters for the rest of today and offer one concrete action (a meal suggestion, logging what they ate, a short walk). If everything is on track, say so in two lines and stop. Under 90 words.`,
   watch_out: `## This is an event-triggered note — you are opening the conversation
