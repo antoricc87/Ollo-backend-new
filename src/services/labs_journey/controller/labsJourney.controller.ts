@@ -19,6 +19,17 @@ class LabsJourneyHandler {
     }
   }
 
+  async fetchRisk(request: any, response: Response) {
+    const { id } = request.user;
+    try {
+      const report = await LabsJourneyService.getRisk(id);
+      return response.status(200).json(Util.success(report, "Risk report"));
+    } catch (error) {
+      console.error("Error building risk report", error);
+      return response.status(400).json(Util.error({ error }, "Error building risk report"));
+    }
+  }
+
   async fetchJourney(request: any, response: Response) {
     const { id } = request.user;
     try {

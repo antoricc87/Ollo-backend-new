@@ -12,6 +12,7 @@ export default class Routes {
 
   appRoutes() {
     this.app.get("/api/labs/panel", verifyToken, labsApi.fetchPanel);
+    this.app.get("/api/labs/risk", verifyToken, labsApi.fetchRisk);
     this.app.get("/api/labs/journey", verifyToken, labsApi.fetchJourney);
     this.app.post("/api/labs/journey", verifyToken, labsApi.startJourney);
     this.app.put("/api/labs/journey", verifyToken, labsApi.updateJourney);

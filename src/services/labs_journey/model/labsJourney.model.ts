@@ -2,6 +2,9 @@ import { LabJourneyReason, LabJourneyStatus, LabRoute } from "@prisma/client";
 import prisma from "../../../utility/prismaClient";
 import { getPatientById } from "../../patient/model/patient.model";
 import { buildPanel } from "../domain/screening.rules";
+import { buildRiskReport, RiskProfile, RiskReport } from "../domain/risk";
+import { buildCurrentLabs } from "../../../utils/labBiomarkers";
+import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
 import {
   applyCoverage,
   buildScreeningProfile,
@@ -205,6 +208,57 @@ class LabsJourneyService {
       create: { patientId, insuranceProvider: input.provider, planType: input.planType, allowsAnyPCP },
     });
     return { provider: row.insuranceProvider, planType: row.planType, allowsAnyPCP: row.allowsAnyPCP };
+  }
+
+  /**
+   * Risk & biological age from the merged current labs (revived post-visit
+   * report). Blood pressure: latest tracker reading, else the profile's
+   * sBp/dBp, else 120/80 flagged as assumed.
+   */
+  static async getRisk(patientId: string): Promise<RiskReport> {
+    const patient = await getPatientById(patientId);
+    if (!patient) throw new Error("Patient not found");
+    const summary: any = patient.patientSummary ?? {};
+    const vitals = summary.vitals ?? {};
+    const sexRaw = String(patient.gender ?? "").toLowerCase();
+    const sex = sexRaw.startsWith("m") ? "M" : sexRaw.startsWith("f") ? "F" : null;
+
+    const h = Number(vitals.height) || null;
+    const w = Number(vitals.weight) || null;
+    const heightCm = h ? (/imperial|in/.test(String(vitals.height_unit ?? "").toLowerCase()) ? h * 2.54 : h) : null;
+    const weightKg = w ? (String(vitals.weight_unit ?? "").toLowerCase() === "lbs" ? w * 0.4536 : w) : null;
+
+    const latestBp = await prisma.bloodPressureEntry.findFirst({
+      where: { dailyTracker: { userId: patientId } },
+      orderBy: { createdAt: "desc" },
+    });
+    const bloodPressure: RiskProfile["bloodPressure"] = latestBp
+      ? { systolic: latestBp.systolic, diastolic: latestBp.diastolic, source: "tracker", at: latestBp.createdAt }
+      : vitals.sBp && vitals.dBp
+      ? { systolic: vitals.sBp, diastolic: vitals.dBp, source: "profile", at: null }
+      : { systolic: 120, diastolic: 80, source: "assumed", at: null };
+
+    const conditions: string[] = (summary.conditions ?? []).map((c: any) => String(c?.condition?.name ?? "").toLowerCase());
+    const medications: string[] = (summary.medications ?? []).map((m: any) => String(m?.medication?.name ?? "").toLowerCase());
+    const habit = String(vitals.smokingHabit ?? "").toLowerCase();
+    const smoker = habit ? /daily|occasion/.test(habit) : vitals.isSmoker === true;
+    const chronic: string[] = (summary.familyHistory?.historyOfChronicConditions ?? []).map((x: any) => String(x).toLowerCase());
+
+    const profile: RiskProfile = {
+      age: patient.dob ? calculateAgeFromDob(patient.dob) : null,
+      sex,
+      heightCm,
+      weightKg,
+      smoker,
+      diabetic: conditions.some((c) => /diabet/.test(c) && !/prediabet/.test(c)),
+      parentalDiabetes: chronic.some((c) => c.includes("diabet")),
+      onBloodPressureTreatment: medications.some((m) =>
+        /lisinopril|losartan|amlodipine|valsartan|ramipril|enalapril|metoprolol|atenolol|hydrochlorothiazide|olmesartan|candesartan|irbesartan|telmisartan|diltiazem|nifedipine|bisoprolol|carvedilol/.test(m)
+      ),
+      bloodPressure,
+    };
+    const labs = buildCurrentLabs(summary.labResults ?? []);
+    return buildRiskReport(profile, labs);
   }
 
   /** Called after a lab report is saved: the open journey is done. */

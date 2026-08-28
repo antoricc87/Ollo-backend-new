@@ -335,6 +335,18 @@ allowsAnyPCP}`; `PUT /api/labs/insurance {provider, planType}` upserts
 /labs/journey` takes `reason` ANNUAL_PHYSICAL | LABS_ONLY (`LabJourney.reason`,
 default LABS_ONLY). `getPatientById` now includes `insurance`.
 
+Risk & biological age (Aug 28 2026): `labs_journey/domain/risk.ts`
+`buildRiskReport(profile, currentLabs)` — Framingham CVD 10-year, Framingham
+Offspring diabetes 8-year, PhenoAge — over the merged current labs with unit
+normalisation (mmol/L lipids/glucose, g/L albumin, µmol/L creatinine, mg/dL
+CRP, WBC per µL) and per-block `…Missing` lists instead of the old
+all-or-nothing throw; BP = latest `BloodPressureEntry` → profile sBp/dBp →
+120/80 flagged "assumed"; BP-treatment inferred from common
+antihypertensives on the medication list. `GET /api/labs/risk`. The
+calculators themselves are unchanged in `utils/risks_calculation_bio_age/`
+(the diabetes one expects pounds/inches — the service converts). The legacy
+`POST /patients/patientoverview` still exists for the parked chain.
+
 ## Labs — merged "current picture" (Aug 2026)
 
 Each uploaded PDF is one `LabResultSummary` (report) with `LabResult` rows;
