@@ -5,13 +5,50 @@ import prisma from "../utility/prismaClient";
 import moment from "moment";
 dotenv.config();
 
+/** Patient tokens live 30 days and are refreshed on use (see verifyToken). */
+const PATIENT_TOKEN_TTL = "30d";
+/** A token older than this gets replaced on the next authenticated request. */
+const REFRESH_AFTER_SECONDS = 7 * 24 * 3600;
+
 const signJWT = async (data: any) => {
   const token = jwt.sign(data, process.env.JWT_SECRET || "", {
-    // expiresIn: "4d",
-    expiresIn: "9999y",
-    // issuer: process.env.JWT_ISSUER,
+    expiresIn: PATIENT_TOKEN_TTL,
   });
   return token;
+};
+
+/**
+ * Ownership guard. Legacy handlers read the patient id from the body/query
+ * instead of the token; rather than rewrite each one, verifyToken (a) fills
+ * a missing `patientId` / `userId` with the caller's own id and (b) rejects
+ * any id that is neither the caller nor one of their sub-accounts.
+ */
+const ID_FIELDS = ["patientId", "userId"] as const;
+const ownedOrSubAccount = async (callerId: string, requested: unknown): Promise<boolean> => {
+  if (typeof requested !== "string" || !requested) return true;
+  if (requested === callerId) return true;
+  const sub = await prisma.patient.findFirst({
+    where: { id: requested, subAccountOf: callerId },
+    select: { id: true },
+  });
+  return !!sub;
+};
+
+const enforceOwnership = async (req: any, callerId: string): Promise<boolean> => {
+  const holders: any[] = [req.body, req.body?.bookingData, req.query, req.params].filter(
+    (h) => h && typeof h === "object"
+  );
+  for (const holder of holders) {
+    for (const field of ID_FIELDS) {
+      const value = holder[field];
+      if (value === undefined || value === null || value === "") {
+        if (holder === req.body) holder[field] = callerId;
+        continue;
+      }
+      if (!(await ownedOrSubAccount(callerId, value))) return false;
+    }
+  }
+  return true;
 };
 
 const verifyToken = (req: any, res: Response, next: NextFunction) => {
@@ -43,7 +80,28 @@ const verifyToken = (req: any, res: Response, next: NextFunction) => {
           });
         }
         req.user = decoded.user;
-        next();
+        (async () => {
+          const ok = await enforceOwnership(req, decoded.user.id);
+          if (!ok) return res.status(403).json({ message: "Forbidden! That record is not yours" });
+          // Refresh on use: hand back a fresh token once the current one is
+          // a week old, and keep the stored copy in sync so responses that
+          // return the user row carry the new one.
+          const issuedAt = typeof decoded.iat === "number" ? decoded.iat : 0;
+          if (issuedAt && Date.now() / 1000 - issuedAt > REFRESH_AFTER_SECONDS) {
+            try {
+              const fresh = await signJWT({ user: { id: decoded.user.id } });
+              res.setHeader("x-refreshed-token", fresh);
+              res.setHeader("Access-Control-Expose-Headers", "x-refreshed-token");
+              void updateUserToken(decoded.user.id, fresh).catch(() => undefined);
+            } catch (e) {
+              console.warn("token refresh failed", e);
+            }
+          }
+          next();
+        })().catch((e) => {
+          console.error("verifyToken", e);
+          res.status(500).json({ message: "Auth check failed" });
+        });
       }
     }
   );

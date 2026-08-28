@@ -6,7 +6,6 @@ import AppConfig from "./config/app-config";
 import fileUpload from "express-fileupload";
 import bodyParser from "body-parser";
 import cookieParser from "cookie-parser";
-import session from "express-session";
 import PatientRoutes from "./services/patient/patient.routes";
 import OpenAiRoutes from "./services/openAI/openai.routes";
 import UserRoutes from "./services/users/user.routes";
@@ -87,17 +86,6 @@ class Server {
     this.app.set("view engine", "ejs");
     // this.app.use(express.static("assets"));
     this.app.set("trust proxy", 1);
-    this.app.use(
-      session({
-        secret: "my secret",
-        resave: false,
-        saveUninitialized: true,
-        cookie: {
-          secure: true,
-          sameSite: "none",
-        },
-      })
-    );
     this.app.use(cookieParser());
     this.app.use(
       bodyParser.urlencoded({

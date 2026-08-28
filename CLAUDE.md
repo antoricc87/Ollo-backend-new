@@ -428,9 +428,19 @@ decision.
   is rotating. Never copy values from it into `.env`.
 - `.env` has fresh local JWT secrets; `REACT_APP_OPENAI_API_KEY` is EMPTY —
   all AI endpoints fail until the user adds a new key.
-- Known unfixed issues: JWTs sign with `expiresIn: "9999y"`; several endpoints
-  lack auth (voicerecording chunk, sendNotification, updatePatientPassword);
-  `uploads/` contains committed patient audio (purge before any git push).
+- Fixed 2026-08-28: patient JWTs live 30 days and are refreshed on use —
+  `verifyToken` returns `x-refreshed-token` once a token is a week old and
+  rotates the `UserToken` row (the app's axios interceptor stores it; a 401
+  clears the local user). `verifyToken` also enforces OWNERSHIP: a body /
+  query / params / `bookingData` `patientId` or `userId` must be the caller
+  or one of their sub-accounts (403 otherwise), and a missing one is filled
+  with the caller's id — so legacy handlers that read ids from the body are
+  safe without a rewrite. express-session removed (literal secret, unused).
+  The unauthenticated voicerecording / sendNotification /
+  updatePatientPassword / parsePDF / transcribe routes were deleted on
+  2026-08-27. Doctor and admin JWTs still sign with `9999y` (physician app
+  parked). `uploads/` is gitignored but ~90 MB of old patient audio sits on
+  disk locally.
 - `verifyToken` (src/utils/auth_token.ts) 401s on malformed token payloads
   (expects `{ user: { id } }`).
 
