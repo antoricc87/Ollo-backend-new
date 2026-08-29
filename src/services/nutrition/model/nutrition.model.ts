@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import moment from "moment";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
-import { Nutrients, TrackableMetric } from "../../../types";
+import { Nutrients } from "../../../types";
 import prisma from "../../../utility/prismaClient";
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
 import { generateNutrientValues } from "../../../utils/calculateMissingNutrientsAndCalories";
@@ -14,20 +14,16 @@ import {
   getPreviousWeekRange,
 } from "../../../utils/formatDate";
 import CaloriesService from "../../calories_tracker/model/calories.model";
-import TrackableMertricService from "../../metric/model/trackableMetrics.model";
 import {
   getPatientById,
   updatePatientSummarySection,
 } from "../../patient/model/patient.model";
 import {
-  mealsResponseTool,
   nutrientLimitSchema,
   nutrientLimitTool,
-  mealPlanTool,
   portionResponseTool,
 } from "../schemas/nutrition.schema";
 import { getUserToken } from "../../../utils/auth_token";
-import { mealPlanSchema } from "../schemas/mealPlan.schema";
 import { calculateCaloricAdjustment } from "../../../utils/calculateAdjustedTDEE";
 dotenv.config();
 
@@ -38,56 +34,6 @@ const openai = new OpenAI({
 });
 
 class NutritionService {
-  async generateMealPlan(patientId: string, foodPreferences: string) {
-    console.log("meal plan called");
-    try {
-      //checking if patient exist
-      const patient = await getPatientById(patientId);
-      if (!patient) console.log("Patient not found");
-      const dietaryMetrics =
-        await TrackableMertricService.getDietaryTrackableMetrics(patientId);
-      const metricsDescriptions = dietaryMetrics.map(
-        (metric: TrackableMetric) => metric.description
-      );
-
-      const prompt = `Generate 3-4 different meals based on the patient health goals:${metricsDescriptions} patient intollerances:${patient.patientSummary.nutrition.foodIntollerances}, patient food to avoid:${patient.patientSummary.nutrition.foodsToAvoid} and include at least a few ingredients from the following preferences:${foodPreferences}. Make sure to include the quantity for each ingredient in both ounces and grams (e.g., 1 grilled chicken breast (150g, 5.3oz)), and that the total calories of each meal are calculated after all ingredients and quantities are determined. Provide the result in JSON format with an array of meals.`;
-      try {
-        const response = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content: `You are a helpful assistant that accurately generates 5-7 different meals based on the patient health goals:${metricsDescriptions} patient intollerances:${patient.patientSummary.nutrition.foodIntollerances},patient food to avoid:${patient.patientSummary.nutrition.foodsToAvoid}. Always provide multiple meals in the response. Provide the result in JSON format with an array of meals.`,
-            },
-            {
-              role: "user",
-              content: prompt,
-            },
-          ],
-          tools: [mealsResponseTool],
-          tool_choice: {
-            type: "function",
-            function: { name: "generateMealPlan" },
-          },
-        });
-
-        const toolCall = response.choices[0].message.tool_calls?.[0];
-        if (!toolCall) {
-          throw new Error("No structured output returned");
-        }
-
-        const mealPlan = JSON.parse(toolCall.function.arguments);
-        return mealPlan;
-      } catch (error: unknown) {
-        console.error("Error generating the meal plans with openai", error);
-        throw error;
-      }
-    } catch (error: unknown) {
-      console.error("Something went wrong creating the meal plan", error);
-      throw error;
-    }
-  }
-
   async generatePortionsFromAI(
     mealType: string,
     caloricAmount: number,
@@ -1033,65 +979,7 @@ class NutritionService {
   }
 
   //----------------------------------------------//
-  async generateAndSaveMealPlanFromString(
-    patientId: string,
-    mealPlan: string,
-    toolUsed: string
-  ) {
-    try {
-      const prompt = `From the provided meal plan as a string, calculate for every meal calories, macronutrients and micronutrients.
-      Meal Plan:${mealPlan}`;
-      try {
-        const response = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content: `You are a helpful Nutrition assistant that accurately generates the calories, macronutrients and micronutrients contained in each meal of the provided meal plan. For the ingredients in each meal use the provided in the Meal Plan. Provide the result in JSON format.`,
-            },
-            {
-              role: "user",
-              content: prompt,
-            },
-          ],
-          tools: [mealPlanTool],
-          tool_choice: {
-            type: "function",
-            function: { name: "generateMealPlan" },
-          },
-        });
 
-        const toolCall = response.choices[0].message.tool_calls?.[0];
-        if (!toolCall) {
-          throw new Error("No structured output returned");
-        }
-
-        const mealPlanData = JSON.parse(toolCall.function.arguments);
-
-        if (mealPlanData) {
-          const dataType =
-            toolUsed === "meal_plan_generator" ? "meal_plan" : "kids_meal_plan";
-          const saveData = await prisma.userGeneratedData.create({
-            data: {
-              patientId: patientId,
-              type: dataType,
-              data: mealPlanData,
-            },
-          });
-          if (saveData) return true;
-        }
-      } catch (error: unknown) {
-        console.error(
-          "Error calculating the calories and macro of the meal plan",
-          error
-        );
-        throw error;
-      }
-    } catch (error: unknown) {
-      console.error("Something went wrong creating the meal plan", error);
-      throw error;
-    }
-  }
 }
 
 export default new NutritionService();

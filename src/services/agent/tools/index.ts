@@ -10,6 +10,7 @@ import { forgetMemory, recallMemory, remember } from "./memory.tools";
 import { bookAppointment, logMeal, logVital, messageCareTeam } from "./write.tools";
 import { buildGroceryList, generateMealPlan, generateRecipe } from "./generation.tools";
 import { getWorkouts, logWorkout } from "./workout.tools";
+import { suggestMeal } from "./suggest.tools";
 
 /**
  * Everything the agent can do: read tools, memory tools, generation tools
@@ -32,6 +33,7 @@ export const registry = new ToolRegistry().register(
   remember,
   recallMemory,
   forgetMemory,
+  suggestMeal,
   generateMealPlan,
   generateRecipe,
   buildGroceryList,

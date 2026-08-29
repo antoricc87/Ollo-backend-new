@@ -8,11 +8,6 @@ export default class Routes {
   appRoutes() {
 
     this.app.post(
-      "/api/utils/getAffordableTests",
-      verifyToken,
-      UtilsHandler.getAffordableCareTests
-    );
-    this.app.post(
       "/api/utils/getInstacartRetailers",
       verifyToken,
       UtilsHandler.getInstacartRetailers

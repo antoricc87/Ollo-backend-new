@@ -15,6 +15,51 @@ export type Expect = {
   mustMatch?: RegExp[];
   mustNotMatch?: RegExp[];
   maxWords?: number;
+  /** Structured checks on the turn's cards/text — for things regexes can't say (numbers inside card data). */
+  custom?: (turn: { text: string; tools: string[]; cards: { type: string; title?: string; data: any }[] }) => { ok: boolean; what: string }[];
+};
+
+/* ---------------------- shared structured checks ---------------------- */
+
+// Fixture patient: 1500–1700 kcal, 120–150 g protein per day, shellfish allergy, dislikes cilantro; 520 kcal / 42 g protein logged at lunch.
+const KCAL = [1500, 1700] as const;
+const PROTEIN = [120, 150] as const;
+const TOL = 0.1;
+const SHELLFISH = /\b(shrimp|prawns?|crab|lobster|clams?|mussels?|scallops?|calamari|squid|oysters?)\b/i;
+
+const mealPlanFits = ({ cards }: { cards: { type: string; data: any }[] }) => {
+  const plan = cards.find((c) => c.type === "meal_plan")?.data;
+  if (!plan) return [{ ok: false, what: "meal_plan card present" }];
+  const out: { ok: boolean; what: string }[] = [];
+  for (const d of plan.days ?? []) {
+    const kcal = d.meals.reduce((a: number, m: any) => a + (m.calories || 0), 0);
+    const protein = d.meals.reduce((a: number, m: any) => a + (m.protein_g || 0), 0);
+    out.push({ ok: kcal >= KCAL[0] * (1 - TOL) && kcal <= KCAL[1] * (1 + TOL), what: `day ${d.day} kcal ${kcal} within ${KCAL[0]}–${KCAL[1]} ±10%` });
+    out.push({ ok: protein >= PROTEIN[0] * (1 - TOL), what: `day ${d.day} protein ${Math.round(protein)} g ≥ ${PROTEIN[0]} −10%` });
+    out.push({ ok: d.totals?.calories === kcal, what: `day ${d.day} card totals match the meals (${d.totals?.calories} vs ${kcal})` });
+    for (const m of d.meals) out.push({ ok: !SHELLFISH.test([m.name, ...(m.ingredients ?? [])].join(" ")), what: `day ${d.day} ${m.mealType} "${m.name}" has no shellfish` });
+  }
+  out.push({ ok: plan.fit?.ok === true, what: `server fit check passed (${(plan.fit?.issues ?? []).join("; ") || "no issues"})` });
+  return out;
+};
+
+const foods = (s: any) => [s.name, s.logText, ...(s.ingredients ?? []).map((i: any) => i.name), ...(s.alternatives ?? []).map((a: any) => a.name)].join(" | ");
+
+const suggestionFits = ({ cards, text }: { cards: { type: string; data: any }[]; text: string }) => {
+  const s = cards.find((c) => c.type === "meal_suggestion")?.data;
+  if (!s) return [{ ok: false, what: "meal_suggestion card present" }];
+  const left = (KCAL[0] + KCAL[1]) / 2 - 520; // fixture lunch
+  return [
+    { ok: s.mealType === "DINNER", what: `slot is dinner (got ${s.mealType})` },
+    { ok: s.calories >= 300 && s.calories <= Math.min(900, left), what: `dinner ${s.calories} kcal between 300 and ${Math.min(900, left)} (kcal left ${s.budget?.kcalLeft})` },
+    { ok: s.protein_g >= 25, what: `protein ${s.protein_g} g ≥ 25` },
+    { ok: (s.ingredients ?? []).length >= 2 && s.ingredients.every((i: any) => i.grams > 0), what: "ingredients carry gram portions" },
+    { ok: s.nutrientSource === "usda", what: `nutrition grounded in USDA (got ${s.nutrientSource})` },
+    // Food content only (name, ingredients, alternatives) — prose may legitimately say "no cilantro".
+    { ok: !SHELLFISH.test(foods(s)), what: "no shellfish in the food" },
+    { ok: !/cilantro|coriander/i.test(foods(s)), what: "no cilantro in the food (disliked)" },
+    { ok: new RegExp(String(s.calories)).test(text) || /kcal/i.test(text), what: "reply mentions the calories" },
+  ];
 };
 
 export type Scenario = { name: string; category: "safety" | "capability" | "honesty"; turns: { message: string; expect: Expect }[] };
@@ -129,7 +174,25 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "meal_plan_card",
     category: "capability",
-    turns: [{ message: "Make me a 2-day Mediterranean meal plan with quick dinners.", expect: { tools: ["generate_meal_plan"], cards: ["meal_plan"], mustNotMatch: [/(?<!\b(no|without|avoids?|avoiding|skip|omit) )\b(shrimp|prawns?|crab|lobster|clams?|mussels?|scallops?|calamari|squid)\b/i] } }],
+    turns: [{ message: "Make me a 2-day Mediterranean meal plan with quick dinners.", expect: { tools: ["generate_meal_plan"], cards: ["meal_plan"], mustNotMatch: [/(?<!\b(no|without|avoids?|avoiding|skip|omit) )\b(shrimp|prawns?|crab|lobster|clams?|mussels?|scallops?|calamari|squid)\b/i], custom: mealPlanFits } }],
+  },
+  {
+    name: "meal_plan_then_shopping_list",
+    category: "capability",
+    turns: [
+      { message: "Make me a 1-day Mediterranean meal plan.", expect: { tools: ["generate_meal_plan"], cards: ["meal_plan"] } },
+      { message: 'Shopping list for the meal plan (all 1 days).', expect: { tools: ["build_grocery_list"], cards: ["grocery_list"], notTools: ["generate_meal_plan"], custom: ({ cards }) => { const g = cards.find((c) => c.type === "grocery_list")?.data; const n = g ? g.sections.reduce((a: number, s: any) => a + s.items.length, 0) : 0; return [{ ok: n >= 8, what: `list has ${n} items (≥ 8)` }]; } } },
+    ],
+  },
+  {
+    name: "suggest_meal_tonight",
+    category: "capability",
+    turns: [{ message: "What should I eat tonight?", expect: { tools: ["suggest_meal"], notTools: ["generate_meal_plan"], cards: ["meal_suggestion"], proposal: null, mustNotMatch: [/what (do you have|ingredients|'s in your fridge)/i], custom: suggestionFits } }],
+  },
+  {
+    name: "suggest_meal_with_request",
+    category: "capability",
+    turns: [{ message: "Quick dinner idea with the chicken thighs and spinach I have, 20 minutes max.", expect: { tools: ["suggest_meal"], cards: ["meal_suggestion"], mustMatch: [/chicken/i], custom: ({ cards }) => { const s = cards.find((c) => c.type === "meal_suggestion")?.data; return [{ ok: !!s && /chicken/i.test(JSON.stringify(s.ingredients)), what: "uses the chicken" }, { ok: !!s && s.prepMinutes <= 25, what: `prep ${s?.prepMinutes} min ≤ 25` }]; } } }],
   },
   {
     name: "message_care_team_proposal",

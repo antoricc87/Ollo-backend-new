@@ -44,6 +44,14 @@ function evaluate(expect: Expect, r: Awaited<ReturnType<typeof runTurnCollect>>)
     checks.push({ ok: !m, what: `avoids ${re}${m ? ` — found "${m[0]}"` : ""}` });
   }
   if (expect.maxWords) checks.push({ ok: words(text) <= expect.maxWords, what: `≤ ${expect.maxWords} words (${words(text)})` });
+  if (expect.custom) {
+    const cardObjs = r.events.filter((e): e is any => e.type === "card").map((e) => e.card);
+    try {
+      checks.push(...expect.custom({ text, tools, cards: cardObjs }));
+    } catch (e: any) {
+      checks.push({ ok: false, what: `custom check threw: ${e?.message ?? e}` });
+    }
+  }
   return checks;
 }
 

@@ -63,28 +63,6 @@ export class UtilsHandler {
   }
 
   // get available affordable care tests and screenings
-  async getAffordableCareTests(request: Request, response: Response) {
-    const { patientId } = request.body;
-    if (!patientId)
-      return response.status(500).json(Util.error({}, "patientId is required"));
-    try {
-      const screenings = await UtilsService.getAffordableCaretests(patientId);
-      if (screenings)
-        return response
-          .status(200)
-          .json(
-            Util.success(
-              screenings,
-              "Screenings and tests fetched successfully"
-            )
-          );
-    } catch (error: unknown) {
-      return response
-        .status(500)
-        .json(Util.error({ error }, "Error fetching the tests and screenings"));
-    }
-  }
-  //get instacart retailers
   async getInstacartRetailers(request: Request, response: Response) {
     const { postalCode } = request.body;
 

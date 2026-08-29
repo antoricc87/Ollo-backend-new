@@ -28,11 +28,6 @@ export default class Routes {
     // generate trackable healthGoals
     // generate main healthGoal
     //calculating caloric amount
-    this.app.post(
-      "/api/healthGoals/calculateCaloricAmount",
-      verifyToken,
-      healthGoalsApi.generateCaloricAmount
-    );
     //generate monthly medical report
   }
 

@@ -4,31 +4,6 @@ import e, { Request, Response } from "express";
 import NutritionService from "../model/nutrition.model";
 import { getPatientById } from "../../patient/model/patient.model";
 class NutritionHandler {
-  async generateMealPlan(request: Request, response: Response) {
-    const { patientId, foodPreferences } = request.body;
-    if (!patientId || !ObjectId.isValid(patientId)) {
-      return response
-        .status(500)
-        .json(
-          Util.error({}, "PatientId is required and must be a valid objectId")
-        );
-    }
-    try {
-      const mealsPlan = await NutritionService.generateMealPlan(
-        patientId,
-        foodPreferences
-      );
-      if (mealsPlan)
-        return response
-          .status(200)
-          .json(Util.success(mealsPlan, "Meals generated successfully"));
-    } catch (error: unknown) {
-      return response
-        .status(500)
-        .json(Util.error({ error }, "Error generating meals plan"));
-    }
-  }
-
   //generate portions
   async generatePortions(request: Request, response: Response) {
     const { patientId, mealType, ingredients } = request.body;
@@ -351,30 +326,6 @@ class NutritionHandler {
   //   }
   // }
 
-  //-----------------------------//
-  async generateAndSaveMealPlan(request: any, response: Response) {
-    const { mealPlanString, toolUsed } = request.body;
-    const { id } = request.user;
-    if (!mealPlanString)
-      return response
-        .status(400)
-        .json(Util.error({}, "Mealplan as string is required"));
-    try {
-      const result = await NutritionService.generateAndSaveMealPlanFromString(
-        id,
-        mealPlanString,
-        toolUsed
-      );
-      if (result)
-        return response
-          .status(200)
-          .json(Util.success({}, "Meal Plan successfully Generated and saved"));
-    } catch (error: unknown) {
-      return response
-        .status(500)
-        .json(Util.error({ error }, "Error Saving the plan"));
-    }
-  }
 }
 
 export default new NutritionHandler();

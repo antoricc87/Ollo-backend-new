@@ -10,7 +10,10 @@ import { defineTool, subjectField } from "./registry";
  * act on (log a meal from it, build a grocery list, save it later).
  */
 
-const nutritionContext = async (patientId: string, subjectId: string) => {
+export type MacroRange = [number | null | undefined, number | null | undefined];
+export type DailyTargets = { calories: MacroRange; protein_g: MacroRange; carbs_g: MacroRange; fat_g: MacroRange };
+
+export const nutritionContext = async (patientId: string, subjectId: string) => {
   const [summary, plan] = await Promise.all([
     prisma.patientSummary.findUnique({
       where: { patientId: subjectId },
@@ -22,10 +25,16 @@ const nutritionContext = async (patientId: string, subjectId: string) => {
   ]);
   const n = summary?.nutrition;
   const t = (key: string) => plan?.targets.find((x) => x.metricKey === key);
+  // No active plan → fall back to the onboarding calorie estimate (±10%) so generation is never unconstrained.
+  const kcal = summary?.caloricAmount ?? null;
+  const dailyTargets: DailyTargets | null = plan
+    ? { calories: [t("calories")?.min, t("calories")?.max], protein_g: [t("protein_g")?.min, t("protein_g")?.max], carbs_g: [t("carbs_g")?.min, t("carbs_g")?.max], fat_g: [t("fat_g")?.min, t("fat_g")?.max] }
+    : kcal
+    ? { calories: [Math.round(kcal * 0.9), Math.round(kcal * 1.1)], protein_g: [null, null], carbs_g: [null, null], fat_g: [null, null] }
+    : null;
   return {
-    dailyTargets: plan
-      ? { calories: [t("calories")?.min, t("calories")?.max], protein_g: [t("protein_g")?.min, t("protein_g")?.max], carbs_g: [t("carbs_g")?.min, t("carbs_g")?.max], fat_g: [t("fat_g")?.min, t("fat_g")?.max] }
-      : null,
+    dailyTargets,
+    targetsFrom: plan ? "plan" : kcal ? "estimate" : "none",
     watchOuts: plan?.watchOuts.map((w) => `${w.nutrientKey} (${w.level}${w.limit ? ` ≤${w.limit}${w.unit ?? ""}` : ""})`) ?? [],
     dietaryPreferences: n?.dietaryPreferences ?? [],
     foodAllergies: [...(n?.foodAllergies ?? []), ...(summary?.allergies.map((a) => a.allergy.substance) ?? [])],
@@ -37,6 +46,90 @@ const nutritionContext = async (patientId: string, subjectId: string) => {
     conditions: summary?.conditions.map((c) => c.condition.name) ?? [],
   };
 };
+
+/* ------------------------------ validation ------------------------------ */
+
+const TOLERANCE = 0.1; // ±10% of the target range counts as a fit
+const round = (n: number, d = 0) => Math.round(n * 10 ** d) / 10 ** d;
+
+/** Does `value` sit inside [min, max] with tolerance? Open ends pass. */
+const inRange = (value: number, [min, max]: MacroRange) => {
+  const lo = min != null ? min * (1 - TOLERANCE) : -Infinity;
+  const hi = max != null ? max * (1 + TOLERANCE) : Infinity;
+  return value >= lo && value <= hi;
+};
+const rangeText = ([min, max]: MacroRange, unit: string) => (min != null && max != null ? `${min}–${max}${unit}` : min != null ? `≥${min}${unit}` : max != null ? `≤${max}${unit}` : "?");
+
+/** Case-insensitive word match of an allergen/dislike token in an ingredient line. */
+const mentions = (line: string, token: string) => {
+  const t = token.trim().toLowerCase();
+  if (t.length < 3) return false;
+  return new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(line);
+};
+
+type PlanMeal = { mealType: string; name: string; ingredients: string[]; calories: number; protein_g: number; carbs_g: number; fat_g: number };
+type PlanDay = { day: number; meals: PlanMeal[]; totals: { calories: number; protein_g: number; carbs_g: number; fat_g: number } };
+
+/**
+ * Recompute every day's totals from its meals (the model's own `totals` are
+ * not trusted) and list what misses the targets or names an allergen. Days
+ * are mutated in place so the card carries the real sums.
+ */
+export const checkMealPlan = (days: PlanDay[], targets: DailyTargets | null, allergens: string[]) => {
+  const issues: string[] = [];
+  for (const d of days) {
+    const sum = (k: keyof Omit<PlanMeal, "mealType" | "name" | "ingredients">) => round(d.meals.reduce((a, m) => a + (Number(m[k]) || 0), 0), k === "calories" ? 0 : 1);
+    d.totals = { calories: sum("calories"), protein_g: sum("protein_g"), carbs_g: sum("carbs_g"), fat_g: sum("fat_g") };
+    if (targets) {
+      const checks: [keyof DailyTargets, string, number][] = [
+        ["calories", " kcal", d.totals.calories],
+        ["protein_g", " g protein", d.totals.protein_g],
+        ["carbs_g", " g carbs", d.totals.carbs_g],
+        ["fat_g", " g fat", d.totals.fat_g],
+      ];
+      for (const [key, unit, value] of checks) if (!inRange(value, targets[key])) issues.push(`Day ${d.day}: ${value}${unit} vs target ${rangeText(targets[key], unit)}`);
+    }
+    for (const m of d.meals)
+      for (const a of allergens) if (m.ingredients.some((line) => mentions(line, a)) || mentions(m.name, a)) issues.push(`Day ${d.day} ${m.mealType.toLowerCase()} "${m.name}" contains ${a} (allergy)`);
+  }
+  return issues;
+};
+
+/** Concrete per-meal anchors so the model doesn't under-feed: mid-target split across the meals. */
+const perMealGuide = (targets: DailyTargets | null, mealsPerDay: number) => {
+  if (!targets) return null;
+  const midOf = ([min, max]: MacroRange) => (min != null && max != null ? (min + max) / 2 : max ?? min ?? null);
+  const kcal = midOf(targets.calories);
+  const protein = midOf(targets.protein_g);
+  if (kcal == null) return null;
+  // snacks take ~10% each; the rest is split across main meals
+  const snacks = Math.max(0, mealsPerDay - 3);
+  const mainShare = (1 - 0.1 * snacks) / Math.min(3, mealsPerDay);
+  const r = (n: number) => Math.round(n);
+  return {
+    dayTotal: { calories: r(kcal), protein_g: protein != null ? r(protein) : null },
+    mainMeal: { calories: r(kcal * mainShare), protein_g: protein != null ? r(protein * mainShare) : null },
+    snack: snacks ? { calories: r(kcal * 0.1), protein_g: protein != null ? r(protein * 0.1) : null } : null,
+  };
+};
+
+/** What each failing day still needs, as numbers the reviser can act on. */
+const deficits = (days: PlanDay[], targets: DailyTargets | null) => {
+  if (!targets) return [];
+  const midOf = ([min, max]: MacroRange) => (min != null && max != null ? (min + max) / 2 : max ?? min ?? null);
+  const out: string[] = [];
+  for (const d of days) {
+    const parts: string[] = [];
+    const k = midOf(targets.calories);
+    const p = midOf(targets.protein_g);
+    if (k != null && !inRange(d.totals.calories, targets.calories)) parts.push(`${d.totals.calories > k ? "" : "+"}${Math.round(k - d.totals.calories)} kcal`);
+    if (p != null && !inRange(d.totals.protein_g, targets.protein_g)) parts.push(`${d.totals.protein_g > p ? "" : "+"}${Math.round(p - d.totals.protein_g)} g protein`);
+    if (parts.length) out.push(`Day ${d.day}: ${parts.join(", ")} — add lean protein portions (e.g. +50 g chicken/fish ≈ +80 kcal, +12 g protein; +100 g Greek yogurt ≈ +60 kcal, +10 g protein) and starch/oil for calories`);
+  }
+  return out;
+};
+
+const cleanName = (name: string) => name.replace(/\s*[\(\[–-]\s*(larger|bigger|extra|increased|double)\s+portion\s*[\)\]]?/gi, "").trim();
 
 const MEAL_SCHEMA = {
   type: "object",
@@ -69,9 +162,20 @@ export const generateMealPlan = defineTool({
     const subject = await ctx.resolveSubject(input.subjectId);
     const context = await nutritionContext(ctx.patientId, subject.id);
     const memories = await prisma.agentMemory.findMany({ where: { patientId: ctx.patientId, active: true, category: { in: ["PREFERENCE", "CONSTRAINT"] } }, take: 20, select: { content: true } });
-    const plan = await getLLM().json<{ title: string; days: { day: number; meals: any[]; totals: { calories: number; protein_g: number; carbs_g: number; fat_g: number } }[]; notes: string }>({
-      system: `You are a registered-dietitian-style meal planner. Produce realistic, repeatable meals with explicit portions. Every day's totals must land inside the daily calorie and macro ranges when given; respect watch-outs (keep flagged nutrients low), allergies (never include), intolerances, dislikes and stated preferences. Vary meals across days. No supplements, no medical claims.`,
-      user: JSON.stringify({ days: input.days, mealsPerDay: input.mealsPerDay, request: input.request ?? null, context, remembered: memories.map((m) => m.content) }),
+    type Plan = { title: string; days: PlanDay[]; notes: string };
+    const generate = (revision?: { previous: Plan; issues: string[] }) => getLLM().json<Plan>({
+      system: `You are a registered-dietitian-style meal planner. Produce realistic, repeatable meals with explicit portions in grams. Every day's totals MUST land inside the daily calorie and macro ranges when given — use perMealGuide as the size of each meal (a weight-loss day is still ~1,500 kcal, not 800) and put a real protein portion (120–180 g meat/fish, 200 g Greek yogurt, 3 eggs, 150 g tofu…) in every main meal. Count calories per meal honestly from the portions (protein 4 kcal/g, carbs 4, fat 9). Respect watch-outs (keep flagged nutrients low), allergies (never include, in any form), intolerances, dislikes and stated preferences. Vary meals across days. No supplements, no medical claims.${
+        revision ? " You are REVISING a plan that missed its targets: fix every listed issue by changing portions or swapping meals, keep everything that was fine. Meal names stay plain dish names — never annotate them with 'larger portion' or similar." : ""
+      }`,
+      user: JSON.stringify({
+        days: input.days,
+        mealsPerDay: input.mealsPerDay,
+        perMealGuide: perMealGuide(context.dailyTargets, input.mealsPerDay),
+        request: input.request ?? null,
+        context,
+        remembered: memories.map((m) => m.content),
+        ...(revision ? { previousPlan: revision.previous, issues: revision.issues, stillNeeded: deficits(revision.previous.days, context.dailyTargets) } : {}),
+      }),
       schema: {
         type: "object",
         properties: {
@@ -97,9 +201,33 @@ export const generateMealPlan = defineTool({
       schemaName: "meal_plan",
       model: getLLM().defaultModel,
     });
-    const result = { subject: subject.name, ...plan, targets: context.dailyTargets };
+    const MAX_REVISIONS = 2;
+    let plan = await generate();
+    let issues = checkMealPlan(plan.days, context.dailyTargets, context.foodAllergies);
+    let revised = false;
+    for (let i = 0; i < MAX_REVISIONS && issues.length; i++) {
+      const revision = await generate({ previous: plan, issues });
+      const revisedIssues = checkMealPlan(revision.days, context.dailyTargets, context.foodAllergies);
+      // Keep whichever attempt is closer; an allergen hit is never "closer".
+      const allergen = (xs: string[]) => xs.some((x) => /\(allergy\)/.test(x));
+      if (revisedIssues.length <= issues.length && !(allergen(revisedIssues) && !allergen(issues))) {
+        plan = revision;
+        issues = revisedIssues;
+        revised = true;
+      }
+    }
+    for (const d of plan.days) for (const m of d.meals) m.name = cleanName(m.name);
+    const fit = { ok: issues.length === 0, issues, targetsFrom: context.targetsFrom, revised };
+    const result = { subject: subject.name, ...plan, targets: context.dailyTargets, fit };
     return {
-      result: { title: plan.title, days: plan.days.map((d) => ({ day: d.day, totals: d.totals, meals: d.meals.map((m) => `${m.mealType.toLowerCase()}: ${m.name} (${m.calories} kcal)`) })), notes: plan.notes },
+      result: {
+        title: plan.title,
+        days: plan.days.map((d) => ({ day: d.day, totals: d.totals, meals: d.meals.map((m) => ({ meal: `${m.mealType.toLowerCase()}: ${m.name} (${m.calories} kcal)`, ingredients: m.ingredients })) })),
+        notes: plan.notes,
+        targets: context.dailyTargets,
+        cardActions: "The card has per-meal 'Log' and 'Recipe' buttons and a 'Shopping list' button; they send you a follow-up. For a shopping-list request, call build_grocery_list with every ingredient line above.",
+        fit: issues.length ? { ok: false, issues, note: "Tell the user plainly which days miss the targets and by how much; offer to adjust. Do not say it fits." } : { ok: true },
+      },
       cards: [{ type: "meal_plan", title: plan.title, data: result }],
     };
   },
@@ -138,7 +266,10 @@ export const generateRecipe = defineTool({
       },
       schemaName: "recipe",
     });
-    return { result: { title: recipe.title, perServing: recipe.perServing, totalMinutes: recipe.prepMinutes + recipe.cookMinutes, ingredientCount: recipe.ingredients.length }, cards: [{ type: "recipe", title: recipe.title, data: recipe }] };
+    return {
+      result: { title: recipe.title, servings: recipe.servings, perServing: recipe.perServing, totalMinutes: recipe.prepMinutes + recipe.cookMinutes, ingredients: recipe.ingredients.map((i: any) => `${i.quantity} ${i.item}`) },
+      cards: [{ type: "recipe", title: recipe.title, data: recipe }],
+    };
   },
 });
 

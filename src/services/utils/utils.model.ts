@@ -1,8 +1,5 @@
-import axios from "axios";
-import { Gender } from "../../types";
-import { calculateAgeFromDob } from "../../utils/calculateAgefromDob";
-import { getRecommendedScreenings } from "../../utils/tests-screening/calculate_tests-screenings";
 import { getPatientById } from "../patient/model/patient.model";
+import axios from "axios";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import { foodInfoSchema } from "./utile.schema";
@@ -17,30 +14,6 @@ const openai = new OpenAI({
 });
 require("dotenv").config();
 export class UtilsService {
-  // fetch available tests and screenings based on patient
-  async getAffordableCaretests(patientId: string) {
-    try {
-      const patient = await getPatientById(patientId);
-      const conditions = patient.patientSummary.conditions.map(
-        (condition: any) => condition.condition.name
-      );
-      const familyHistory = [
-        ...patient.patientSummary.familyHistory.historyOfCancer,
-        ...(patient.patientSummary.vitals.isSmoker ? ["smoker"] : []),
-      ].filter(Boolean);
-      const patientData = {
-        age: calculateAgeFromDob(patient.dob),
-        gender: patient.gender as Gender,
-        conditions: conditions,
-        familyHistory: familyHistory,
-      };
-      return getRecommendedScreenings(patientData);
-    } catch (error: unknown) {
-      console.error("Error fetching available tests and screenings", error);
-      throw error;
-    }
-  }
-
   async getInstacartRetailers(postalCode: string, token: String) {
     try {
       const url = `https://connect.instacart.com/idp/v1/retailers?postal_code=${postalCode}&country_code=US`;

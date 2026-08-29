@@ -136,11 +136,6 @@ export default class Routes {
       patientApi.calculatePatientOverview
     );
     this.app.post(
-      "/api/patients/patientoverview",
-      verifyToken,
-      patientApi.calculatePatientOverview
-    );
-    this.app.post(
       "/api/patients/updateInstacartPreferences",
       verifyToken,
       patientApi.updateInstacartPreferences
@@ -166,26 +161,6 @@ export default class Routes {
       patientApi.deleteLabReport
     );
     // Patient Insurance Routes
-    this.app.post(
-      "/api/patients/insurance/create",
-      verifyToken,
-      patientApi.createPatientInsurance
-    );
-    this.app.post(
-      "/api/patients/insurance/getall",
-      verifyToken,
-      patientApi.getPatientInsurances
-    );
-    this.app.put(
-      "/api/patients/insurance/update",
-      verifyToken,
-      patientApi.updatePatientInsurance
-    );
-    this.app.delete(
-      "/api/patients/insurance/delete",
-      verifyToken,
-      patientApi.deletePatientInsurance
-    );
   }
   routesConfig() {
     this.appRoutes();
