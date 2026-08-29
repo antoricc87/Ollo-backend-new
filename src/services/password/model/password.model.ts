@@ -1,7 +1,6 @@
 import moment from "moment";
 import prisma from "../../../utility/prismaClient";
 import bcrypt from "bcryptjs";
-import UserServices from "../../users/model/user.model";
 import { updatePatientPassword } from "../../patient/model/patient.model";
 class PasswordService {
   async createLink(email: string) {
@@ -90,67 +89,6 @@ class PasswordService {
     }
   }
 
-  // doctor password reset
-
-  async createLinkDoctor(email: string) {
-    try {
-      const user = await prisma.user.findUnique({
-        where: { email: email.trim().toLowerCase() },
-      });
-
-      const otp = Math.floor(100000 + Math.random() * 900000);
-      const expiresAt = moment().add(10, "minutes");
-
-      const resetPasswordData = {
-        userId: user.id,
-        email: user.email,
-        otp: otp.toString(),
-        expiresAt: expiresAt.toDate(),
-        used: false,
-      };
-
-      const otpData = await prisma.resetPasswordDoctor.create({
-        data: resetPasswordData,
-      });
-
-      return otpData;
-    } catch (error) {
-      throw error;
-    }
-  }
-
-  async updatePasswordDoctor(email: string, otp: any, password: string) {
-    try {
-      const otpData = await prisma.resetPasswordDoctor.findFirst({
-        where: { email, otp, used: false },
-      });
-
-      if (!otpData || moment().isAfter(otpData.expiresAt)) {
-        throw new Error("Link is invalid or expired");
-      }
-
-      const user = await prisma.user.findUnique({ where: { email: email } });
-
-      const saltRounds = 10;
-      const salt = await bcrypt.genSalt(saltRounds);
-      const hashedPassword = await bcrypt.hash(password, salt);
-
-      await UserServices.updateUserPassword(user.id, {
-        password: hashedPassword,
-      });
-
-      await prisma.resetPasswordDoctor.update({
-        where: { id: otpData.id },
-        data: {
-          used: true,
-        },
-      });
-
-      return true;
-    } catch (error) {
-      throw error;
-    }
-  }
 }
 
 export default new PasswordService();

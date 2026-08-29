@@ -10,7 +10,7 @@ import { runTurnCollect } from "../src/services/agent/agent.service";
 import proposalStore from "../src/services/agent/memory/proposals.store";
 import threadStore from "../src/services/agent/memory/thread.store";
 import CaloriesService from "../src/services/calories_tracker/model/calories.model";
-import { seedDoctorFor, unlinkDoctor } from "./seed-dev-doctor";
+import { seedClinicianFor, unlinkClinician } from "./seed-dev-clinician";
 
 const log = (s: string) => console.log(s);
 
@@ -31,7 +31,7 @@ async function main() {
     if (bpEntryId) await prisma.bloodPressureEntry.delete({ where: { id: bpEntryId } }).catch(() => null);
     if (bpDaily && (await prisma.bloodPressureEntry.count({ where: { dailyTrackerId: bpDaily } })) === 0)
       await prisma.dailyBloodPressure.delete({ where: { id: bpDaily } }).catch(() => null);
-    await unlinkDoctor(pid).catch(() => null);
+    await unlinkClinician(pid).catch(() => null);
     // Only THIS run's proposals/audit rows — never the account's whole history.
     if (threadId) {
       await prisma.agentProposal.deleteMany({ where: { patientId: pid, threadId } });
@@ -110,22 +110,22 @@ async function main() {
   assert(/care team|clinician|doctor/i.test(m.done!.text));
 
   /* 5b. with a doctor linked: message → confirm → Message row; booking → confirm → Booking row */
-  const { doctorId } = await seedDoctorFor(email);
+  const { clinicianId } = await seedClinicianFor(email);
   const msg = await turn("Now that Dr. Rossi is on my care team, send her a message asking whether my cholesterol results look ok to her.");
   assert.equal(msg.proposals[0]?.toolName, "message_care_team", "message proposal");
   const mc: any = await proposalStore.confirm(pid, msg.proposals[0].proposalId);
   assert.equal(mc.status, 200, JSON.stringify(mc));
   const sent = await prisma.message.findUnique({ where: { id: mc.result.messageId } });
   assert(sent && sent.senderType === "PATIENT" && sent.senderId === pid, "message persisted as PATIENT");
-  log(`  ✓ message sent to doctor ${doctorId}: "${sent!.content.split("\n")[0]}"`);
+  log(`  ✓ message sent to clinician ${clinicianId}: "${sent!.content.split("\n")[0]}"`);
   const bk = await turn("Book me 30 minutes with Dr. Rossi next Tuesday at 10:30 to go over my cholesterol.");
   assert.equal(bk.proposals[0]?.toolName, "book_appointment", "booking proposal");
   const bc: any = await proposalStore.confirm(pid, bk.proposals[0].proposalId);
   assert.equal(bc.status, 200, JSON.stringify(bc));
   const booking = await prisma.booking.findUnique({ where: { id: bc.result.bookingId } });
-  assert(booking && booking.status === "PENDING" && booking.doctorId === doctorId, "booking persisted");
+  assert(booking && booking.status === "PENDING" && booking.clinicianId === clinicianId, "booking persisted");
   log(`  ✓ booking ${booking!.id} PENDING at ${booking!.appointmentDate}`);
-  await unlinkDoctor(pid);
+  await unlinkClinician(pid);
 
   /* 5c. portion edit on a meal preview: halve the first ingredient, drop the last → calories scale */
   const pe = await turn("Log a snack: a handful of almonds and a small apple.");

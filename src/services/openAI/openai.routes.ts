@@ -1,5 +1,5 @@
 import openAiApi from "./controller/openai.controller";
-import { verifyDoctorToken, verifyToken } from "../../utils/auth_token";
+import { verifyToken } from "../../utils/auth_token";
 export default class Routes {
   app: any;
   constructor(app: any) {
@@ -7,32 +7,7 @@ export default class Routes {
   }
 
   appRoutes() {
-    this.app.post(
-      "/api/openai/generate-note",
-      verifyDoctorToken,
-      openAiApi.generateNote
-    );
 
-    this.app.post(
-      "/api/openai/generate-medical-coding",
-      verifyDoctorToken,
-      openAiApi.generateMedicalCoding
-    );
-    this.app.post(
-      "/api/openai/generate-claims-submission",
-      verifyDoctorToken,
-      openAiApi.generateClaimsSubmission
-    );
-    this.app.post(
-      "/api/openai/generate-referral-letter",
-      verifyDoctorToken,
-      openAiApi.generateReferralLetter
-    );
-    this.app.post(
-      "/api/openai/generate-preauth-letter",
-      verifyDoctorToken,
-      openAiApi.generatePreAuthLetter
-    );
     this.app.post(
       "/api/openai/calculatecalories",
       verifyToken,

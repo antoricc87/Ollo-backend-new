@@ -1,5 +1,4 @@
-import { verify } from "crypto";
-import { verifyDoctorToken, verifyToken } from "../../utils/auth_token";
+import { verifyToken } from "../../utils/auth_token";
 import exercisesApi from "./controller/exercises.controller";
 
 export default class Routes {
@@ -22,11 +21,6 @@ export default class Routes {
       "/api/exercises/fetch_tracker_daily",
       verifyToken,
       exercisesApi.fetchExerciseTrackerDaily
-    );
-    this.app.post(
-      "/api/exercises/doctor/fetch_tracker_weekly_only",
-      verifyDoctorToken,
-      exercisesApi.fetchExerciseTrackerWeeklyOnly
     );
   }
   routesConfig() {

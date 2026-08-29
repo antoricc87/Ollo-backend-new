@@ -1,17 +1,11 @@
-import bcrypt from "bcryptjs";
 import { triggerWatchOut } from "../../agent/proactive/proactive.service";
 import LabsJourneyService from "../../labs_journey/model/labsJourney.model";
 import { ObjectId } from "../../../utils/idValidation";
 import { Request, Response } from "express";
 import { UploadedFile } from "express-fileupload"; // Import UploadedFile if the package has types
-import { CreatePatientRequest } from "../../../types";
 import prisma from "../../../utility/prismaClient";
 import { summarizePatientRecord } from "../../../utility/recordSummary";
-import sendEmail from "../../../utils/emailService";
-import {
-  sendMulticast,
-  sendSingleNotification,
-} from "../../../utils/push_notifications";
+import { sendSingleNotification } from "../../../utils/push_notifications";
 import { parseLabPdf } from "../../../utils/redactPI";
 import {
   extractLabReport,
@@ -20,20 +14,15 @@ import {
 import { Util } from "../../../utils/response";
 import { generateLabDataJSON } from "../../openAI/model/openai.model";
 import {
-  calculatePatientOverview,
   checkExistingPatient,
-  createPatient,
   createPatientInsurance,
   createPatientMobile,
   createPatientSummary,
   createSubAccount,
-  createVisit,
   deleteInsuranceRecord,
   deletePatientById,
-  fetchAllPatients,
   fetchPatientInsurances,
   fetchPatientLabs,
-  generateRisksOverviewDatasets,
   getExistingSubAccount,
   getPatientById,
   getSubAccounts,
@@ -41,7 +30,6 @@ import {
   updateInstacartPreferences,
   updateInsuranceRecord,
   updatePatient,
-  updatePatientPassword,
   updatePatientSummarySection,
 } from "../model/patient.model";
 import {
@@ -52,36 +40,6 @@ import {
 } from "../model/patient.model";
 
 export class PatientHandler {
-  //notification test
-  async testNotifications(request: Request, response: Response) {
-    const { data } = request.body;
-    try {
-      const result = await sendMulticast(data);
-      return response
-        .status(200)
-        .json(Util.success(result, "Notification sent successfully"));
-    } catch (error: unknown) {
-      return response
-        .status(500)
-        .json(Util.error({ error }, "Error sending notifications"));
-    }
-  }
-  //get all patient
-  async getAllPatients(request: any, response: Response) {
-    const { id } = request.user;
-    try {
-      const patients = await fetchAllPatients({ doctorIds: { has: id } });
-      if (patients) {
-        return response
-          .status(200)
-          .json(Util.success(patients, "All patients fetched successfully"));
-      }
-    } catch (error: any) {
-      console.error(error.message);
-      response.status(500).json(Util.error({}, "Error fetching all patients"));
-    }
-  }
-
   //get patient by id
   async getPatientById(request: Request, response: Response) {
     const { patientId } = request.body;
@@ -107,68 +65,6 @@ export class PatientHandler {
       return response
         .status(500)
         .json(Util.error({}, "Error fetching the patient"));
-    }
-  }
-
-  // Controller function to handle the creation of a new patient
-  async createNewPatient(request: CreatePatientRequest, response: Response) {
-    const { firstName, lastName, middleName, dob, gender, doctorId, email } =
-      request.body;
-
-    try {
-      // Check if a patient with the same email already exists
-      const existingPatient = await checkExistingPatient(email);
-      if (existingPatient) {
-        return response
-          .status(400)
-          .json(Util.error({}, "Patient with this email already exists"));
-      } else {
-        // Prepare the patient data
-        const data = {
-          firstName: firstName,
-          lastName: lastName,
-          middleName: middleName,
-          dob: new Date(dob),
-          gender: gender,
-          doctorId: doctorId,
-          email: email,
-        };
-
-        // Create the patient
-        // const newPatient = await createPatient(data);
-        const newPatient = await createPatient(request.body);
-
-        if (newPatient) {
-          //create new patient summary
-          const newPatientSummary = await createPatientSummary(newPatient.id);
-          // Create patient calories tracker and food tracker
-          // await CaloriesService.createTracker(newPatient.id);
-          // await CaloriesService.createFoodTracker(newPatient.id);
-
-          //  Prepare and send confirmation email
-          const link = `http://localhost:3000/createpassword/${newPatient.id}`;
-          const subject = "Confirmation of Patient Registration";
-          const body = `Dear ${firstName} ${lastName},\n\nYour registration was successful!\n\nPlease use the link below to set up your password,\n${link}\n\nBest regards,\nYour Healthcare Team`;
-
-          await sendEmail(email, subject, body);
-
-          // Return the created patient and patient summary as the response
-          return response.status(200).json(
-            Util.success(
-              {
-                patient: newPatient,
-                patientSummary: newPatientSummary,
-              },
-              "Patient and PatientSummary created successfully"
-            )
-          );
-        }
-      }
-    } catch (error: any) {
-      console.error("Error creating the patient", error);
-      return response
-        .status(400)
-        .json(Util.error({}, "Error creating the patient"));
     }
   }
 
@@ -322,321 +218,6 @@ export class PatientHandler {
     }
   }
 
-  //create patient visit
-  async createVisit(req: any, res: Response) {
-    const {
-      fhirPatientId,
-      patientId,
-      patientSymptoms,
-      postVisitNote,
-      patientName,
-      patientDOB,
-      patientGender,
-      visitType,
-      visitTime,
-    } = req.body;
-    console.log(req.body);
-    if (!fhirPatientId) {
-      // <-- Add visitType to validation
-      return res
-        .status(400)
-        .json(
-          Util.error(
-            {},
-            "fhirPatientId, visitType, and patientSymptoms are required"
-          )
-        );
-    }
-
-    try {
-      const data = {
-        fhirPatientId,
-        patientId,
-        visitType,
-        patientSymptoms: JSON.stringify(patientSymptoms),
-        postVisitNote,
-        userId: req.user.id,
-        patientName,
-        patientDOB,
-        patientGender,
-        visitTime,
-      };
-      const visit = await createVisit(data);
-      return res
-        .status(200)
-        .json(Util.success(visit, "Visit successfully created"));
-    } catch (error) {
-      console.error("Error creating visit:", error);
-      res.status(500).json(Util.error({}, "Failed creating the visit"));
-    }
-  }
-
-  // API to fetch a single visit
-  async getVisitbyId(req: Request, res: Response) {
-    const { visitId } = req.body;
-    try {
-      const visit = await prisma.visit.findUnique({
-        where: { id: visitId },
-      });
-      if (!visit) {
-        return res.status(404).json(Util.error({}, "Visit not found"));
-      }
-      return res
-        .status(200)
-        .json(Util.success(visit, "Visit successfully fetched"));
-    } catch (error) {
-      console.error("Error fetching visit:", error);
-      res.status(500).json(Util.error({}, "Failed getting the visit"));
-    }
-  }
-
-  // API to fetch all visits for a specific patient
-  async getPatientVisits(req: Request, res: Response) {
-    const { patientId } = req.body; // Assume patientId is sent in the request body
-
-    try {
-      const visits = await prisma.visit.findMany({
-        where: { fhirPatientId: patientId }, // Fetch all visits for the given patientId
-      });
-      if (!visits || visits.length === 0) {
-        return res
-          .status(404)
-          .json(Util.error({}, "No visits found for this patient"));
-      }
-      return res
-        .status(200)
-        .json(Util.success(visits, "Visits successfully fetched"));
-    } catch (error) {
-      console.error("Error fetching visits:", error);
-      res.status(500).json(Util.error({}, "Failed to get visits"));
-    }
-  }
-
-  // update patient visit
-  async updateVisit(req: any, res: Response) {
-    const { id } = req.params;
-    const {
-      patientSymptoms,
-      postVisitNote,
-      postVisitCoding,
-      postVisitBilling,
-      isEnded,
-    } = req.body;
-
-    try {
-      const visit = await prisma.visit.update({
-        where: { id },
-        data: {
-          patientSymptoms: patientSymptoms
-            ? JSON.stringify(patientSymptoms)
-            : undefined,
-          postVisitNote,
-          postVisitCoding,
-          postVisitBilling,
-          isEnded: isEnded !== undefined ? isEnded : undefined, // Add this line to update isEnded
-        },
-      });
-      return res
-        .status(200)
-        .json(Util.success(visit, "Visit successfully updated"));
-    } catch (error) {
-      console.error("Error updating visit:", error);
-      res.status(500).json(Util.error({}, "Failed updating the visit"));
-    }
-  }
-
-  //delete patient visit
-  async deleteVisit(req: Request, res: Response) {
-    const { id } = req.params;
-
-    try {
-      await prisma.visit.delete({
-        where: { id },
-      });
-      return res
-        .status(200)
-        .json(Util.success({}, "Visit successfully deleted"));
-    } catch (error) {
-      console.error("Error deleting visit:", error);
-      res.status(500).json(Util.error({}, "Failed to delete visit"));
-    }
-  }
-
-  //get all visits
-  async getAllVisits(req: any, res: Response) {
-    try {
-      const visits = await prisma.visit.findMany({
-        where: { userId: req.user.id },
-      });
-      if (visits) {
-        return res
-          .status(200)
-          .json(Util.success(visits, "Visits successfully fetched"));
-      }
-    } catch (error: any) {
-      console.error("Error fetching visits", error);
-      res.status(500).json(Util.error({}, "Error fetching visits"));
-    }
-  }
-
-  // Create a new referral
-  async createReferral(request: Request, response: Response) {
-    const {
-      visitId,
-      patientId,
-      userId,
-      receivingProviderName,
-      receivingProviderSpecialty,
-      reason,
-      referralLetter,
-    } = request.body;
-
-    try {
-      // Ensure the correct data types are passed
-      const referral = await prisma.referral.create({
-        data: {
-          visitId: visitId as string,
-          patientId: patientId as string,
-          userId: userId as string,
-          receivingProviderName: receivingProviderName as string,
-          receivingProviderSpecialty: receivingProviderSpecialty as string,
-          reason: reason as string,
-          referralLetter: referralLetter as string,
-        },
-      });
-      return response
-        .status(200)
-        .json(Util.success(referral, "Referral letter created successfully"));
-    } catch (error: any) {
-      console.error("Error creating referral letter", error);
-      return response
-        .status(500)
-        .json(Util.error({}, "Failed to create referral letter"));
-    }
-  }
-
-  // Create a new pre-auth
-  async createPreAuth(request: Request, response: Response) {
-    const {
-      visitId,
-      patientId,
-      userId,
-      procedureName,
-      procedureCPTCode,
-      reason,
-      preAuthLetter,
-    } = request.body;
-
-    try {
-      const preAuth = await prisma.preAuth.create({
-        data: {
-          visitId: visitId as string,
-          patientId: patientId as string,
-          userId: userId as string,
-          procedureName: procedureName as string,
-          procedureCPTCode: procedureCPTCode as string,
-          reason: reason as string,
-          preAuthLetter: preAuthLetter as string,
-        },
-      });
-      return response
-        .status(200)
-        .json(Util.success(preAuth, "Pre-auth letter created successfully"));
-    } catch (error: any) {
-      console.error("Error creating pre-auth letter", error);
-      return response
-        .status(500)
-        .json(Util.error({}, "Failed to create pre-auth letter"));
-    }
-  }
-
-  // Get all referrals for a patient
-  async getReferrals(request: Request, response: Response) {
-    const { patientId } = request.params;
-
-    try {
-      const referrals = await prisma.referral.findMany({
-        where: { patientId },
-      });
-      if (!referrals || referrals.length === 0) {
-        return response
-          .status(404)
-          .json(Util.error({}, "No referrals found for this patient"));
-      }
-      return response
-        .status(200)
-        .json(Util.success(referrals, "Referrals fetched successfully"));
-    } catch (error: any) {
-      console.error("Error fetching referrals", error);
-      return response
-        .status(500)
-        .json(Util.error({}, "Failed to fetch referrals"));
-    }
-  }
-
-  // Get all pre-auths for a patient
-  async getPreAuths(request: Request, response: Response) {
-    const { patientId } = request.params;
-
-    try {
-      const preAuths = await prisma.preAuth.findMany({
-        where: { patientId },
-      });
-      if (!preAuths || preAuths.length === 0) {
-        return response
-          .status(404)
-          .json(Util.error({}, "No pre-auths found for this patient"));
-      }
-      return response
-        .status(200)
-        .json(Util.success(preAuths, "Pre-auths fetched successfully"));
-    } catch (error: any) {
-      console.error("Error fetching pre-auths", error);
-      return response
-        .status(500)
-        .json(Util.error({}, "Failed to fetch pre-auths"));
-    }
-  }
-
-  //--------------patient facing app---------------//
-  //check existing patient
-  async checkForExistingPatient(req: Request, res: Response) {
-    try {
-      const patient = await checkExistingPatient(req.body.email);
-      if (!patient)
-        return res.status(400).json(Util.error({}, "Patient not found"));
-      return res
-        .status(200)
-        .json(Util.success(patient, "Patient succesfully fetched"));
-    } catch (error: any) {
-      return res.status(400).json(Util.error({}, error));
-    }
-  }
-  //update patient
-  async updatePatientPasswordById(req: Request, res: Response) {
-    const { password, patientId } = req.body;
-    if (!patientId || !ObjectId.isValid(patientId))
-      return res
-        .status(400)
-        .json(
-          Util.error({}, "Patient id is required and must be a valid ObjectId")
-        );
-
-    try {
-      const saltRounds = 10;
-      const salt = await bcrypt.genSalt(saltRounds);
-      const hashedPassword = await bcrypt.hash(password, salt);
-      const updatedPatient = await updatePatientPassword(patientId, {
-        password: hashedPassword,
-      });
-      if (updatedPatient)
-        return res
-          .status(200)
-          .json(Util.success(updatedPatient, "Patient successfully updated"));
-    } catch (error: any) {
-      return res.status(400).json(Util.error({}, error));
-    }
-  }
   //patient login
   async patientLogin(req: Request, res: Response) {
     const { email, password } = req.body;
@@ -790,31 +371,6 @@ export class PatientHandler {
       return res
         .status(500)
         .json({ success: false, message: "Error processing lab report" });
-    }
-  }
-
-  async calculatePatientOverview(req: Request, res: Response) {
-    const { patientId } = req.body;
-    if (!patientId)
-      return res.status(400).json(Util.error({}, "Patient id is missing"));
-    try {
-      const risksData = await generateRisksOverviewDatasets(patientId);
-      const { diabeteData, biologicalAgeData, cvRiskData } = risksData;
-      const patientOverview = await calculatePatientOverview(
-        diabeteData,
-        cvRiskData,
-        biologicalAgeData
-      );
-      if (patientOverview) {
-        return res
-          .status(201)
-          .json(Util.success(patientOverview, "Overview created successfully"));
-      }
-    } catch (error) {
-      console.error("Error calculating patient overview:", error);
-      return res
-        .status(500)
-        .json({ success: false, message: "Internal Server Error" });
     }
   }
 

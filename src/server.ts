@@ -8,14 +8,10 @@ import bodyParser from "body-parser";
 import cookieParser from "cookie-parser";
 import PatientRoutes from "./services/patient/patient.routes";
 import OpenAiRoutes from "./services/openAI/openai.routes";
-import UserRoutes from "./services/users/user.routes";
-import FHIRRoutes from "./services/fhir/fhir.routes";
 import CaloriesRoutes from "./services/calories_tracker/calories.routes";
-import HealthGoalsRoutes from "./services/healthgoal/healthGoals.routes";
 import NutritionRoutes from "./services/nutrition/nutrition.routes";
 import FCMTokenRoutes from "./services/FCM_token/fcm_token.routes";
 import ExercisesRoutes from "./services/exercises_tracker/exercises.routes";
-import ReportsRoutes from "./services/reports/reports.routes";
 import WeightRoutes from "./services/weight_tracker/weight.routes";
 import GlucoseRoutes from "./services/glucose_tracker/glucose.routes";
 import BFPRoutes from "./services/bodyFatPercentage/bfp.routes";
@@ -23,10 +19,8 @@ import BloodPressureRoutes from "./services/bp_tracker/bloodpressure.routes";
 import PasswordRoutes from "./services/password/password.routes";
 import UtilsRoutes from "./services/utils/utils.routes";
 import BookingRoutes from "./services/bookings/bookings.routes";
-import DoctorRoutes from "./services/doctors/doctors.routes";
-import AdminRoutes from "./services/admin/admin.routes";
+import ClinicianRoutes from "./services/clinicians/clinicians.routes";
 import DexcomRoutes from "./services/dexcom/dexcom.routes";
-import MessagingRoutes from "./services/messaging/messaging.routes";
 import PlanRoutes from "./services/plan/plan.routes";
 import AgentRoutes from "./services/agent/agent.routes";
 import WorkoutRoutes from "./services/workouts/workouts.routes";
@@ -39,7 +33,6 @@ import {
   scheduleDinnerJobs,
   scheduleLunchJobs,
 } from "./workers/jobSchedulers/nutrition.scheduler";
-import { scheduleWeeklyReportReminder } from "./workers/jobSchedulers/reports.scheduler";
 require("dotenv").config();
 
 class Server {
@@ -68,15 +61,12 @@ class Server {
     );
 
     // Conditionally apply bodyParser.json only to non-upload routes
-    const skipBodyParserFor = [
-      "/api/patients/uploadlab",
-      "/api/patients/doctor/uploadPatientlab",
-      "/api/utils/parsepdf",
-      "/api/utils/testPDFRedaction",
-    ];
+    // (compared lower-case: the app posts /patients/uploadLab)
+    const skipBodyParserFor = ["/api/patients/uploadlab"];
 
     this.app.use((req, res, next) => {
-      if (!skipBodyParserFor.some((path) => req.path.startsWith(path))) {
+      const path = req.path.toLowerCase();
+      if (!skipBodyParserFor.some((p) => path.startsWith(p))) {
         bodyParser.json({ limit: "50mb" })(req, res, next);
       } else {
         next();
@@ -103,14 +93,10 @@ class Server {
   includeRoutes() {
     new PatientRoutes(this.app).routesConfig();
     new OpenAiRoutes(this.app).routesConfig();
-    new UserRoutes(this.app).routesConfig();
-    new FHIRRoutes(this.app).routesConfig();
     new CaloriesRoutes(this.app).routesConfig();
-    new HealthGoalsRoutes(this.app).routesConfig();
     new NutritionRoutes(this.app).routesConfig();
     new FCMTokenRoutes(this.app).routesConfig();
     new ExercisesRoutes(this.app).routesConfig();
-    new ReportsRoutes(this.app).routesConfig();
     new WeightRoutes(this.app).routesConfig();
     new GlucoseRoutes(this.app).routesConfig();
     new BFPRoutes(this.app).routesConfig();
@@ -118,10 +104,8 @@ class Server {
     new PasswordRoutes(this.app).routesConfig();
     new UtilsRoutes(this.app).routesConfig();
     new BookingRoutes(this.app).routesConfig();
-    new DoctorRoutes(this.app).routesConfig();
-    new AdminRoutes(this.app).routesConfig();
+    new ClinicianRoutes(this.app).routesConfig();
     new DexcomRoutes(this.app).routesConfig();
-    new MessagingRoutes(this.app).routesConfig();
     new PlanRoutes(this.app).routesConfig();
     new AgentRoutes(this.app).routesConfig();
     new WorkoutRoutes(this.app).routesConfig();
@@ -138,7 +122,6 @@ class Server {
       scheduleAgentProactiveTick();
     }
 
-    // scheduleWeeklyReportReminder();
     // Railway (and most PaaS) inject PORT; NODE_SERVER_PORT covers local dev.
     const port = parseInt(
       process.env.PORT || process.env.NODE_SERVER_PORT || "5000"

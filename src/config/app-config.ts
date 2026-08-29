@@ -19,12 +19,9 @@ export default class AppConfig {
   loadAppLevelConfig() {
     this.app.use(bodyParser.json());
     // Configure CORS
-    const allowedOrigins = [
-      "http://localhost:3000",
-      "https://ollo-health.com",
-      "https://main.d2anfp395hofho.amplifyapp.com",
-      "https://physician-app.ollo-health.com",
-    ];
+    // Browser origins only (the mobile app sends no Origin). The physician
+    // portal origins were removed with the physician surface (2026-08-29).
+    const allowedOrigins = ["http://localhost:3000", "https://ollo-health.com"];
 
     this.app.use(
       cors({

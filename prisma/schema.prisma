@@ -7,62 +7,60 @@ generator client {
   provider = "prisma-client-js"
 }
 
-model Admin {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  firstName String?
-  lastName  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model User {
-  id                 String                @id @default(uuid())
-  // username        String     @unique
-  email              String                @unique
-  isEmailVerified    Boolean               @default(false)
-  password           String
+/// A clinician as the patient app sees them: a DIRECTORY record (name,
+/// specialty, clinic, published availability) — NOT a login. Clinician identity,
+/// visits, notes and billing belong to the future clinician service; this row is
+/// what it would publish into the patient backend. `externalId` is reserved for
+/// that service's id.
+model Clinician {
+  id                 String               @id @default(uuid())
+  externalId         String?              @unique
+  email              String?              @unique
   firstName          String
   lastName           String
-  phoneNumber        String
+  phoneNumber        String?
   specialty          String?
   bio                String?
   profileImageUrl    String?
-  npiNumber          String?               @unique
-  licenseNumber      String?               @unique
-  licenseState       String?
-  licenseExpiry      String?
+  npiNumber          String?
   clinicName         String?
-  addressLine1       String
+  addressLine1       String?
   addressLine2       String?
-  city               String
-  state              String
-  zipCode            String
-  country            String
-  role               Role                  @default(DOCTOR)
-  twoFactorEnabled   Boolean               @default(false)
-  twoFactorSecret    String?
-  lastLogin          DateTime?
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
+  city               String?
+  state              String?
+  zipCode            String?
+  country            String?
+  acceptedInsurances String[]             @default([])
+  isActive           Boolean              @default(true)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
   bookings           Booking[]
   availabilities     WeeklyAvailability[]
-  acceptedInsurances String[]              @default([])
-  resetPassword      ResetPasswordDoctor[]
   chats              Chat[]
+  careTeamOf         CareTeamMember[]
 }
 
-enum Role {
-  ADMIN
-  DOCTOR
-  STAFF
+/// The patient's care team = consent grants. Today a row is created when the
+/// patient books a clinician; `revokedAt` ends the link. When a clinician
+/// service exists, this row is what scopes its access to this patient's data.
+model CareTeamMember {
+  id          String    @id @default(uuid())
+  patientId   String
+  patient     Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinicianId String
+  clinician   Clinician @relation(fields: [clinicianId], references: [id], onDelete: Cascade)
+  source      String    @default("BOOKING") // BOOKING | MANUAL | SEED
+  addedAt     DateTime  @default(now())
+  revokedAt   DateTime?
+
+  @@unique([patientId, clinicianId])
+  @@index([patientId])
 }
 
 model WeeklyAvailability {
   id            String              @id @default(uuid())
-  doctor        User                @relation(fields: [doctorId], references: [id])
-  doctorId      String
+  clinician     Clinician           @relation(fields: [clinicianId], references: [id], onDelete: Cascade)
+  clinicianId   String
   weekStartDate String
   weekEndDate   String
   days          DailyAvailability[]
@@ -89,61 +87,6 @@ model TimeSlot {
   isAvailable         Boolean
 }
 
-model Visit {
-  id               String       @id @default(uuid())
-  userId           String
-  patientId        String?
-  fhirPatientId    String?
-  visitType        String?
-  patientSymptoms  Json?
-  postVisitNote    String?
-  postVisitCoding  String?
-  postVisitBilling String?
-  isEnded          Boolean      @default(false)
-  patientName      String
-  patientDOB       String
-  patientGender    String
-  visitTime        String?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
-  healthGoals      HealthGoal[] @relation("VisitGoals")
-}
-
-model Referral {
-  id                         String   @id @default(uuid())
-  visitId                    String
-  patientId                  String
-  userId                     String // ID of the referring provider (user)
-  receivingProviderName      String // Name of the receiving provider/specialist
-  receivingProviderSpecialty String // Specialty of the receiving provider/specialist
-  reason                     String // Reason for referral
-  referralLetter             String? // The content of the referral letter
-  createdAt                  DateTime @default(now())
-  updatedAt                  DateTime @updatedAt
-}
-
-model PreAuth {
-  id               String   @id @default(uuid())
-  visitId          String
-  patientId        String
-  userId           String // ID of the requesting provider (user)
-  procedureName    String // Name of the procedure or test
-  procedureCPTCode String // CPT code(s) for the procedure/test
-  reason           String // Medical necessity or reason for the procedure
-  preAuthLetter    String? // The content of the pre-authorization letter
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-}
-
-model UserGeneratedData {
-  id        String   @id @default(uuid())
-  patientId String
-  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  type      String
-  data      Json
-  createdAt DateTime @default(now())
-}
-
 model ResetPassword {
   id        String   @id @default(uuid())
   patientId String
@@ -154,20 +97,9 @@ model ResetPassword {
   used      Boolean
 }
 
-model ResetPasswordDoctor {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  email     String
-  otp       String
-  expiresAt DateTime
-  used      Boolean
-}
-
 // Patient Modules
 model Patient {
   id                   String                @id @default(uuid())
-  doctorIds            String[]
   firstName            String?
   lastName             String?
   middleName           String?
@@ -184,15 +116,13 @@ model Patient {
   /// Annual physical (onboarding Set 04): "within_year" | "over_year" | "never"
   lastPhysicalStatus   String?
   lastPhysicalAt       DateTime?
-  healthGoals          HealthGoal[]          @relation("PatientHealthGoals")
   healthPlans          HealthPlan[]          @relation("PatientPlans")
   createdAt            DateTime?             @default(now())
-  userGenerateddata    UserGeneratedData[]
   resetPassword        ResetPassword[]
   timeZone             String?
   phoneNumber          String?
   bookings             Booking[]
-  healthCheckUp        HealthCheckUp[]
+  careTeam             CareTeamMember[]
   instacartPreferences InstacartPreferences?
   insurance            PatientInsurance?
   isProUser            Boolean               @default(false)
@@ -200,7 +130,6 @@ model Patient {
   proExpiresAt         String?
   avatar               Int?
   freeTrialEndsOn      DateTime?
-  userAlerts           UserAlert[]
   dexcomToken          DexcomToken?
   subAccountOf         String? // NEW: Reference to parent patient
   parentPatient        Patient?              @relation("SubAccounts", fields: [subAccountOf], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -226,48 +155,6 @@ model DexcomToken {
   patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
 }
 
-model Alert {
-  id         String      @id @default(uuid())
-  title      String
-  message    String
-  createdAt  DateTime    @default(now())
-  userAlerts UserAlert[]
-}
-
-model UserAlert {
-  id        String  @id @default(uuid())
-  patientId String
-  alertId   String
-  seen      Boolean @default(false)
-  dismissed Boolean @default(false)
-  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  alert     Alert   @relation(fields: [alertId], references: [id], onDelete: Cascade)
-}
-
-enum FlaggedAreas {
-  GLUCOSE
-  CALORIES
-  NUTRIENTS
-  SODIUM
-  CHOLESTEROL
-  SUGAR
-  SLEEP
-  WEIGHT
-  BLOODPRESSURE
-}
-
-model HealthCheckUp {
-  id                  String         @id @default(uuid())
-  patientId           String         @unique
-  patient             Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  periodStart         String
-  periodEnd           String
-  checkupReport       Json
-  flaggedAreas        FlaggedAreas[]
-  flaggedAreasReasons String[]
-  createdAt           DateTime       @default(now())
-}
-
 model InstacartPreferences {
   id                String  @id @default(uuid())
   patientId         String  @unique
@@ -289,18 +176,10 @@ model PatientSummary {
   procedures    ProcedureSummary[]
   labResults    LabResultSummary[]
   caloricAmount Int?
-  labReport     LabReport?            @relation
   exercise      ExerciseSummary?      @relation
   familyHistory FamilyHistorySummary? @relation
   nutrition     NutritionSummary?     @relation
   vitals        VitalsSummary?        @relation
-}
-
-model LabReport {
-  id               String         @id @default(uuid())
-  report           String
-  patientSummary   PatientSummary @relation(fields: [patientSummaryId], references: [id])
-  patientSummaryId String         @unique
 }
 
 model VitalsSummary {
@@ -912,140 +791,6 @@ model UserFCMToken {
   createdAt DateTime @default(now())
 }
 
-enum HealthGoalCategory {
-  MONITORING
-  TRACKABLE
-  HEALTH
-  WELLNESS
-}
-
-// Health Goals
-model HealthGoal {
-  id               String              @id @default(uuid())
-  visitId          String?
-  patientId        String
-  patient          Patient             @relation(fields: [patientId], references: [id], onDelete: Cascade, name: "PatientHealthGoals") // Establish relation with Patient
-  description      String
-  status           GoalStatus          @default(IN_PROGRESS) // "In Progress", "Achieved", etc.
-  reviewDate       DateTime?
-  endDate          DateTime?
-  targetValue      String?
-  startingValue    String?
-  category         HealthGoalCategory?
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
-  trackableMetrics TrackableMetric[]   @relation("GoalMetrics")
-  visit            Visit?              @relation("VisitGoals", fields: [visitId], references: [id], onDelete: Cascade) // Opposite relation
-}
-
-model TrackableMetric {
-  id            String         @id @default(uuid())
-  healthGoalId  String
-  description   String // Specific action (e.g., "Walk 10,000 steps daily")
-  targetValue   String // Target metric value (e.g., "10,000 steps", "20g saturated fat/day")
-  currentValue  String? // Patient's current progress towards this metric
-  unit          String? // Unit of measurement (e.g., steps, grams, etc.)
-  value         String?
-  patientId     String
-  category      MetricCategory // Category (e.g., "Diet", "Exercise", etc.)
-  frequency     String // How often the action should be performed (e.g., "daily", "weekly")
-  reviewDate    DateTime? // When the metric should be reviewed
-  metricEntries MetricEntry[]  @relation // Logs of actual performance
-  status        GoalStatus     @default(PENDING)
-  healthGoal    HealthGoal     @relation("GoalMetrics", fields: [healthGoalId], references: [id], onDelete: Cascade) // Opposite relation
-}
-
-enum MetricCategory {
-  DIET
-  EXERCISE
-  MEDICATION
-  MONITORING
-  LIFESTYLE
-  SUPPLEMENTS
-}
-
-enum GoalStatus {
-  PENDING
-  IN_PROGRESS
-  ACHIEVED
-  NOT_ACHIEVED
-}
-
-model MetricEntry {
-  id                String          @id @default(uuid())
-  trackableMetricId String
-  entryDate         DateTime        @default(now()) // Date of the entry (e.g., daily record)
-  value             Int // Actual value for the day (e.g., "2100")
-  trackableMetric   TrackableMetric @relation(fields: [trackableMetricId], references: [id], onDelete: Cascade)
-}
-
-// weekly report schemas
-model WeeklyReport {
-  id                 String               @id @default(uuid())
-  userId             String
-  healthGoalProgress HealthGoalProgress[] @relation
-  healthScore        Float?
-  weekStartDate      String
-  weekEndDate        String
-  nutritionScore     NutritionScore?      @relation
-  exerciseScore      ExerciseScore?       @relation
-  sleepScore         SleepScore?          @relation
-  stressScore        StressScore?         @relation
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
-}
-
-model HealthGoalProgress {
-  id                             String       @id @default(uuid())
-  healthGoalName                 String
-  healthGoalId                   String
-  healthGoalPercentageCompletion Float
-  weeklyReportId                 String
-  weeklyReport                   WeeklyReport @relation(fields: [weeklyReportId], references: [id], onDelete: Cascade)
-}
-
-model NutritionScore {
-  id                        String       @id @default(uuid())
-  nutritionScore            Float
-  macronutrientBalanceScore Float
-  caloricIntakeScore        Float
-  dietQualityScore          Float
-  nutritionFeedback         String
-  weeklyReportId            String       @unique
-  weeklyReport              WeeklyReport @relation(fields: [weeklyReportId], references: [id], onDelete: Cascade)
-}
-
-model ExerciseScore {
-  id                  String       @id @default(uuid())
-  exerciseScore       Float
-  consistencyScore    Float
-  weeklyActivityScore Float
-  exerciseFeedback    String
-  weeklyReportId      String       @unique
-  weeklyReport        WeeklyReport @relation(fields: [weeklyReportId], references: [id], onDelete: Cascade)
-}
-
-model SleepScore {
-  id               String       @id @default(uuid())
-  sleepScore       Float
-  durationScore    Float
-  qualityScore     Float
-  consistencyScore Float
-  sleepFeedback    String
-  weeklyReportId   String       @unique
-  weeklyReport     WeeklyReport @relation(fields: [weeklyReportId], references: [id], onDelete: Cascade)
-}
-
-model StressScore {
-  id              String       @id @default(uuid())
-  stressScore     Float
-  hrvScore        Float
-  restingHrvScore Float
-  stressFeedback  String
-  weeklyReportId  String       @unique
-  weeklyReport    WeeklyReport @relation(fields: [weeklyReportId], references: [id], onDelete: Cascade)
-}
-
 enum BookingStatus {
   PENDING
   CONFIRMED
@@ -1055,12 +800,12 @@ enum BookingStatus {
 
 model Booking {
   id              String        @id @default(uuid())
-  doctorId        String
+  clinicianId     String
   patientId       String
-  doctor          User          @relation(fields: [doctorId], references: [id])
+  clinician       Clinician     @relation(fields: [clinicianId], references: [id])
   patient         Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
   patientName     String?
-  doctorName      String?
+  clinicianName   String?
   appointmentDate String
   durationMinutes Int           @default(30)
   reason          String?
@@ -1070,15 +815,6 @@ model Booking {
   isPaidByDoctor  Boolean       @default(false)
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
-}
-
-model AuthorizedPhysicians {
-  id        String   @id @default(uuid())
-  fullName  String
-  email     String   @unique
-  createdBy String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
 model PatientInsurance {
@@ -1093,40 +829,18 @@ model PatientInsurance {
   updatedAt         DateTime @updatedAt
 }
 
-model RecordingSession {
-  id               String           @id @default(uuid())
-  uniqueIdentifier String           @unique
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
-  userId           String?
-  chunks           RecordingChunk[]
-}
-
-model RecordingChunk {
-  id         String           @id @default(uuid())
-  createdAt  DateTime         @default(now())
-  chunkIndex Int
-  transcript String
-  startTime  String           @unique
-  sessionId  String
-  session    RecordingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-}
-
 // Chat and Messages
 model Chat {
   id             String    @id @default(uuid())
-  userId         String
+  clinicianId    String
   patientId      String
-  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clinician      Clinician @relation(fields: [clinicianId], references: [id], onDelete: Cascade)
   patient        Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
   messages       Message[]
-  // Draft fields for doctor message drafting
-  doctorDraft    String?
-  draftUpdatedAt DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  @@unique([userId, patientId], name: "unique_user_patient_chat")
+  @@unique([clinicianId, patientId], name: "unique_clinician_patient_chat")
 }
 
 model Message {
@@ -1134,7 +848,7 @@ model Message {
   chatId     String
   chat       Chat              @relation(fields: [chatId], references: [id], onDelete: Cascade)
   content    String
-  senderId   String // Can be either userId or patientId
+  senderId   String // clinicianId or patientId, per senderType
   senderType MessageSenderType
   isRead     Boolean           @default(false)
   createdAt  DateTime          @default(now())
@@ -1142,7 +856,7 @@ model Message {
 }
 
 enum MessageSenderType {
-  DOCTOR
+  CLINICIAN
   PATIENT
 }
 
@@ -1157,8 +871,7 @@ model PromoCode {
 
 // ---------------------------------------------------------------------------
 // Health Plan v1 (Aug 2026) — goal -> pillar targets + nutrition watch-outs.
-// Replaces the legacy HealthGoal/TrackableMetric flow for the mobile app;
-// legacy tables are left untouched for the doctor portal.
+// Replaced the legacy HealthGoal/TrackableMetric flow (tables dropped 2026-08-29).
 // ---------------------------------------------------------------------------
 
 enum PlanOutcome {

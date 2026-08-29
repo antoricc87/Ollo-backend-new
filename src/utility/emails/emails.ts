@@ -8,8 +8,8 @@ export const bodyToOllo = (bookingData: any) => {
     <p>Full Name: ${bookingData.patientName}</p>
     <p>ID: ${bookingData.patientId}</p>
     <h3>Doctor Data</h3>
-    <p>Full Name: ${bookingData.doctorName}</p>
-    <p>ID: ${bookingData.doctorId}</p>
+    <p>Full Name: ${bookingData.clinicianName}</p>
+    <p>ID: ${bookingData.clinicianId}</p>
   </body>
 </html>`;
 };
@@ -21,8 +21,8 @@ export const textBodyToOllo = (bookingData: any) => {
   - ID: ${bookingData.patientId}
   
   Doctor Data:
-  - Full Name: ${bookingData.doctorName}
-  - ID: ${bookingData.doctorId}
+  - Full Name: ${bookingData.clinicianName}
+  - ID: ${bookingData.clinicianId}
   
   Please confirm with the doctor as soon as possible.`;
 };
@@ -33,11 +33,11 @@ export const bodyToPatient = (bookingData: any) => {
     <h2>Thank you for your appointment request!</h2>
     <p>Dear ${bookingData.patientName},</p>
     <p>We have received your appointment request and are currently processing it. Our team is working to confirm your appointment with Dr. ${
-      bookingData.doctorName
+      bookingData.clinicianName
     }.</p>
     <p>You will receive a confirmation email as soon as your appointment is confirmed. Please allow 24-48 hours for processing.</p>
     <h3>Appointment Details</h3>
-    <p>Doctor: Dr. ${bookingData.doctorName}</p>
+    <p>Doctor: Dr. ${bookingData.clinicianName}</p>
     <p>Request Date: ${
       moment(
         bookingData.appointmentDate,
@@ -64,13 +64,13 @@ export const textBodyToPatient = (bookingData: any) => {
 Dear ${bookingData.patientName},
 
 We have received your appointment request and are currently processing it.
-Our team is working to confirm your appointment with Dr. ${bookingData.doctorName}.
+Our team is working to confirm your appointment with Dr. ${bookingData.clinicianName}.
 
 You will receive a confirmation email as soon as your appointment is confirmed.
 Please allow 24–48 hours for processing.
 
 Appointment Details:
-- Doctor: Dr. ${bookingData.doctorName}
+- Doctor: Dr. ${bookingData.clinicianName}
 - Request Date: ${formattedDate}
 
 If you have any urgent questions, please don't hesitate to contact our support team.
@@ -81,11 +81,11 @@ Best regards,
 Ollo Health Team`;
 };
 
-export const bodyToDoctor = (bookingData: any) => {
+export const bodyToClinician = (bookingData: any) => {
   return `<html>
   <body>
     <h2>New Appointment Request From Ollo</h2>
-    <p>Dear Dr. ${bookingData.doctorName},</p>
+    <p>Dear Dr. ${bookingData.clinicianName},</p>
     <p>You have received a new appointment request from a patient. Please review the details below and confirm or reschedule as needed.</p>
     <h3>Patient Information</h3>
     <p>Patient Name: ${bookingData.patientName}</p>
@@ -102,7 +102,7 @@ export const bodyToDoctor = (bookingData: any) => {
   </body>
 </html>`;
 };
-export const textBodyToDoctor = (bookingData: any) => {
+export const textBodyToClinician = (bookingData: any) => {
   const formattedDate = bookingData.appointmentDate
     ? moment(
         bookingData.appointmentDate,
@@ -112,7 +112,7 @@ export const textBodyToDoctor = (bookingData: any) => {
 
   return `New Appointment Request From Ollo
   
-  Dear Dr. ${bookingData.doctorName},
+  Dear Dr. ${bookingData.clinicianName},
   
   You have received a new appointment request from a patient. Please review the details below and confirm or reschedule as needed.
   
@@ -154,7 +154,7 @@ export const bodyBookingConfirmationToPatient = (bookingData: any) => {
         bookingData.patientName
       },</h2>
       <p style="font-size: 16px; margin-bottom: 20px;">Great news! Your appointment with <strong>Dr. ${
-        bookingData.doctorName
+        bookingData.clinicianName
       }</strong> has been confirmed. We're looking forward to seeing you!</p>
       
       <div style="background: white; padding: 20px; border-radius: 6px; border-left: 4px solid #D9C9B2;">
@@ -162,7 +162,7 @@ export const bodyBookingConfirmationToPatient = (bookingData: any) => {
         <table style="width: 100%; border-collapse: collapse;">
           <tr>
             <td style="padding: 8px 0; font-weight: bold; color: #555;">Doctor:</td>
-            <td style="padding: 8px 0;">Dr. ${bookingData.doctorName}</td>
+            <td style="padding: 8px 0;">Dr. ${bookingData.clinicianName}</td>
           </tr>
           <tr>
             <td style="padding: 8px 0; font-weight: bold; color: #555;">Date:</td>
@@ -248,11 +248,11 @@ export const textBodyBookingConfirmationToPatient = (bookingData: any) => {
 Dear ${bookingData.patientName},
 
 Great news! Your appointment with Dr. ${
-    bookingData.doctorName
+    bookingData.clinicianName
   } has been confirmed. We're looking forward to seeing you!
 
 APPOINTMENT DETAILS:
-- Doctor: Dr. ${bookingData.doctorName}
+- Doctor: Dr. ${bookingData.clinicianName}
 - Date: ${formattedDate}
 - Time: ${formattedTime}
 ${bookingData.clinicName ? `- Clinic: ${bookingData.clinicName}` : ""}

@@ -1,7 +1,12 @@
-import { verify } from "crypto";
 import patientApi from "./controller/patient.controller";
-import { verifyDoctorToken, verifyToken } from "../../utils/auth_token";
+import { verifyToken } from "../../utils/auth_token";
 
+/**
+ * Patient-facing routes only. The physician-portal routes that used to live
+ * here (fetchpatients, doctor/getpatientbyid, createpatient, visits, referral,
+ * preauth, doctor/uploadPatientlab, doctor/patientoverview) were removed on
+ * 2026-08-29 — see CLAUDE.md "Physician surface retired".
+ */
 export default class Routes {
   app: any;
 
@@ -10,16 +15,6 @@ export default class Routes {
   }
 
   appRoutes() {
-    this.app.post(
-      "/api/fetchpatients",
-      verifyDoctorToken,
-      patientApi.getAllPatients
-    );
-    this.app.post(
-      "/api/patients/doctor/getpatientbyid",
-      verifyDoctorToken,
-      patientApi.getPatientById
-    );
     this.app.post(
       "/api/patients/getpatientbyid",
       verifyToken,
@@ -35,13 +30,6 @@ export default class Routes {
       verifyToken,
       patientApi.fetchSubAccounts
     );
-    //create patient for doctor
-    this.app.post(
-      "/api/patients/createpatient",
-      verifyToken,
-      patientApi.createNewPatient
-    );
-    //create patient directly from mobile
     this.app.post(
       "/api/patients/createpatientmobile",
       patientApi.createNewPatientMobile
@@ -57,59 +45,6 @@ export default class Routes {
       patientApi.getPatientSummary
     );
     this.app.post(
-      "/api/createvisit",
-      verifyDoctorToken,
-      patientApi.createVisit
-    );
-    this.app.post("/api/getvisit", verifyToken, patientApi.getVisitbyId);
-    this.app.post(
-      "/api/doctor/getvisit",
-      verifyDoctorToken,
-      patientApi.getVisitbyId
-    );
-    this.app.post(
-      "/api/getpatientvisits",
-      verifyToken,
-      patientApi.getPatientVisits
-    );
-    this.app.put(
-      "/api/updatevisit/:id",
-      verifyDoctorToken,
-      patientApi.updateVisit
-    );
-    this.app.delete(
-      "/api/deletevisit/:id",
-      verifyToken,
-      patientApi.deleteVisit
-    );
-    this.app.post(
-      "/api/getallvisits",
-      verifyDoctorToken,
-      patientApi.getAllVisits
-    );
-
-    // Routes for referral letters
-    this.app.post(
-      "/api/referral",
-      verifyDoctorToken,
-      patientApi.createReferral
-    );
-    this.app.get(
-      "/api/referral/:patientId",
-      verifyToken,
-      patientApi.getReferrals
-    );
-
-    // Routes for pre-auth letters
-    this.app.post("/api/preauth", verifyDoctorToken, patientApi.createPreAuth);
-    this.app.get(
-      "/api/preauth/:patientId",
-      verifyToken,
-      patientApi.getPreAuths
-    );
-
-    //-------------Patient Facing App---------------------//
-    this.app.post(
       "/api/patients/updatePatient",
       verifyToken,
       patientApi.updatePatientById
@@ -124,16 +59,6 @@ export default class Routes {
       "/api/patients/uploadlab",
       verifyToken,
       patientApi.uploadPatientLab
-    );
-    this.app.post(
-      "/api/patients/doctor/uploadPatientlab",
-      verifyDoctorToken,
-      patientApi.uploadPatientLab
-    );
-    this.app.post(
-      "/api/patients/doctor/patientoverview",
-      verifyDoctorToken,
-      patientApi.calculatePatientOverview
     );
     this.app.post(
       "/api/patients/updateInstacartPreferences",
@@ -160,7 +85,6 @@ export default class Routes {
       verifyToken,
       patientApi.deleteLabReport
     );
-    // Patient Insurance Routes
   }
   routesConfig() {
     this.appRoutes();

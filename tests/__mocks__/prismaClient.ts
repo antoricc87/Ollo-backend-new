@@ -12,13 +12,6 @@ const mockPrisma = {
     update: jest.fn(),
     deleteMany: jest.fn(),
   },
-  visit: {
-    create: jest.fn(),
-    update: jest.fn(),
-  },
-  referral: {
-    create: jest.fn(),
-  },
   caloriesTracker: {
     findUnique: jest.fn(),
     create: jest.fn(),
@@ -107,10 +100,6 @@ const mockPrisma = {
   dailyNutrients: {
     create: jest.fn(),
     findFirst: jest.fn(),
-  },
-  healthGoal: {
-    findUnique: jest.fn(),
-    findMany: jest.fn(),
   },
 };
 

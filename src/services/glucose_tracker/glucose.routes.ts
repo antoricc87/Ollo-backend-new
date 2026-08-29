@@ -1,4 +1,4 @@
-import { verifyDoctorToken, verifyToken } from "../../utils/auth_token";
+import { verifyToken } from "../../utils/auth_token";
 import glucoseApi from "./controller/glucose.controller";
 export default class Routes {
   app: any;
@@ -15,11 +15,6 @@ export default class Routes {
     this.app.post(
       "/api/glucose/fetch_daily_tracker",
       verifyToken,
-      glucoseApi.fetchDailyTracker
-    );
-    this.app.post(
-      "/api/glucose/fetch_daily_tracker_doctor",
-      verifyDoctorToken,
       glucoseApi.fetchDailyTracker
     );
     this.app.get(

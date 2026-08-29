@@ -1,4 +1,4 @@
-import { verifyDoctorToken, verifyToken } from "../../utils/auth_token";
+import { verifyToken } from "../../utils/auth_token";
 import bfpApi from "./controller/bfp.controller";
 export default class Routes {
   app: any;
@@ -20,11 +20,6 @@ export default class Routes {
     this.app.post(
       "/api/bfp/fetch_bfp_tracker",
       verifyToken,
-      bfpApi.fetchBFPTracker
-    );
-    this.app.post(
-      "/api/bfp/fetch_bfp_tracker_doctor",
-      verifyDoctorToken,
       bfpApi.fetchBFPTracker
     );
   }

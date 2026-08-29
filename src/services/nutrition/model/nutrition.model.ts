@@ -100,19 +100,9 @@ class NutritionService {
     try {
       const patient = await getPatientById(patientId);
 
-      const healthGoals = await prisma.healthGoal.findMany({
-        where: {
-          patientId,
-          NOT: {
-            status: {
-              in: ["ACHIEVED", "NOT_ACHIEVED"],
-            },
-          },
-        },
-        include: {
-          trackableMetrics: true,
-        },
-      });
+      // Health goals were retired (tables dropped 2026-08-29); the plan
+      // (`services/plan`) carries targets now.
+      const healthGoals: { trackableMetrics: { value: string; targetValue: string }[] }[] = [];
       const systemContent = `You are an advanced dietitian assistant responsible for determining the optimal daily nutrient intake for a patient. Please use the following information:
 
       - Medical Summary: ${patient.patientSummary}

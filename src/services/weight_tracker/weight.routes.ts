@@ -1,4 +1,4 @@
-import { verifyDoctorToken, verifyToken } from "../../utils/auth_token";
+import { verifyToken } from "../../utils/auth_token";
 import weightApi from "./controller/weight.controller";
 export default class Routes {
   app: any;
@@ -19,11 +19,6 @@ export default class Routes {
     this.app.post(
       "/api/weight/fetch_weight_tracker",
       verifyToken,
-      weightApi.fetchWeightTracker
-    );
-    this.app.post(
-      "/api/weight/fetch_weight_tracker_doctor",
-      verifyDoctorToken,
       weightApi.fetchWeightTracker
     );
   }

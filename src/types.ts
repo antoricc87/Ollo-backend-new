@@ -164,64 +164,6 @@ export interface ExtendedRecord {
   patientId: string;
 }
 
-export interface VisitRequest extends Request {
-  body: {
-    fhirPatientId: string;
-    patientSymptoms: JSON;
-    postVisitNote: string;
-  };
-}
-
-export interface CreatePatientRequest extends Request {
-  body: {
-    firstName: string;
-    lastName: string;
-    middleName?: string;
-    dob: string;
-    gender: string;
-    doctorId: string[];
-    email: string;
-    records: {
-      notes: string;
-      allRecords: string;
-      allergies: {
-        name: string;
-        reaction: string;
-        severity: string;
-        date: string;
-      }[];
-      clinicalVitals: {
-        type: string;
-        value: string;
-        unit: string;
-        date: string;
-      }[];
-      conditions: {
-        name: string;
-        severity: string;
-        status: string;
-        date: string;
-      }[];
-      immunizations: { name: string; date: string }[];
-      labResults: {
-        testName: string;
-        result: string;
-        unit: string;
-        date: string;
-      }[];
-      medicationRecords: {
-        medicationName: string;
-        dosage: string;
-        frequency: string;
-        date: string;
-      }[];
-      procedures: { name: string; date: string }[];
-      summary: string;
-    }[];
-    summary: string;
-  };
-}
-
 export type CaloriesTrackerWhereUniqueInput = {
   // id?: string;
   userId: string;
@@ -396,22 +338,6 @@ export type BookingData = {
   duration: number;
   reason: string;
 };
-export type TimeSlot = {
-  start: string;
-  end: string;
-  isAvailable: boolean;
-};
-export type DailyAvailabilities = {
-  day: string;
-  timeSlots: TimeSlot[];
-};
-
-export type WeeklyAvailabilities = {
-  weekStartDate: string;
-  weekEndDate: string;
-  dailyAvailabilities: DailyAvailabilities[];
-};
-
 export interface GlucoseEntry {
   id: string;
   value: number;

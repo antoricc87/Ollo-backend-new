@@ -1,5 +1,6 @@
 import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
+import ClinicianService from "../../clinicians/model/clinicians.model";
 import { defineTool } from "./registry";
 
 export const getCareTeam = defineTool({
@@ -9,21 +10,17 @@ export const getCareTeam = defineTool({
   schema: z.object({}),
   risk: "read",
   async run(ctx) {
-    const patient = await prisma.patient.findUnique({ where: { id: ctx.patientId }, select: { doctorIds: true } });
-    const [doctors, bookings] = await Promise.all([
-      prisma.user.findMany({
-        where: { id: { in: patient?.doctorIds ?? [] } },
-        select: { id: true, firstName: true, lastName: true, specialty: true, clinicName: true },
-      }),
+    const [clinicians, bookings] = await Promise.all([
+      ClinicianService.careTeamOf(ctx.patientId),
       prisma.booking.findMany({
         where: { patientId: ctx.patientId, status: { in: ["PENDING", "CONFIRMED"] } },
         orderBy: { appointmentDate: "asc" },
         take: 10,
-        select: { id: true, doctorName: true, appointmentDate: true, durationMinutes: true, reason: true, status: true },
+        select: { id: true, clinicianName: true, appointmentDate: true, durationMinutes: true, reason: true, status: true },
       }),
     ]);
     const result = {
-      doctors: doctors.map((d) => ({ id: d.id, name: `${d.firstName} ${d.lastName}`, specialty: d.specialty, clinic: d.clinicName })),
+      clinicians: clinicians.map((c) => ({ id: c.id, name: `${c.firstName} ${c.lastName}`, specialty: c.specialty, clinic: c.clinicName })),
       appointments: bookings,
     };
     return { result, cards: [{ type: "care_team", title: "Care team", data: result }] };

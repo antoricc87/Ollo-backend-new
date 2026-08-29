@@ -52,31 +52,6 @@ const generateSubAccountEmail = async (
 
   return subAccountEmail;
 };
-//create patient
-export const createPatient = async (patientData: any) => {
-  try {
-    let updatedPatientData;
-    if (patientData.password) {
-      const saltRounds = 10;
-      const salt = await bcrypt.genSalt(saltRounds);
-      const hashedPassword = await bcrypt.hash(patientData.password, salt);
-      updatedPatientData = {
-        ...patientData,
-        password: hashedPassword,
-      };
-    } else {
-      updatedPatientData = {
-        ...patientData,
-      };
-    }
-    const patient = await prisma.patient.create({ data: updatedPatientData });
-    if (patient) return patient;
-  } catch (error: any) {
-    console.error("Something went wrong creating the patient", error);
-    throw error;
-  }
-};
-
 // Create sub-account
 export const createSubAccount = async (
   subAccountData: any,
@@ -495,27 +470,6 @@ export const patientLogin = async (email: string, password: string) => {
     throw new Error(error.message);
   }
 };
-//fetch all patients
-export const fetchAllPatients = async (where: object) => {
-  try {
-    const patients = await prisma.patient.findMany({
-      where: where,
-      include: {
-        insurance: true,
-        healthCheckUp: {
-          take: 1,
-          orderBy: {
-            createdAt: "desc",
-          },
-        },
-      },
-    });
-    if (patients) return patients;
-  } catch (error: any) {
-    console.error("Something went  wrong fetching the patients");
-    throw error;
-  }
-};
 //update patient password
 export const updatePatientPassword = async (id: string, data: object) => {
   try {
@@ -591,12 +545,6 @@ export const getPatientById = async (id: string) => {
           },
         },
         insurance: true,
-        healthCheckUp: {
-          take: 1,
-          orderBy: {
-            createdAt: "desc",
-          },
-        },
         instacartPreferences: true,
         dexcomToken: true,
       },
@@ -624,79 +572,6 @@ export const getPatientById = async (id: string) => {
   } catch (error: any) {
     console.error("Error details:", error); // Log full error details for more context
     throw error;
-  }
-};
-
-//create visit
-export const createVisit = async (data: any) => {
-  try {
-    const visit = await prisma.visit.create({
-      data: data,
-    });
-    if (visit) return visit;
-  } catch (error: unknown) {
-    console.error("Error creating the visit", error);
-    throw error;
-  }
-};
-//update visit
-export const updateVisit = async (id: string, data: object) => {
-  try {
-    return await prisma.visit.update({
-      where: { id: id },
-      data: data,
-    });
-  } catch (error: any) {
-    console.error("Something went wrong updating the visit");
-    return error;
-  }
-};
-
-// Create a new referral
-export const createReferral = async (data: Prisma.ReferralCreateInput) => {
-  try {
-    return await prisma.referral.create({
-      data: data,
-    });
-  } catch (error: any) {
-    console.error("Something went wrong creating the referral");
-    return error;
-  }
-};
-
-// Create a new pre-auth
-export const createPreAuth = async (data: Prisma.PreAuthCreateInput) => {
-  try {
-    return await prisma.preAuth.create({
-      data: data,
-    });
-  } catch (error: any) {
-    console.error("Something went wrong creating the pre-auth");
-    return error;
-  }
-};
-
-// Get all referrals for a patient
-export const getReferrals = async (patientId: string) => {
-  try {
-    return await prisma.referral.findMany({
-      where: { patientId: patientId },
-    });
-  } catch (error: any) {
-    console.error("Something went wrong fetching referrals");
-    return error;
-  }
-};
-
-// Get all pre-auths for a patient
-export const getPreAuths = async (patientId: string) => {
-  try {
-    return await prisma.preAuth.findMany({
-      where: { patientId: patientId },
-    });
-  } catch (error: any) {
-    console.error("Something went wrong fetching pre-auths");
-    return error;
   }
 };
 
@@ -1244,149 +1119,6 @@ export const updatePatientSummarySection = async (
   } catch (error: any) {
     console.error("Error updating patient summary section", error);
     throw new Error("Error updating patient summary section");
-  }
-};
-
-export const generateRisksOverviewDatasets = async (patientId: string) => {
-  try {
-    const patient = await getPatientById(patientId);
-    const { patientSummary } = patient;
-    if (!patientSummary) {
-      throw new Error("Patient summary not found");
-    }
-    // Calculate age from DOB
-    const age = calculateAgeFromDob(patient.dob);
-    // Validate vitals data
-    if (!patientSummary.vitals?.height || !patientSummary.vitals?.weight) {
-      throw new Error(
-        "Missing vital information (e.g., blood pressure, height, or weight)."
-      );
-    }
-
-    const systolicBp = patientSummary.vitals.sBp || 120;
-    const diastolicBp = patientSummary.vitals.dBp || 80;
-    const height = patientSummary.vitals.height;
-    const weight = patientSummary.vitals.weight;
-    const gender =
-      patient.gender === "male"
-        ? "M"
-        : patient.gender === "female"
-        ? "F"
-        : null;
-
-    // Merged latest-per-biomarker view across every report, not just the newest upload.
-    const { biomarkers, diabetesRiskLabs, cvRiskLabs } = mapLabResults({
-      labResults: currentLabEntries(patientSummary.labResults),
-    });
-
-    const missingDiabetesLabs = Object.keys(diabetesRiskLabs).filter(
-      (key) => diabetesRiskLabs[key] === undefined
-    );
-    const missingCVLabs = Object.keys(cvRiskLabs).filter(
-      (key) => cvRiskLabs[key] === undefined
-    );
-    const missingBiomarkers = Object.keys(biomarkers).filter(
-      (key) => biomarkers[key] === undefined
-    );
-
-    if (
-      missingDiabetesLabs.length > 0 ||
-      missingCVLabs.length > 0 ||
-      missingBiomarkers.length > 0
-    ) {
-      throw new Error(
-        `Missing lab values: ${
-          missingDiabetesLabs.length
-            ? `Diabetes Risk Labs - ${missingDiabetesLabs.join(", ")}`
-            : ""
-        } ${
-          missingCVLabs.length
-            ? `CV Risk Labs - ${missingCVLabs.join(", ")}`
-            : ""
-        } ${
-          missingBiomarkers.length
-            ? `Biomarkers - ${missingBiomarkers.join(", ")}`
-            : ""
-        }`.trim()
-      );
-    }
-
-    if (missingBiomarkers.length > 0) {
-      throw new Error(`Missing biomarker(s): ${missingBiomarkers.join(", ")}.`);
-    }
-
-    // Determine diabetic status based on conditions
-    const diabetic = patientSummary.conditions.some((condition) =>
-      condition.condition.name.toLowerCase().includes("diabetes")
-    );
-    const parentalDiabetes =
-      patientSummary.familyHistory.historyOfChronicConditions.includes(
-        "diabetes"
-      );
-    const smoker = patientSummary.vitals.isSmoker;
-    const hypertensionTreatment = false;
-    const diabeteData: DiabeteRiskData = {
-      age,
-      gender,
-      systolicBp,
-      diastolicBp,
-      hypertensionTreatment,
-      height,
-      weight,
-      hdl: diabetesRiskLabs.hdl,
-      triglycerides: diabetesRiskLabs.triglycerides,
-      fastingGlucose: diabetesRiskLabs.fastingGlucose,
-      parentalDiabetes,
-    };
-    const cvRiskData: CVRiskData = {
-      gender,
-      age,
-      sbp: systolicBp,
-      tcl:
-        cvRiskLabs.tcl ||
-        cvRiskLabs.ldl + diabetesRiskLabs.hdl + cvRiskLabs.triglycerides / 5,
-      hdl: diabetesRiskLabs.hdl,
-      smoker,
-      diabetic,
-      treatmentStatus: hypertensionTreatment ? "treatment" : "noTreatment",
-    };
-    const biologicalAgeData: BiologicalAgeData = {
-      age,
-      albumin: biomarkers.albumin,
-      creatinine: biomarkers.creatinine,
-      glucose: biomarkers.glucose,
-      crp: biomarkers.crp || 1,
-      rdw: biomarkers.rdw,
-      wbc: biomarkers.wbc,
-      mcv: biomarkers.mcv,
-      lympocyte: biomarkers.lympocyte,
-      alkalinePhosphatase: biomarkers.alkalinePhosphatase,
-    };
-    return {
-      biologicalAgeData,
-      diabeteData,
-      cvRiskData,
-    };
-  } catch (error: unknown) {
-    console.error("Something went wrong creating datasets", error);
-    throw error;
-  }
-};
-
-export const calculatePatientOverview = async (
-  diabeteData: DiabeteRiskData,
-  cvRiskData: CVRiskData,
-  biologicalAgeData: BiologicalAgeData
-) => {
-  try {
-    const diabetesRisk = calculateDiabetesRisk(diabeteData);
-    const cvRisk = calculateCVRisk(cvRiskData);
-    const biologicalAge = calculatePhenotypicAge(biologicalAgeData);
-
-    return { diabetesRisk, cvRisk, biologicalAge };
-  } catch (error: unknown) {
-    console.error("Error generating patient overview", error);
-    throw error;
   }
 };
 

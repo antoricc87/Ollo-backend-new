@@ -2,7 +2,7 @@ import moment from "moment-timezone";
 import prisma from "../../src/utility/prismaClient";
 import PlanService from "../../src/services/plan/model/plan.model";
 import CaloriesService from "../../src/services/calories_tracker/model/calories.model";
-import { seedDoctorFor, unlinkDoctor } from "../../scripts/seed-dev-doctor";
+import { seedClinicianFor, unlinkClinician } from "../../scripts/seed-dev-clinician";
 
 /**
  * A self-contained eval patient with known data, so scenario assertions can
@@ -104,7 +104,7 @@ export async function createFixture(): Promise<Fixture> {
     EVAL_TZ
   );
   const todayCalories = Array.isArray(lunch) ? lunch.reduce((a: number, e: any) => a + (e.calories ?? 0), 0) : 520;
-  await seedDoctorFor(EVAL_EMAIL); // Dr. Giulia Rossi on the care team
+  await seedClinicianFor(EVAL_EMAIL); // Dr. Giulia Rossi (Clinician + CareTeamMember)
   return { patientId: patient.id, todayCalories };
 }
 
@@ -113,7 +113,7 @@ export async function destroyFixture() {
   if (!p) return;
   // Tracker tables hang off userId without FKs — clear them explicitly.
   const uid = p.id;
-  await unlinkDoctor(uid);
+  await unlinkClinician(uid);
   await prisma.foodEntry.deleteMany({ where: { dailyFood: { userId: uid } } });
   await prisma.dailyFood.deleteMany({ where: { userId: uid } });
   await prisma.weeklyFood.deleteMany({ where: { userId: uid } }).catch(() => null);

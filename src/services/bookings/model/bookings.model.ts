@@ -1,353 +1,106 @@
 import { Prisma } from "@prisma/client";
-import {
-  BookingData,
-  DailyAvailabilities,
-  WeeklyAvailabilities,
-} from "../../../types";
-import prisma from "../../../utility/prismaClient";
-import { getCurrentWeekRangeSundSat } from "../../../utils/formatDate";
 import moment from "moment";
+import prisma from "../../../utility/prismaClient";
 import { getPatientById } from "../../patient/model/patient.model";
+import ClinicianService from "../../clinicians/model/clinicians.model";
 import sendEmail from "../../../utils/emailService";
 import {
-  bodyToDoctor,
+  bodyToClinician,
   bodyToOllo,
   bodyToPatient,
-  textBodyToDoctor,
+  textBodyToClinician,
   textBodyToOllo,
 } from "../../../utility/emails/emails";
 
+const clinicianSelect = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  profileImageUrl: true,
+  specialty: true,
+  clinicName: true,
+  addressLine1: true,
+  addressLine2: true,
+  city: true,
+  zipCode: true,
+  email: true,
+} as const;
+
+const addressOf = (c: { addressLine1?: string | null; addressLine2?: string | null; city?: string | null; zipCode?: string | null } | null) =>
+  c ? [c.addressLine1, c.addressLine2, c.city, c.zipCode].filter(Boolean).join(", ") : "";
+
 export class BookingService {
+  /**
+   * A booking is the patient's appointment REQUEST (PENDING until confirmed).
+   * Booking a clinician also adds them to the patient's care team
+   * (`CareTeamMember`, source BOOKING) — that grant is what the care-team
+   * screen and Ollie's care tools read.
+   */
   async createBooking(bookingData: any) {
-    const { slotId, ...filterdBookingData } = bookingData;
-    try {
-      const booking = await prisma.booking.create({
-        data: filterdBookingData,
-      });
-      if (booking) {
-        if (slotId) {
-          await prisma.timeSlot.update({
-            where: { id: slotId },
-            data: { isAvailable: false, isBooked: true },
-          });
-        }
-        const patient = await prisma.patient.findUnique({
-          where: { id: bookingData.patientId },
-          select: { doctorIds: true, email: true },
-        });
-
-        if (patient) {
-          const updatedDoctorIds = Array.from(
-            new Set([...patient.doctorIds, bookingData.doctorId])
-          );
-
-          await prisma.patient.update({
-            where: { id: bookingData.patientId },
-            data: {
-              doctorIds: updatedDoctorIds,
-            },
-          });
-        }
-        const doctor = await prisma.user.findUnique({
-          where: { id: bookingData.doctorId },
-        });
-        const olloBody = bodyToOllo(bookingData);
-        const olloBodyText = textBodyToOllo(bookingData);
-        const bodyPatient = bodyToPatient(bookingData);
-        const bodyDoctor = bodyToDoctor(bookingData);
-        const bodyDoctorText = textBodyToDoctor(bookingData);
-        await sendEmail(
-          "info@ollo-health.com",
-          "New Booking",
-          olloBody,
-          olloBodyText
-        );
-        await sendEmail(patient?.email, "New Appointment Request", bodyPatient);
-        await sendEmail(
-          doctor.email,
-          "New Appointment Request",
-          bodyDoctor,
-          bodyDoctorText
-        );
-        return booking;
-      }
-    } catch (error: unknown) {
-      console.error("Error creating the booking", error);
-      throw error;
+    const { slotId, ...data } = bookingData;
+    const clinician = await ClinicianService.getById(data.clinicianId);
+    if (!clinician || !clinician.isActive) throw new Error("clinician not found");
+    if (!data.clinicianName) data.clinicianName = `${clinician.firstName} ${clinician.lastName}`;
+    const booking = await prisma.booking.create({ data });
+    if (slotId) {
+      await prisma.timeSlot
+        .update({ where: { id: slotId }, data: { isAvailable: false, isBooked: true } })
+        .catch((e) => console.warn("slot update failed", e?.message));
     }
+    await ClinicianService.addToCareTeam(data.patientId, clinician.id, "BOOKING");
+
+    // Notifications are best-effort: a mail failure must not hide a saved booking.
+    try {
+      const patient = await prisma.patient.findUnique({ where: { id: data.patientId }, select: { email: true } });
+      await sendEmail("info@ollo-health.com", "New Booking", bodyToOllo(data), textBodyToOllo(data));
+      if (patient?.email) await sendEmail(patient.email, "New Appointment Request", bodyToPatient(data));
+      if (clinician.email) await sendEmail(clinician.email, "New Appointment Request", bodyToClinician(data), textBodyToClinician(data));
+    } catch (e: any) {
+      console.warn("booking emails failed", e?.message);
+    }
+    return booking;
   }
 
   async deleteBooking(bookingId: string) {
-    try {
-      const deletedBooking = await prisma.booking.delete({
-        where: { id: bookingId },
-      });
-      if (deletedBooking) return deletedBooking;
-    } catch (error: unknown) {
-      console.error("Error deleting the booking", error);
-      throw error;
-    }
+    return prisma.booking.delete({ where: { id: bookingId } });
   }
 
   async getBookings(whereClause: Prisma.BookingWhereInput) {
-    try {
-      const bookings = await prisma.booking.findMany({
-        where: whereClause,
-        orderBy: {
-          appointmentDate: "asc",
-        },
-      });
-      if (bookings) {
-        const bookingsWithAddress = await Promise.all(
-          bookings.map(async (booking) => {
-            const doctor = await prisma.user.findUnique({
-              where: { id: booking.doctorId },
-            });
-            return {
-              ...booking,
-              address: `${doctor.addressLine1}, ${doctor.addressLine2}, ${doctor.city}, ${doctor.zipCode}`,
-            };
-          })
-        );
-        return bookingsWithAddress;
-      }
-    } catch (error: unknown) {
-      console.error("Error fetching bookings", error);
-      throw error;
-    }
+    const bookings = await prisma.booking.findMany({
+      where: whereClause,
+      orderBy: { appointmentDate: "asc" },
+      include: { clinician: { select: clinicianSelect } },
+    });
+    return bookings.map(({ clinician, ...b }) => ({ ...b, clinician, address: addressOf(clinician) }));
   }
-  async updateBooking(
-    bookingId: string,
-    bookingData: Prisma.BookingUpdateInput
-  ) {
-    try {
-      const updatedBooking = await prisma.booking.update({
-        where: { id: bookingId },
-        data: bookingData,
-      });
-      if (updatedBooking) return updatedBooking;
-    } catch (error: unknown) {
-      console.error("Error updating the booking", error);
-      throw error;
-    }
+
+  async updateBooking(bookingId: string, bookingData: Prisma.BookingUpdateInput) {
+    return prisma.booking.update({ where: { id: bookingId }, data: bookingData });
   }
 
   async getBookingById(bookingId: string) {
-    try {
-      const booking = await prisma.booking.findUnique({
-        where: { id: bookingId },
-        include: {
-          doctor: {
-            select: {
-              firstName: true,
-              lastName: true,
-              profileImageUrl: true,
-              clinicName: true,
-              addressLine1: true,
-              city: true,
-              zipCode: true,
-            },
-          },
-        },
-      });
-
-      if (!booking) {
-        throw new Error("Booking not found!");
-      }
-      return booking;
-    } catch (error: unknown) {
-      console.error("Error fetching the booking", error);
-      throw error;
-    }
+    const booking = await prisma.booking.findUnique({
+      where: { id: bookingId },
+      include: { clinician: { select: clinicianSelect } },
+    });
+    if (!booking) throw new Error("Booking not found!");
+    return booking;
   }
 
   async getLatestActiveBooking(patientId: string) {
-    try {
-      const patient = await getPatientById(patientId);
-      const booking = await prisma.booking.findFirst({
-        where: {
-          patientId: patientId,
-          appointmentDate: {
-            gte: moment()
-              .tz(patient.timeZone)
-              .format("MM-DD-YYYYTHH:mm:ss.SSS[+00:00]"),
-          },
-          status: { notIn: ["CANCELED"] },
+    const patient = await getPatientById(patientId);
+    const booking = await prisma.booking.findFirst({
+      where: {
+        patientId,
+        appointmentDate: {
+          gte: moment().tz(patient.timeZone).format("MM-DD-YYYYTHH:mm:ss.SSS[+00:00]"),
         },
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
-      if (booking) {
-        const bookingDetails = await this.getBookingById(booking.id);
-        if (bookingDetails) return bookingDetails;
-      }
-      return -1;
-    } catch (error: unknown) {
-      console.error("Error fetching latest booking", error);
-      throw error;
-    }
-  }
-
-  // -------------- Doctor Availabilities----------------- //
-  async createWeeklyAvailability(doctorId: string, start: string, end: string) {
-    try {
-      const existingWeeklyAvailability =
-        await prisma.weeklyAvailability.findFirst({
-          where: { doctorId: doctorId, weekStartDate: start, weekEndDate: end },
-        });
-      if (existingWeeklyAvailability) {
-        return existingWeeklyAvailability;
-      }
-      return await prisma.weeklyAvailability.create({
-        data: { doctorId: doctorId, weekStartDate: start, weekEndDate: end },
-      });
-    } catch (error: unknown) {
-      console.error("Error creating weekly availability", error);
-      throw error;
-    }
-  }
-  async createDailyAvailability(weeklyAvailabilityId: string, dayDate: string) {
-    try {
-      const existingDailyAvailability =
-        await prisma.dailyAvailability.findFirst({
-          where: { weekId: weeklyAvailabilityId, date: dayDate },
-        });
-      if (existingDailyAvailability) {
-        return existingDailyAvailability;
-      }
-      return await prisma.dailyAvailability.create({
-        data: { weekId: weeklyAvailabilityId, date: dayDate },
-      });
-    } catch (error: unknown) {
-      console.error("Error creating weekly availability", error);
-      throw error;
-    }
-  }
-  async createTimeSlot(
-    start: string,
-    end: string,
-    dailyAvailabilityId: string,
-    isAvailable: boolean
-  ) {
-    try {
-      const existingSlot = await prisma.timeSlot.findFirst({
-        where: {
-          dailyAvailabilityId: dailyAvailabilityId,
-          startTime: start,
-          endTime: end,
-        },
-      });
-      if (existingSlot) {
-        if (existingSlot.isAvailable === isAvailable) {
-          return existingSlot;
-        } else {
-          return await prisma.timeSlot.update({
-            where: { id: existingSlot.id },
-            data: { isAvailable: isAvailable },
-          });
-        }
-      }
-
-      return await prisma.timeSlot.create({
-        data: {
-          startTime: start,
-          endTime: end,
-          dailyAvailabilityId: dailyAvailabilityId,
-          isAvailable,
-        },
-      });
-    } catch (error: unknown) {
-      console.error("Error creating timeslot", error);
-      throw error;
-    }
-  }
-  async updatyeWeeklyAvailability(
-    doctorId: string,
-    availabilities: WeeklyAvailabilities[]
-  ) {
-    if (!doctorId || !availabilities?.length) {
-      throw new Error("Invalid input data for weekly availability");
-    }
-    try {
-      const results = [];
-      for (const week of availabilities) {
-        const weeklyAvailability = await this.createWeeklyAvailability(
-          doctorId,
-          week.weekStartDate,
-          week.weekEndDate
-        );
-        const dailyResults = [];
-        for (const day of week.dailyAvailabilities) {
-          const dailyAvailability = await this.createDailyAvailability(
-            weeklyAvailability.id,
-            day.day
-          );
-          await Promise.all(
-            day.timeSlots.map((slot) =>
-              this.createTimeSlot(
-                slot.start,
-                slot.end,
-                dailyAvailability.id,
-                slot.isAvailable
-              )
-            )
-          );
-          dailyResults.push({
-            day: day.day,
-            timeSlotsCount: day.timeSlots.length,
-          });
-        }
-        results.push({
-          weeklyAvailabilityId: weeklyAvailability.id,
-          weekStartDate: week.weekStartDate,
-          weekEndDate: week.weekEndDate,
-          dailyAvailabilities: dailyResults,
-        });
-        //   doctorId,
-        //   weekStartDate,
-        //   weekEndDate
-        // );
-        // for (const day of availabilities) {
-        //   const dailyAvailability = await this.createDailyAvailability(
-        //     weeklyAvailability.id,
-        //     day.day
-        //   );
-        //   await Promise.all(
-        //     day.timeSlots.map((slot) =>
-        //       this.createTimeSlot(slot.start, slot.end, dailyAvailability.id)
-        //     )
-        //   );
-      }
-      return {
-        results,
-      };
-    } catch (error: unknown) {
-      console.error("Error creating availabilities", error);
-      throw error;
-    }
-  }
-  async getDoctorAvailability(doctorId: string) {
-    try {
-      const todayDate = moment().format("MM-DD-YYYY");
-      const availabilities = await prisma.weeklyAvailability.findMany({
-        where: { doctorId: doctorId, weekEndDate: { gte: todayDate } },
-        orderBy: {
-          weekEndDate: "asc",
-        },
-        include: {
-          days: {
-            include: {
-              slots: true,
-            },
-          },
-        },
-      });
-      if (availabilities) return availabilities;
-    } catch (error: unknown) {
-      console.error("Error fetching doctor availabilities", error);
-      throw error;
-    }
+        status: { notIn: ["CANCELED"] },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!booking) return -1;
+    return this.getBookingById(booking.id);
   }
 }
 

@@ -1,6 +1,6 @@
 # Ollo Health — Backend (Express + Prisma + PostgreSQL)
 
-Node/TypeScript, Express 4, ~183 endpoints across 27 feature modules under
+Node/TypeScript, Express 4, ~110 patient-token endpoints across 21 feature modules under
 `src/services/<domain>/` (routes → controller → model). Prisma 6 on
 **PostgreSQL** (migrated from MongoDB Aug 2026 — original Mongo schema kept at
 `prisma/schema.prisma.mongo.bak`). BullMQ + Redis for jobs. OpenAI SDK
@@ -18,14 +18,14 @@ analysis and lab extraction. Mobile app lives in `../healtcare-mobile-app-main`.
   `npx prisma db push` (MongoDB-style, no migrations dir), restart server.
 - `src/config/firebaseConfig.json` is a PLACEHOLDER (real service account not
   committed); `firebaseAdmin.ts` fails soft — push notifications disabled.
-- Full `tsc` has pre-existing errors (langchain TS2589 depth, dead
-  `src/middleware/auth.ts`) — runtime uses transpile-only, don't block on them.
+- Full `tsc` has ~11 pre-existing errors (lab_extraction `unknown` narrowing,
+  @napi-rs/canvas Float16Array) — runtime uses transpile-only, don't block on them.
 
 ## Health Plan v1 (Aug 2026) — `src/services/plan/`
 
 Goal → pillar targets (SLEEP/EXERCISE/NUTRITION) + nutrition watch-outs.
-Models `HealthPlan`, `PlanTarget`, `PlanWatchOut` (legacy HealthGoal/
-TrackableMetric tables untouched, still used by the doctor portal).
+Models `HealthPlan`, `PlanTarget`, `PlanWatchOut` (the legacy HealthGoal/
+TrackableMetric tables were dropped on 2026-08-29).
 Endpoints (patient token; identity ONLY from `request.user.id`):
 GET `/api/plan/active`, POST `/api/plan/propose` (deterministic, no LLM —
 `model/plan.proposal.ts`: Mifflin-St Jeor TDEE from vitals, deficit + full
@@ -206,9 +206,10 @@ Eval suite (2026-08-25) — `npm run eval:agent` (`scripts/agent-eval.ts`):
   ("I can't say if you have prediabetes" is compliant — use lookbehinds).
 - Found by the suite: `getPatientById` crashed on patients with no
   `UserToken` row (`token.token`); now null-safe.
-- The fixture also links a DOCTOR (`scripts/seed-dev-doctor.ts`,
-  `dev-doctor@ollo.test`, "Dr. Giulia Rossi"; idempotent, `seedDoctorFor(email)`
-  / `unlinkDoctor(patientId)`), so `message_care_team` and `book_appointment`
+- The fixture also links a CLINICIAN (`scripts/seed-dev-clinician.ts`,
+  `dev-clinician@ollo.test`, "Dr. Giulia Rossi" + a week of 09:00–12:00 slots;
+  idempotent, `seedClinicianFor(email)` / `unlinkClinician(patientId)`), so
+  `message_care_team` and `book_appointment`
   scenarios run (23 scenarios total). Run the seed against your own account to
   try the care-team tools in the app.
 
@@ -345,7 +346,7 @@ all-or-nothing throw; BP = latest `BloodPressureEntry` → profile sBp/dBp →
 antihypertensives on the medication list. `GET /api/labs/risk`. The
 calculators themselves are unchanged in `utils/risks_calculation_bio_age/`
 (the diabetes one expects pounds/inches — the service converts). The legacy
-`POST /patients/patientoverview` still exists for the parked chain.
+`POST /patients/doctor/patientoverview` was deleted with the physician surface.
 
 ## Labs — merged "current picture" (Aug 2026)
 
@@ -450,8 +451,8 @@ decision.
   safe without a rewrite. express-session removed (literal secret, unused).
   The unauthenticated voicerecording / sendNotification /
   updatePatientPassword / parsePDF / transcribe routes were deleted on
-  2026-08-27. Doctor and admin JWTs still sign with `9999y` (physician app
-  parked). `uploads/` is gitignored but ~90 MB of old patient audio sits on
+  2026-08-27. Doctor/admin JWTs are GONE (physician surface retired
+  2026-08-29 — patient is the only identity). `uploads/` is gitignored but ~90 MB of old patient audio sits on
   disk locally.
 - `verifyToken` (src/utils/auth_token.ts) 401s on malformed token payloads
   (expects `{ user: { id } }`).
@@ -485,3 +486,69 @@ matches the nutrition reference); 30 days of DailyExercise minutes.
 `scripts/seed-lab-history.ts` adds two older partial reports (lipids+vit D
 Jun 2025 → stale, thyroid/CRP/ferritin Jan 2026 → aging) so the merged labs
 view shows history and all three freshness states. Idempotent.
+
+## Physician surface retired (Aug 29 2026) — Phase 1 of the backend split
+
+Ruling (user, 2026-08-29): the patient app and a future physician app will
+NOT share a backend. The physician app (no code existed anywhere; only CORS
+entries and localhost links) is to be rebuilt later as a SEPARATE clinician
+service with its own DB and identity, consuming this backend through a
+consent-scoped, FHIR-shaped API + events (design notes in the session memory
+"Ollo backend split"). This backend is now single-identity: **patient**.
+
+Deleted: `services/users|admin|fhir|reports|healthgoal|metric|doctors`,
+`middleware/auth.ts`, `utility/Patient Summaries`, `recordSummaryFromCCDA`,
+the sample CCDA XML, `workers/jobSchedulers/reports.scheduler.ts`, the
+messaging routes + controller, every `verifyDoctorToken`/`verifyAdminToken`
+route (doctor variants of all tracker fetches, doctor lab upload,
+`fetchpatients`, `doctor/getpatientbyid`, `createpatient`, visits, referral,
+pre-auth, `doctor/patientoverview`, availabilities, doctor password reset,
+the 5 doctor openAI endpoints — prompts archived in
+`docs/clinician-side-prompts.md`). `auth_token.ts` exports only
+`signJWT/verifyToken/getUserToken/updateUserToken`; `JWT_SECRET_DOCTOR` /
+`JWT_SECRET_ADMIN` removed from `.env` (delete them on Railway too).
+Schema (destructive — 27 models dropped: Admin, User, Role, Visit, Referral,
+PreAuth, ResetPasswordDoctor, AuthorizedPhysicians, RecordingSession/Chunk,
+HealthGoal, TrackableMetric, MetricEntry + enums, WeeklyReport + the four
+score tables, HealthGoalProgress, HealthCheckUp, UserGeneratedData, Alert,
+UserAlert, LabReport):
+- **`Clinician`** replaces `User`: a DIRECTORY record (name, specialty,
+  clinic, address, `email?`, `externalId?` reserved for the clinician
+  service, `isActive`) — no password, no role, no login.
+- **`CareTeamMember`** replaces `Patient.doctorIds`: `{patientId,
+  clinicianId, source BOOKING|MANUAL|SEED, addedAt, revokedAt?}`,
+  unique per pair. This IS the consent grant a clinician service will be
+  scoped by. `BookingService.createBooking` upserts one (source BOOKING).
+- `Booking.doctorId/doctorName/doctor` → `clinicianId/clinicianName/
+  clinician`; `Chat.userId/user` → `clinicianId/clinician` (drafts dropped);
+  `MessageSenderType.DOCTOR` → `CLINICIAN`; `WeeklyAvailability.doctorId` →
+  `clinicianId` (availability stays as PUBLISHED data on the clinician —
+  seeded in dev, later pushed by the clinician service; no write route).
+- `services/clinicians/`: `GET /api/clinicians/directory` (active clinicians
+  + upcoming availability weeks/days/slots — the ScheduleModal shape),
+  `GET /api/clinicians/care-team`, `POST /api/clinicians/care-team
+  {clinicianId}`, `DELETE /api/clinicians/care-team/:clinicianId` (sets
+  `revokedAt`). `ClinicianService.careTeamOf()` feeds Ollie's `get_care_team`
+  / `message_care_team` / `book_appointment` (tool params are now
+  `clinicianId`; card data `clinicians[]` / `clinicianName`).
+- `MessagingService` keeps `createChat/sendMessage/getChatById/
+  getPatientChats` for Ollie; no HTTP routes until the clinician service
+  exists to answer.
+- Boot: `npm start` runs `scripts/db-push.js` — `prisma db push` that adds
+  `--accept-data-loss` ONLY when `PRISMA_ACCEPT_DATA_LOSS=true`. **Railway
+  needs that variable set for the ONE deploy that applies this change, then
+  removed.** Dev data lost by the push: the seeded doctor, bookings, chats
+  (re-seed with `scripts/seed-dev-clinician.ts <email>`).
+- `POST /bookings/get_bookings` now whitelists `patientId|status|clinicianId`
+  from the body (verifyToken injects `userId`, which Prisma rejected — the
+  app's bookings list had 500'd since the Aug 28 ownership guard).
+- Body-parser bypass for the lab upload now compares lower-case (the app
+  posts `/patients/uploadLab`; the old check was case-sensitive).
+- Mobile: `hooks/bookings/useBookingsHook.ts` → `/clinicians/directory` +
+  `/clinicians/care-team`; `Booking.clinicianId/clinicianName/clinician`;
+  ScheduleModal posts `clinicianId/clinicianName`; OllieCards read
+  `clinicians[]` / `clinicianName`. `DoctorData` keeps its name (UI type).
+- Pre-existing test failures untouched: `tests/models/patient.model.test.ts`
+  (`deletePatientById` mock has no sub-accounts array, `createPatientMobile`
+  whitelist) and `nutrition.model.test.ts` (mock missing FoodEntry fields) —
+  both fail on functions this change did not touch.

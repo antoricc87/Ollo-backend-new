@@ -18,6 +18,7 @@ import BFPService from "../../bodyFatPercentage/model/bfp.model";
 import BloodPressureService from "../../bp_tracker/model/bloodpressure.model";
 import GlucoseService from "../../glucose_tracker/model/glucose.model";
 import MessagingService from "../../messaging/model/messaging.model";
+import ClinicianService from "../../clinicians/model/clinicians.model";
 import BookingService from "../../bookings/model/bookings.model";
 import { dayString, defineTool, subjectField } from "./registry";
 
@@ -228,12 +229,9 @@ export const logVital = defineTool({
 /* --------------------------- message_care_team --------------------------- */
 
 const careTeamOf = async (patientId: string) => {
-  const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { doctorIds: true, firstName: true, lastName: true } });
-  const doctors = await prisma.user.findMany({
-    where: { id: { in: patient?.doctorIds ?? [] } },
-    select: { id: true, firstName: true, lastName: true, specialty: true },
-  });
-  return { patient, doctors };
+  const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { firstName: true, lastName: true } });
+  const clinicians = await ClinicianService.careTeamOf(patientId);
+  return { patient, clinicians: clinicians.map((c) => ({ id: c.id, firstName: c.firstName, lastName: c.lastName, specialty: c.specialty })) };
 };
 
 export const messageCareTeam = defineTool({
@@ -241,26 +239,26 @@ export const messageCareTeam = defineTool({
   description:
     "Send a message from the user to one of their clinicians on Ollo (e.g. share flagged labs, ask a medication question you cannot answer, report a symptom pattern). Draft the message in the user's voice with the relevant data; they confirm before it is sent. If the user has no care team yet, the tool says so.",
   schema: z.object({
-    doctorId: z.string().optional().describe("From get_care_team. Omit if the user has exactly one clinician."),
+    clinicianId: z.string().optional().describe("From get_care_team. Omit if the user has exactly one clinician."),
     subject: z.string().min(3).max(120),
     body: z.string().min(10).max(2000).describe("The message, first person, plain text, with the data points"),
   }),
   risk: "write",
   async run(ctx, input) {
-    const { doctors } = await careTeamOf(ctx.patientId);
-    if (!doctors.length) return { result: { error: "no clinician linked to this account yet — the user can add one from the Care Team screen" } };
-    const doctor = input.doctorId ? doctors.find((d) => d.id === input.doctorId) : doctors.length === 1 ? doctors[0] : null;
-    if (!doctor) return { result: { error: "specify doctorId", doctors: doctors.map((d) => ({ id: d.id, name: `${d.firstName} ${d.lastName}`, specialty: d.specialty })) } };
-    const preview = { doctorId: doctor.id, doctorName: `${doctor.firstName} ${doctor.lastName}`, subject: input.subject, body: input.body };
-    return { result: { previewOf: preview }, proposal: { title: `Message Dr. ${doctor.lastName}`, summary: `"${input.subject}" to Dr. ${doctor.lastName}`, preview } };
+    const { clinicians } = await careTeamOf(ctx.patientId);
+    if (!clinicians.length) return { result: { error: "no clinician linked to this account yet — the user can add one from the Care Team screen" } };
+    const clinician = input.clinicianId ? clinicians.find((d) => d.id === input.clinicianId) : clinicians.length === 1 ? clinicians[0] : null;
+    if (!clinician) return { result: { error: "specify clinicianId", clinicians: clinicians.map((d) => ({ id: d.id, name: `${d.firstName} ${d.lastName}`, specialty: d.specialty })) } };
+    const preview = { clinicianId: clinician.id, clinicianName: `${clinician.firstName} ${clinician.lastName}`, subject: input.subject, body: input.body };
+    return { result: { previewOf: preview }, proposal: { title: `Message Dr. ${clinician.lastName}`, summary: `"${input.subject}" to Dr. ${clinician.lastName}`, preview } };
   },
   async commit(ctx, input, preview: any) {
-    const { doctors } = await careTeamOf(ctx.patientId);
-    const doctorId = preview?.doctorId ?? input.doctorId ?? (doctors.length === 1 ? doctors[0].id : null);
-    if (!doctorId || !doctors.some((d) => d.id === doctorId)) throw new Error("clinician not on this user's care team");
-    const chat = await MessagingService.createChat(doctorId, ctx.patientId);
+    const { clinicians } = await careTeamOf(ctx.patientId);
+    const clinicianId = preview?.clinicianId ?? input.clinicianId ?? (clinicians.length === 1 ? clinicians[0].id : null);
+    if (!clinicianId || !clinicians.some((d) => d.id === clinicianId)) throw new Error("clinician not on this user's care team");
+    const chat = await MessagingService.createChat(clinicianId, ctx.patientId);
     const msg = await MessagingService.sendMessage(`${input.subject}\n\n${input.body}`, chat.id, ctx.patientId, "PATIENT");
-    const result = { sent: true, chatId: chat.id, messageId: msg.id, doctorId };
+    const result = { sent: true, chatId: chat.id, messageId: msg.id, clinicianId };
     return { result, cards: [{ type: "message_sent", title: "Sent to your care team", data: result }] };
   },
 });
@@ -272,34 +270,34 @@ export const bookAppointment = defineTool({
   description:
     "Request an appointment with one of the user's clinicians on Ollo at a specific date and time (local). Creates a PENDING booking the clinic confirms. The user confirms in the app first.",
   schema: z.object({
-    doctorId: z.string().optional().describe("From get_care_team. Omit if the user has exactly one clinician."),
+    clinicianId: z.string().optional().describe("From get_care_team. Omit if the user has exactly one clinician."),
     at: z.string().describe("Local date-time, ISO, e.g. 2026-09-02T10:30"),
     durationMinutes: z.number().int().min(10).max(120).optional(),
     reason: z.string().min(3).max(300),
   }),
   risk: "write",
   async run(ctx, input) {
-    const { doctors } = await careTeamOf(ctx.patientId);
-    if (!doctors.length) return { result: { error: "no clinician linked to this account yet — the user can add one from the Care Team screen" } };
-    const doctor = input.doctorId ? doctors.find((d) => d.id === input.doctorId) : doctors.length === 1 ? doctors[0] : null;
-    if (!doctor) return { result: { error: "specify doctorId", doctors: doctors.map((d) => ({ id: d.id, name: `${d.firstName} ${d.lastName}` })) } };
+    const { clinicians } = await careTeamOf(ctx.patientId);
+    if (!clinicians.length) return { result: { error: "no clinician linked to this account yet — the user can add one from the Care Team screen" } };
+    const clinician = input.clinicianId ? clinicians.find((d) => d.id === input.clinicianId) : clinicians.length === 1 ? clinicians[0] : null;
+    if (!clinician) return { result: { error: "specify clinicianId", clinicians: clinicians.map((d) => ({ id: d.id, name: `${d.firstName} ${d.lastName}` })) } };
     const at = moment.tz(input.at, ctx.timeZone);
     if (!at.isValid() || at.isBefore(moment())) return { result: { error: "time must be a valid future local date-time" } };
-    const preview = { doctorId: doctor.id, doctorName: `${doctor.firstName} ${doctor.lastName}`, at: at.toISOString(), atLocal: at.format("ddd D MMM YYYY, HH:mm"), durationMinutes: input.durationMinutes ?? 30, reason: input.reason };
-    return { result: { previewOf: preview }, proposal: { title: `Book Dr. ${doctor.lastName}`, summary: `${preview.atLocal} — ${input.reason}`, preview } };
+    const preview = { clinicianId: clinician.id, clinicianName: `${clinician.firstName} ${clinician.lastName}`, at: at.toISOString(), atLocal: at.format("ddd D MMM YYYY, HH:mm"), durationMinutes: input.durationMinutes ?? 30, reason: input.reason };
+    return { result: { previewOf: preview }, proposal: { title: `Book Dr. ${clinician.lastName}`, summary: `${preview.atLocal} — ${input.reason}`, preview } };
   },
   async commit(ctx, input, preview: any) {
-    const { patient, doctors } = await careTeamOf(ctx.patientId);
-    const doctorId = preview?.doctorId ?? input.doctorId ?? (doctors.length === 1 ? doctors[0].id : null);
-    const doctor = doctors.find((d) => d.id === doctorId);
-    if (!doctor) throw new Error("clinician not on this user's care team");
+    const { patient, clinicians } = await careTeamOf(ctx.patientId);
+    const clinicianId = preview?.clinicianId ?? input.clinicianId ?? (clinicians.length === 1 ? clinicians[0].id : null);
+    const clinician = clinicians.find((d) => d.id === clinicianId);
+    if (!clinician) throw new Error("clinician not on this user's care team");
     const at = moment.tz(input.at, ctx.timeZone);
     const appointmentDate = at.format("MM-DD-YYYYTHH:mm:ss.SSS[+00:00]"); // the app's booking date shape
     const data = {
-      doctorId: doctor.id,
+      clinicianId: clinician.id,
       patientId: ctx.patientId,
       patientName: [patient?.firstName, patient?.lastName].filter(Boolean).join(" "),
-      doctorName: `${doctor.firstName} ${doctor.lastName}`,
+      clinicianName: `${clinician.firstName} ${clinician.lastName}`,
       appointmentDate,
       durationMinutes: input.durationMinutes ?? 30,
       reason: input.reason,
@@ -310,10 +308,10 @@ export const bookAppointment = defineTool({
       booking = await BookingService.createBooking(data);
     } catch (e) {
       // createBooking also emails the parties; a mail failure must not hide a saved booking.
-      booking = await prisma.booking.findFirst({ where: { patientId: ctx.patientId, doctorId: doctor.id, appointmentDate } });
+      booking = await prisma.booking.findFirst({ where: { patientId: ctx.patientId, clinicianId: clinician.id, appointmentDate } });
       if (!booking) throw e;
     }
     const result = { requested: true, bookingId: booking.id, status: booking.status, at: at.toISOString() };
-    return { result, cards: [{ type: "appointment_requested", title: "Appointment requested", data: { ...result, doctorName: data.doctorName } }] };
+    return { result, cards: [{ type: "appointment_requested", title: "Appointment requested", data: { ...result, clinicianName: data.clinicianName } }] };
   },
 });

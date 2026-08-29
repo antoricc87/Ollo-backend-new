@@ -4,12 +4,10 @@ import bcrypt from "bcryptjs";
 import * as authToken from "../../src/utils/auth_token";
 import { signJWT, updateUserToken } from "../../src/utils/auth_token";
 import {
-  createPatient,
   createPatientSummary,
   checkExistingPatient,
   createPatientMobile,
   deletePatientById,
-  fetchAllPatients,
   getPatientById,
   updatePatientPassword,
   updatePatient,
@@ -37,53 +35,6 @@ jest.mock("../../src/services/patient/model/patient.model", () => ({
   ...jest.requireActual("../../src/services/patient/model/patient.model"),
   getPatientById: jest.fn(),
 }));
-
-describe("createPatient", () => {
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it("should create a new patient", async () => {
-    const patientData = {
-      firstName: "John",
-      lastName: "Doe",
-      email: "john.doe@example.com",
-      dob: new Date("1990-01-01"),
-      gender: "male",
-      doctorId: "doctor123",
-    };
-
-    mockPrisma.patient.create.mockResolvedValue({
-      ...patientData,
-    });
-
-    const result = await createPatient(patientData);
-
-    expect(result).toEqual(patientData);
-    expect(mockPrisma.patient.create).toHaveBeenCalledWith({
-      data: patientData,
-    });
-  });
-
-  it("should throw an error if patient creation fails", async () => {
-    const patientData = {
-      firstName: "Jane",
-      lastName: "Doe",
-      email: "jane.doe@example.com",
-      dob: new Date("1992-02-02"),
-      gender: "female",
-      doctorId: "doctor456",
-    };
-
-    // Mock rejection
-    mockPrisma.patient.create.mockRejectedValue(new Error("Creation failed"));
-
-    await expect(createPatient(patientData)).rejects.toThrow("Creation failed");
-    expect(mockPrisma.patient.create).toHaveBeenCalledWith({
-      data: patientData,
-    });
-  });
-});
 
 describe("createPatientSummary", () => {
   it("should create a new patient summary", async () => {
@@ -359,67 +310,6 @@ describe("createPatientMobile", () => {
     });
     expect(authToken.updateUserToken).not.toHaveBeenCalled();
     expect(CaloriesService.createFoodTracker).not.toHaveBeenCalled();
-  });
-});
-
-describe("fetchAllPatients", () => {
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it("should fetch all patients matching the criteria", async () => {
-    const criteria = { doctorId: "doctor123" };
-    const mockPatients = [
-      {
-        id: "patient1",
-        firstName: "John",
-        lastName: "Doe",
-        doctorId: "doctor123",
-      },
-      {
-        id: "patient2",
-        firstName: "Jane",
-        lastName: "Smith",
-        doctorId: "doctor123",
-      },
-    ];
-
-    // Mock the Prisma client response
-    mockPrisma.patient.findMany.mockResolvedValue(mockPatients);
-
-    const result = await fetchAllPatients(criteria);
-
-    expect(mockPrisma.patient.findMany).toHaveBeenCalledWith({
-      where: criteria,
-    });
-    expect(result).toEqual(mockPatients);
-  });
-
-  it("should return an empty array if no patients match the criteria", async () => {
-    const criteria = { doctorId: "nonexistentDoctor" };
-
-    // Mock the Prisma client response to return an empty array
-    mockPrisma.patient.findMany.mockResolvedValue([]);
-
-    const result = await fetchAllPatients(criteria);
-
-    expect(mockPrisma.patient.findMany).toHaveBeenCalledWith({
-      where: criteria,
-    });
-    expect(result).toEqual([]);
-  });
-
-  it("should throw an error if fetching patients fails", async () => {
-    const criteria = { doctorId: "doctor123" };
-    const errorMessage = "Database error";
-
-    // Mock the Prisma client to throw an error
-    mockPrisma.patient.findMany.mockRejectedValue(new Error(errorMessage));
-
-    await expect(fetchAllPatients(criteria)).rejects.toThrow(errorMessage);
-    expect(mockPrisma.patient.findMany).toHaveBeenCalledWith({
-      where: criteria,
-    });
   });
 });
 

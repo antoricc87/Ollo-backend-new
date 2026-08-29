@@ -1,4 +1,4 @@
-import { verifyDoctorToken, verifyToken } from "../../utils/auth_token";
+import { verifyToken } from "../../utils/auth_token";
 import caloriesApi from "./controller/calories.controller";
 export default class Routes {
   app: any;
@@ -10,11 +10,6 @@ export default class Routes {
     this.app.post(
       "/api/calories/fetchCaloriesTracker",
       verifyToken,
-      caloriesApi.getCaloriesTracker
-    );
-    this.app.post(
-      "/api/calories/fetchCaloriesTrackerDoctor",
-      verifyDoctorToken,
       caloriesApi.getCaloriesTracker
     );
     // this.app.post(
