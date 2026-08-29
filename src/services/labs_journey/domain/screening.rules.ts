@@ -5,9 +5,9 @@
  * review the basis (the FDA CDS "independent review" criterion). Grades are
  * USPSTF letter grades where the source is USPSTF; other bodies are named.
  * This is a suggestion list to bring to a clinician — nothing here orders a
- * test. Verify citations against the current recommendation pages before a
- * public release; the URLs are the recommendation topics on
- * uspreventiveservicestaskforce.org.
+ * test. Citations verified 2026-08-28 against the USPSTF A&B list and each
+ * society's guideline page (see the git log); re-verify when USPSTF
+ * publishes the prostate update currently in draft.
  */
 
 export type Sex = "female" | "male" | "other";
@@ -143,9 +143,9 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
           ? "Diabetes in a parent or sibling is a screening risk factor."
           : "Screening for prediabetes is recommended for all adults from 35.",
         cadence: managing ? "Every 3–6 months" : "Every 3 years if normal",
-        source: managing || (!uspstf && p.family.diabetes)
-          ? { org: "ADA Standards of Care", year: 2025, url: "https://diabetesjournals.org/care/issue/48/Supplement_1" }
-          : USPSTF(2021, "B", "screening-for-prediabetes-and-type-2-diabetes"),
+        source: uspstf
+          ? USPSTF(2021, "B", "screening-for-prediabetes-and-type-2-diabetes")
+          : { org: "ADA Standards of Care", year: 2025, url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC11635041/" },
         priority: managing || uspstf ? "DUE" : "CONSIDER",
         biomarkers: ["hba1c", "glucose"],
       });
@@ -163,7 +163,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       : "Part of a standard annual panel; no USPSTF recommendation for people without risk factors.",
     cadence: "Yearly",
     source: diabetes || hypertension || ckd
-      ? { org: "KDIGO / ADA", year: 2024, url: "https://kdigo.org/guidelines/ckd-evaluation-and-management/" }
+      ? { org: "KDIGO / ADA", year: 2024, url: "https://kdigo.org/wp-content/uploads/2024/03/KDIGO-2024-CKD-Guideline.pdf" }
       : { org: "Common annual-physical panel", year: 2026 },
     priority: diabetes || hypertension || ckd || onStatin || onMetformin || liver ? "DUE" : "CONSIDER",
     biomarkers: ["creatinine", "egfr", "alt"],
@@ -191,7 +191,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       : "Routine thyroid screening has insufficient evidence; it is often included in an annual panel anyway.",
     cadence: thyroid || onLevothyroxine ? "Every 6–12 months" : "Optional",
     source: thyroid || onLevothyroxine
-      ? { org: "American Thyroid Association", year: 2014, url: "https://www.thyroid.org/professionals/ata-professional-guidelines/" }
+      ? { org: "American Thyroid Association", year: 2014, url: "https://journals.sagepub.com/doi/10.1089/thy.2014.0028" }
       : USPSTF(2015, "I", "thyroid-dysfunction-screening"),
     priority: thyroid || onLevothyroxine ? "DUE" : "CONSIDER",
     biomarkers: ["tsh"],
@@ -224,22 +224,25 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
         : "Anemia on record — iron stores and B12 explain most cases.",
       cadence: "Yearly",
       source: onMetformin
-        ? { org: "ADA Standards of Care", year: 2025, url: "https://diabetesjournals.org/care/issue/48/Supplement_1" }
+        ? { org: "ADA Standards of Care", year: 2025, url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC11635041/" }
         : { org: "Common clinical practice", year: 2026 },
       priority: "DUE",
       biomarkers: ["ferritin", "vitamin b12"],
     });
   }
 
-  if (p.family.earlyHeartDisease || p.family.highCholesterol || highCholesterol || heartDisease) {
+  if (age === null || age >= 20) {
+    const lpaRisk = p.family.earlyHeartDisease || p.family.highCholesterol || highCholesterol || heartDisease;
     items.push({
       key: "lipoprotein_a",
       kind: "LAB",
       title: "Lipoprotein(a) — once",
-      reason: "Lp(a) is inherited and not in a standard lipid panel; one lifetime measurement refines heart risk when there is family or personal history.",
+      reason: lpaRisk
+        ? "Lp(a) is inherited and not in a standard lipid panel; with your family or personal history one lifetime measurement matters for heart risk."
+        : "Lp(a) is inherited and stable for life, so it is measured once; the 2024 NLA statement recommends it for all adults.",
       cadence: "Once",
-      source: { org: "National Lipid Association", year: 2024, url: "https://www.lipid.org/" },
-      priority: "CONSIDER",
+      source: { org: "National Lipid Association", year: 2024, url: "https://www.sciencedirect.com/science/article/pii/S1933287424000333" },
+      priority: lpaRisk ? "DUE" : "CONSIDER",
       biomarkers: ["lipoprotein a"],
     });
   }
@@ -276,13 +279,13 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       kind: "SCREENING",
       title: "Colorectal cancer screening",
       reason: p.family.colorectalCancer
-        ? "A first-degree relative with colorectal cancer means starting earlier (40, or 10 years before their diagnosis) — usually colonoscopy."
+        ? "A first-degree relative with colorectal cancer means starting at 40, or 10 years before their diagnosis if that is earlier — colonoscopy, every 5 years if they were under 60."
         : between(age, 45, 49)
         ? "Screening now starts at 45 — stool test yearly or colonoscopy every 10 years."
         : "Recommended for everyone 50–75 — stool test yearly or colonoscopy every 10 years.",
       cadence: "Stool test yearly · colonoscopy every 10 years",
       source: p.family.colorectalCancer
-        ? { org: "US Multi-Society Task Force", year: 2017, url: "https://gi.org/guidelines/" }
+        ? { org: "US Multi-Society Task Force", year: 2017, url: "https://journals.lww.com/ajg/fulltext/2017/07000/colorectal_cancer_screening__recommendations_for.13.aspx" }
         : USPSTF(2021, between(age, 45, 49) ? "B" : "A", "colorectal-cancer-screening"),
       priority: p.family.colorectalCancer ? "DISCUSS" : "DUE",
     });
@@ -381,7 +384,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       title: "PSA (prostate)",
       reason: p.family.prostateCancer
         ? "An individual decision for men 55–69; family history tilts it toward testing."
-        : "An individual decision for men 55–69 — benefits and harms are close.",
+        : "An individual decision for men 55–69 — benefits and harms are close (USPSTF has an update in draft).",
       cadence: "Discuss",
       source: USPSTF(2018, "C", "prostate-cancer-screening"),
       priority: "DISCUSS",
