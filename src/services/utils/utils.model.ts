@@ -135,7 +135,7 @@ export class UtilsService {
     try {
       const audioStream = fs.createReadStream(audioFilePath);
       const response = await openai.audio.transcriptions.create({
-        model: "gpt-4o-mini-transcribe",
+        model: "gpt-4o-transcribe",
         file: audioStream,
         response_format: "text",
       });

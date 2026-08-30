@@ -102,37 +102,57 @@ export const getCaloriesFromAudio = async (
 /** ~0.8 s of AAC at the app's HIGH_QUALITY preset. */
 const MIN_AUDIO_BYTES = 8000;
 
+/** OpenAI's full-size transcription model (mini was ~2 WER points worse). */
+const TRANSCRIBE_MODEL = "gpt-4o-transcribe";
+
+/** Containers the transcription endpoint decodes natively — no re-encode. */
+const DIRECT_AUDIO_EXTENSIONS = new Set(["m4a", "mp3", "mp4", "wav", "webm", "ogg", "oga", "flac", "mpeg", "mpga"]);
+
+const DATA_URL_PREFIX = /^data:audio\/([\w.+-]+);base64,/;
+
+const transcribeFile = async (filePath: string) => {
+  const transcription = await openai.audio.transcriptions.create({
+    file: fs.createReadStream(filePath),
+    model: TRANSCRIBE_MODEL,
+    // No `prompt` hint: on near-silent clips the model echoes the hint back
+    // as the transcript (seen 2026-08-26). Silence is rejected by the caller.
+  });
+  return (transcription.text ?? "").trim();
+};
+
 export const speechToText = async (base64Audio: string) => {
   const tempId = randomUUID();
-  const tempRawPath = path.join(os.tmpdir(), `ollo-audio-${tempId}.raw`);
+  const mime = DATA_URL_PREFIX.exec(base64Audio)?.[1]?.toLowerCase();
+  const ext = mime === "mpeg" ? "mp3" : mime === "x-m4a" ? "m4a" : (mime ?? "m4a");
+  const direct = DIRECT_AUDIO_EXTENSIONS.has(ext);
+  const tempRawPath = path.join(os.tmpdir(), `ollo-audio-${tempId}.${direct ? ext : "raw"}`);
   const tempConvertedPath = path.join(os.tmpdir(), `ollo-audio-${tempId}.mp3`);
   try {
-    // Convert Base64 to binary and write to a temporary raw file
-    const audioBuffer = Buffer.from(
-      base64Audio.replace(/^data:audio\/\w+;base64,/, ""),
-      "base64"
-    );
+    const audioBuffer = Buffer.from(base64Audio.replace(DATA_URL_PREFIX, ""), "base64");
     // A tap-tap on the mic yields a few KB of silence; the transcription model
     // then hallucinates a greeting in a random language. Refuse it up front.
     if (audioBuffer.length < MIN_AUDIO_BYTES) throw new Error("Recording too short");
     await writeFile(tempRawPath, audioBuffer);
 
-    // Convert to MP3 using ffmpeg
-    await new Promise<void>((resolve, reject) => {
-      ffmpeg(tempRawPath)
-        .toFormat("mp3")
-        .on("error", reject)
-        .on("end", resolve)
-        .save(tempConvertedPath);
-    });
-
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tempConvertedPath),
-      model: "gpt-4o-mini-transcribe",
-      // No `prompt` hint: on near-silent clips the model echoes the hint back
-      // as the transcript (seen 2026-08-26). Silence is rejected below instead.
-    });
-    const text = (transcription.text ?? "").trim();
+    let text: string;
+    try {
+      // The app records AAC in an .m4a container, which the endpoint decodes
+      // itself — send it untouched (the old ffmpeg → mp3 hop was lossy).
+      if (!direct) throw new Error(`unsupported container: ${ext}`);
+      text = await transcribeFile(tempRawPath);
+    } catch (error: unknown) {
+      // Unknown or corrupt container: re-mux to mp3 with ffmpeg and retry once.
+      const message = error instanceof Error ? error.message : String(error);
+      if (direct && !/format|decod|corrupt|unsupported|invalid/i.test(message)) throw error;
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(tempRawPath)
+          .toFormat("mp3")
+          .on("error", reject)
+          .on("end", resolve)
+          .save(tempConvertedPath);
+      });
+      text = await transcribeFile(tempConvertedPath);
+    }
     // No Latin letters or digits at all = nothing intelligible was said.
     if (!/[A-Za-z0-9À-ÿ]/.test(text)) throw new Error("Nothing intelligible in the recording");
     return text;
