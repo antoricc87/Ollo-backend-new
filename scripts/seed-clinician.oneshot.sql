@@ -1,4 +1,5 @@
--- ONE statement (query boxes that split on ";" cannot break it): test clinician
+-- ONE statement, outer SELECT, NO trailing semicolon (Railway's query box splits on
+-- ";" and appends LIMIT — this shape survives both): test clinician
 -- "Dr. Giulia Rossi" + a week of 30-minute slots (09:00–12:00, today + 6 days,
 -- UTC day) + care-team grant for the patient e-mail below.
 -- Re-running adds ANOTHER week of slots (harmless duplicates); the clinician
@@ -30,10 +31,12 @@ WITH c AS (
          false, true
   FROM d, generate_series(9, 11) AS h, (VALUES ('00'), ('30')) AS mm(m)
   RETURNING id
+), g AS (
+  INSERT INTO "CareTeamMember" (id, "patientId", "clinicianId", source, "addedAt")
+  SELECT gen_random_uuid()::text, p.id, c.id, 'SEED', now()
+  FROM c, "Patient" p
+  WHERE p.email = 'antoricciardelli@gmail.com'
+  ON CONFLICT ("patientId", "clinicianId") DO UPDATE SET "revokedAt" = NULL
+  RETURNING "clinicianId", "patientId"
 )
-INSERT INTO "CareTeamMember" (id, "patientId", "clinicianId", source, "addedAt")
-SELECT gen_random_uuid()::text, p.id, c.id, 'SEED', now()
-FROM c, "Patient" p
-WHERE p.email = 'antoricciardelli@gmail.com'
-ON CONFLICT ("patientId", "clinicianId") DO UPDATE SET "revokedAt" = NULL
-RETURNING "clinicianId", "patientId";
+SELECT * FROM g
