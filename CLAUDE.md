@@ -659,7 +659,10 @@ rotation; 503 when unset), `requireClinician` (`X-Clinician-External-Id` must
 match an active `Clinician.externalId`), `requireGrant("id")` (active
 `CareTeamMember` for `req.params.id`), `logSeamAccess(resource)` → `SeamAccessLog`
 (mounted FIRST on each route so 401/403 are recorded too; no FK by design).
-S0 routes: `GET /api/seam/health`, `GET /api/seam/whoami`. Patient-scoped reads
+Routes: `GET /api/seam/health`, `GET /api/seam/whoami`, `PUT /api/seam/clinicians/:externalId`
+(S1: directory card upsert — adopts a same-email row that has no externalId, e.g.
+the dev seed, so grants/slots survive; email owned by another externalId → 409;
+`seam.schema.ts` + `model/seam.model.ts`). Patient-scoped reads
 (snapshot, labs, trackers, plan), availability push, bookings and chats arrive
 in S2/S4/S5 — see `../docs/physician-app-plan.md`. Tests: `tests/seam/`.
 Local key lives in `.env` (`SEAM_SERVICE_KEY`) and must equal the one in

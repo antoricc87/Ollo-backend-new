@@ -14,6 +14,7 @@ export default class Routes {
 
   appRoutes() {
     this.app.get("/api/seam/health", logSeamAccess("health"), requireSeamKey, SeamHandler.health);
+    this.app.put("/api/seam/clinicians/:externalId", logSeamAccess("clinician.upsert"), requireSeamKey, SeamHandler.upsertClinician);
     this.app.get("/api/seam/whoami", logSeamAccess("whoami"), requireSeamKey, requireClinician, SeamHandler.whoami);
   }
 
