@@ -47,3 +47,6 @@ export const bookingStatusSchema = z.object({
   status: z.enum(["CONFIRMED", "CANCELED"]),
   note: z.string().max(500).nullable().optional(),
 });
+
+/* ------------------------------ S5: messaging ----------------------------- */
+export const messageSchema = z.object({ content: z.string().trim().min(1).max(10_000) });

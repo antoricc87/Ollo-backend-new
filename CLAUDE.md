@@ -629,8 +629,8 @@ UserAlert, LabReport):
   / `message_care_team` / `book_appointment` (tool params are now
   `clinicianId`; card data `clinicians[]` / `clinicianName`).
 - `MessagingService` keeps `createChat/sendMessage/getChatById/
-  getPatientChats` for Ollie; no HTTP routes until the clinician service
-  exists to answer.
+  getPatientChats` for Ollie; patient HTTP routes restored 2026-09-02 (S5)
+  now that the clinician service answers — see the Seam API section.
 - Boot: `npm start` runs `scripts/db-push.js` — `prisma db push` that adds
   `--accept-data-loss` ONLY when `PRISMA_ACCEPT_DATA_LOSS=true`. **Railway
   needs that variable set for the ONE deploy that applies this change, then
@@ -670,6 +670,10 @@ they reuse `buildPatientSnapshot` (memories/sub-accounts/client/mealPlan strippe
 the tracker entry tables. S4 (`SeamScheduleService`): `PUT /api/seam/clinicians/:externalId/availability`
 replaces overlapping published weeks with concrete slots (booked slots preserved),
 `GET …/bookings`, `POST /api/seam/bookings/:id/status` (confirm/decline → slot flag + FCM push).
-Chats arrive in S5 — see `../docs/physician-app-plan.md`. Tests: `tests/seam/`.
+S5 (`SeamMessagingService`): `GET …/chats`, `GET /api/seam/chats/:id` (marks patient
+messages read), `POST /api/seam/chats/:id/messages` (CLINICIAN + push), `POST /api/seam/patients/:id/chats`.
+Patient-token chat routes are BACK (`services/messaging/messaging.routes.ts`:
+`GET|POST /api/messaging/chats`, `GET /api/messaging/chats/:id`, `POST …/:id/messages`) —
+the phone's chat screen can now be rebuilt on them. Plan: `../docs/physician-app-plan.md`. Tests: `tests/seam/`.
 Local key lives in `.env` (`SEAM_SERVICE_KEY`) and must equal the one in
 `Ollo-Clinician-Service/.env`. Not on Railway yet (physician app is local-only).

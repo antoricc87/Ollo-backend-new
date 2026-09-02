@@ -27,6 +27,7 @@ import MealPlanRoutes from "./services/meal_plan/meal_plan.routes";
 import WorkoutRoutes from "./services/workouts/workouts.routes";
 import LabsJourneyRoutes from "./services/labs_journey/labsJourney.routes";
 import SeamRoutes from "./services/seam/seam.routes";
+import MessagingRoutes from "./services/messaging/messaging.routes";
 import "./services/agent/proactive/agent.worker";
 import { scheduleAgentProactiveTick } from "./services/agent/proactive/agent.scheduler";
 import "./workers/workers/notifications.worker";
@@ -114,6 +115,7 @@ class Server {
     new WorkoutRoutes(this.app).routesConfig();
     new LabsJourneyRoutes(this.app).routesConfig();
     new SeamRoutes(this.app).routesConfig();
+    new MessagingRoutes(this.app).routesConfig();
   }
 
   startTheServer(callback?: (server: Server) => void) {

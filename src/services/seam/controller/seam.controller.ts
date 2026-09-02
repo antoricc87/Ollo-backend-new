@@ -1,8 +1,8 @@
 import { Response } from "express";
 import Util from "../../../utils/response";
 import { SeamRequest } from "../seam.auth";
-import { availabilityReplaceSchema, bookingStatusSchema, clinicianUpsertSchema } from "../seam.schema";
-import SeamService, { SeamConflictError, SeamPatientService, SeamScheduleService } from "../model/seam.model";
+import { availabilityReplaceSchema, bookingStatusSchema, clinicianUpsertSchema, messageSchema } from "../seam.schema";
+import SeamService, { SeamConflictError, SeamMessagingService, SeamPatientService, SeamScheduleService } from "../model/seam.model";
 
 /** S0 wiring checks. Patient-scoped resources arrive with S2 (see docs/physician-app-plan.md). */
 class SeamHandler {
@@ -112,6 +112,53 @@ class SeamHandler {
     } catch (error) {
       console.error("seam: booking status failed", error);
       return res.status(500).json(Util.error({}, "Booking update failed"));
+    }
+  }
+
+  /* ---- S5: messaging ---- */
+
+  async chats(req: SeamRequest, res: Response) {
+    const c = SeamHandler.own(req, res);
+    if (!c) return;
+    try {
+      return res.status(200).json(Util.success(await SeamMessagingService.chatsOf(c.id), "Chats fetched"));
+    } catch (error) {
+      console.error("seam: chats failed", error);
+      return res.status(500).json(Util.error({}, "Chats fetch failed"));
+    }
+  }
+
+  async chat(req: SeamRequest, res: Response) {
+    try {
+      const chat = await SeamMessagingService.chat(req.seam!.clinician!.id, String(req.params.id));
+      if (!chat) return res.status(404).json(Util.error({}, "Chat not found"));
+      return res.status(200).json(Util.success(chat, "Chat fetched"));
+    } catch (error) {
+      console.error("seam: chat failed", error);
+      return res.status(500).json(Util.error({}, "Chat fetch failed"));
+    }
+  }
+
+  /** Patient-scoped (requireGrant ran): open or reuse the thread with this patient. */
+  async startChat(req: SeamRequest, res: Response) {
+    try {
+      return res.status(201).json(Util.success(await SeamMessagingService.start(req.seam!.clinician!.id, req.seam!.patientId!), "Chat ready"));
+    } catch (error) {
+      console.error("seam: start chat failed", error);
+      return res.status(500).json(Util.error({}, "Chat start failed"));
+    }
+  }
+
+  async sendMessage(req: SeamRequest, res: Response) {
+    const parsed = messageSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json(Util.error(parsed.error.flatten().fieldErrors, "Invalid message"));
+    try {
+      const m = await SeamMessagingService.send(req.seam!.clinician!.id, String(req.params.id), parsed.data.content);
+      if (!m) return res.status(404).json(Util.error({}, "Chat not found"));
+      return res.status(201).json(Util.success(m, "Message sent"));
+    } catch (error) {
+      console.error("seam: send failed", error);
+      return res.status(500).json(Util.error({}, "Message send failed"));
     }
   }
 

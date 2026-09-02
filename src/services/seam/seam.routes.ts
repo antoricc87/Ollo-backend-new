@@ -27,6 +27,11 @@ export default class Routes {
     this.app.put("/api/seam/clinicians/:externalId/availability", logSeamAccess("availability.replace"), requireSeamKey, requireClinician, SeamHandler.replaceAvailability);
     this.app.get("/api/seam/clinicians/:externalId/bookings", logSeamAccess("bookings"), requireSeamKey, requireClinician, SeamHandler.bookings);
     this.app.post("/api/seam/bookings/:id/status", logSeamAccess("booking.status"), requireSeamKey, requireClinician, SeamHandler.bookingStatus);
+    // S5: messaging
+    this.app.get("/api/seam/clinicians/:externalId/chats", logSeamAccess("chats"), requireSeamKey, requireClinician, SeamHandler.chats);
+    this.app.get("/api/seam/chats/:id", logSeamAccess("chat"), requireSeamKey, requireClinician, SeamHandler.chat);
+    this.app.post("/api/seam/chats/:id/messages", logSeamAccess("chat.send"), requireSeamKey, requireClinician, SeamHandler.sendMessage);
+    this.app.post("/api/seam/patients/:id/chats", ...scoped("chat.start", SeamHandler.startChat));
     this.app.get("/api/seam/whoami", logSeamAccess("whoami"), requireSeamKey, requireClinician, SeamHandler.whoami);
   }
 

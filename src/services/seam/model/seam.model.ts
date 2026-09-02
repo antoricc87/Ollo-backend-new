@@ -236,3 +236,76 @@ export class SeamScheduleService {
     return updated;
   }
 }
+
+/* ------------------------------ S5: messaging ----------------------------- */
+
+const patientBrief = { select: { id: true, firstName: true, lastName: true } } as const;
+
+export class SeamMessagingService {
+  /** Threads of this clinician whose patient still grants access, newest activity first. */
+  static async chatsOf(clinicianId: string) {
+    const chats = await prisma.chat.findMany({
+      where: { clinicianId, patient: { careTeam: { some: { clinicianId, revokedAt: null } } } },
+      include: { patient: patientBrief, messages: { orderBy: { createdAt: "desc" }, take: 1 } },
+      orderBy: { updatedAt: "desc" },
+    });
+    const unread = await prisma.message.groupBy({
+      by: ["chatId"],
+      where: { chatId: { in: chats.map((c) => c.id) }, senderType: "PATIENT", isRead: false },
+      _count: { _all: true },
+    });
+    const unreadBy = new Map(unread.map((u) => [u.chatId, u._count._all]));
+    return chats.map((c) => ({
+      id: c.id,
+      patient: c.patient,
+      lastMessage: c.messages[0] ? { content: c.messages[0].content, senderType: c.messages[0].senderType, createdAt: c.messages[0].createdAt } : null,
+      unread: unreadBy.get(c.id) ?? 0,
+      updatedAt: c.updatedAt,
+      createdAt: c.createdAt,
+    }));
+  }
+
+  /** One thread (owner + active grant); reading marks the patient's messages as read. */
+  static async chat(clinicianId: string, chatId: string) {
+    const c = await prisma.chat.findFirst({
+      where: { id: chatId, clinicianId, patient: { careTeam: { some: { clinicianId, revokedAt: null } } } },
+      include: { patient: patientBrief, messages: { orderBy: { createdAt: "asc" } } },
+    });
+    if (!c) return null;
+    await prisma.message.updateMany({ where: { chatId: c.id, senderType: "PATIENT", isRead: false }, data: { isRead: true } });
+    return { id: c.id, patient: c.patient, createdAt: c.createdAt, updatedAt: c.updatedAt, messages: c.messages.map((m) => ({ ...m, isRead: m.senderType === "PATIENT" ? true : m.isRead })) };
+  }
+
+  static async start(clinicianId: string, patientId: string) {
+    const c = await prisma.chat.upsert({
+      where: { unique_clinician_patient_chat: { clinicianId, patientId } },
+      update: {},
+      create: { clinicianId, patientId },
+      include: { patient: patientBrief },
+    });
+    return { id: c.id, patient: c.patient, createdAt: c.createdAt, updatedAt: c.updatedAt };
+  }
+
+  /** Clinician reply; pushes to the patient (best effort). */
+  static async send(clinicianId: string, chatId: string, content: string) {
+    const c = await prisma.chat.findFirst({
+      where: { id: chatId, clinicianId, patient: { careTeam: { some: { clinicianId, revokedAt: null } } } },
+      include: { clinician: { select: { lastName: true } } },
+    });
+    if (!c) return null;
+    const m = await prisma.$transaction(async (tx) => {
+      const msg = await tx.message.create({ data: { chatId: c.id, senderId: clinicianId, content, senderType: "CLINICIAN" } });
+      await tx.chat.update({ where: { id: c.id }, data: { updatedAt: new Date() } });
+      return msg;
+    });
+    try {
+      const token = await prisma.userToken.findFirst({ where: { userId: c.patientId, isActive: true, isDeleted: false }, select: { token: true } });
+      if (token?.token) {
+        await sendSingleNotification({ token: token.token, title: `Dr. ${c.clinician.lastName} replied`, body: content.length > 120 ? `${content.slice(0, 117)}…` : content, data: { type: "chat", chatId: c.id } });
+      }
+    } catch (e) {
+      console.warn("seam: chat push failed", (e as Error)?.message);
+    }
+    return m;
+  }
+}
