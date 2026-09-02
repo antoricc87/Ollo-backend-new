@@ -154,7 +154,7 @@ class NutritionHandler {
 
   // create fav meal
   async createFavMeal(request: any, response: Response) {
-    const { foodEntries, description, mealType } = request.body;
+    const { foodEntries, description, mealType, slot, aliases } = request.body;
     const { id: userId } = request.user;
 
     if (!foodEntries || !description) {
@@ -168,7 +168,12 @@ class NutritionHandler {
         foodEntries,
         userId,
         description,
-        mealType
+        mealType,
+        {
+          // "my usual breakfast" resolves by slot; aliases are extra names for it.
+          slot: slot ?? null,
+          aliases: Array.isArray(aliases) ? aliases.filter((a: unknown) => typeof a === "string").slice(0, 8) : [],
+        }
       );
 
       if (favMeal) {
@@ -211,13 +216,12 @@ class NutritionHandler {
   async fetchFavMeals(request: any, response: Response) {
     const { id } = request.user;
     try {
+      // `ingredients` is now FavMealIngredient (per-ingredient rows), not the
+      // legacy FoodEntry bag — the old nested include would blow up at runtime.
       const where = {
         where: { userId: id },
-        include: {
-          ingredients: {
-            include: { ingredients: { orderBy: { sortOrder: "asc" as const } } },
-          },
-        },
+        orderBy: [{ useCount: "desc" as const }, { createdAt: "desc" as const }],
+        include: { ingredients: { orderBy: { sortOrder: "asc" as const } } },
       };
       const favMeals = await NutritionService.getFavMeals(where);
       if (favMeals) {

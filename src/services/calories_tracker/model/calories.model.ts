@@ -499,6 +499,7 @@ class CaloriesService {
                 vegetableServings: entry.vegetableServings,
                 fruitServings: entry.fruitServings,
                 mealType: entry.mealType,
+                portionStop: entry.portionStop ?? null,
                 createdAt: date,
               },
             });

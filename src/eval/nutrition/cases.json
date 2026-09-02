@@ -1,5 +1,5 @@
 {
-  "_readme": "Reference values are USDA FoodData Central / manufacturer figures for the portion a careful dietitian would assume from the text. tolerance = allowed relative error on kcal (default 0.2). expectUser / expectAssumed = ingredient-name substrings whose portionSource must be 'user' vs anything else. Edit freely; keep ids stable. Batch cases (narration: true) run through analyzeNarration with today fixed at EVAL_TODAY (2026-08-26, a Wednesday); expectedMealDays checks each meal's resolved day, expectHeldBack the meals whose day could not be resolved (their kcal are not in expected).",
+  "_readme": "Reference values are USDA FoodData Central / manufacturer figures for the portion a careful dietitian would assume from the text. tolerance = allowed relative error on kcal (default 0.2). expectUser / expectAssumed = ingredient-name substrings whose portionSource must be 'user' vs anything else. Edit freely; keep ids stable. Batch cases (narration: true) run through analyzeNarration with today fixed at EVAL_TODAY (2026-08-26, a Wednesday); expectedMealDays checks each meal's resolved day, expectHeldBack the meals whose day could not be resolved (their kcal are not in expected). expectPortion = the meal portion dial stop the wording should set (null = the text says nothing about the meal's overall size); the dial's invariance guard (stated/branded portions must not move) runs on EVERY case.",
   "defaultContext": {
     "age": 34,
     "gender": "male",
@@ -676,6 +676,77 @@
         "honey"
       ],
       "notes": "burrito day unresolvable → held back; totals = yogurt 170 g ≈ 100 + honey 1 tbsp ≈ 64"
+    },
+    {
+      "id": "p01-dial-ate-a-lot",
+      "input": "mozzarella, bread, sauteed broccoli, mortadella and tomato — I ate a lot of it",
+      "mealTypeHint": "LUNCH",
+      "expected": {
+        "kcal": 800,
+        "protein": 40,
+        "carbs": 55,
+        "fat": 48
+      },
+      "tolerance": 0.3,
+      "expectPortion": "lots",
+      "expectAssumed": [
+        "mozzarella",
+        "bread",
+        "broccoli",
+        "mortadella"
+      ],
+      "notes": "the whole point: five items, no quantities, one phrase sizes the meal. Reference is a dietitian's NORMAL-stop read (mozzarella 125 g, bread 60 g, broccoli 150 g sauteed in 1 tbsp oil, mortadella 50 g, tomato 100 g) — the dial scales it afterwards, so this total is unscaled. Wide tolerance: with no quantities the plausible range is genuinely wide, which is why the dial exists."
+    },
+    {
+      "id": "p02-dial-light-lunch",
+      "input": "just a small plate of pasta with tuna for lunch, I only picked at it",
+      "mealTypeHint": "LUNCH",
+      "expected": {
+        "kcal": 310,
+        "protein": 24,
+        "carbs": 45,
+        "fat": 5
+      },
+      "tolerance": 0.3,
+      "expectPortion": "light",
+      "notes": "meal-level wording sets the stop. 'Small plate' also scales the pasta itself under Step 2 rule 1, so the reference is a small plate: 60 g dry pasta + 60 g tuna."
+    },
+    {
+      "id": "p03-dial-silent",
+      "input": "chicken with rice and steamed broccoli",
+      "mealTypeHint": "DINNER",
+      "expected": {
+        "kcal": 620,
+        "protein": 48,
+        "carbs": 60,
+        "fat": 18
+      },
+      "tolerance": 0.25,
+      "expectPortion": null,
+      "expectAssumed": [
+        "chicken",
+        "rice",
+        "broccoli"
+      ],
+      "notes": "nothing said about overall size — portion must stay null, not 'normal'"
+    },
+    {
+      "id": "p04-dial-per-item-size-word",
+      "input": "a big plate of fried rice and a can of coke",
+      "mealTypeHint": "DINNER",
+      "expected": {
+        "kcal": 880,
+        "protein": 16,
+        "carbs": 130,
+        "fat": 30
+      },
+      "tolerance": 0.3,
+      "expectPortion": null,
+      "expectUser": [
+        "rice",
+        "coke|cola"
+      ],
+      "notes": "a size word on ONE item scales that item (portionSource user) and must NOT set the meal dial; the can is branded — the invariance check proves neither moves"
     }
   ]
 }

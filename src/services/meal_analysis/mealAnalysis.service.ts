@@ -221,6 +221,9 @@ export function compose(
         mealName: m.mealName || "Meal",
         mealType: m.mealType,
         mealDate: m.mealDate || "today",
+        // What they said about the meal as a whole ("I ate a lot"); null = nothing said.
+        // The dial itself is applied downstream, in mealBatch/applyMealEdits.
+        portion: m.portion ?? null,
         ingredients,
         glycemicLoad: glycemicLoad(ingredients),
       };

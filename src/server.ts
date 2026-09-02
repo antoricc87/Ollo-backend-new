@@ -23,6 +23,7 @@ import ClinicianRoutes from "./services/clinicians/clinicians.routes";
 import DexcomRoutes from "./services/dexcom/dexcom.routes";
 import PlanRoutes from "./services/plan/plan.routes";
 import AgentRoutes from "./services/agent/agent.routes";
+import MealPlanRoutes from "./services/meal_plan/meal_plan.routes";
 import WorkoutRoutes from "./services/workouts/workouts.routes";
 import LabsJourneyRoutes from "./services/labs_journey/labsJourney.routes";
 import "./services/agent/proactive/agent.worker";
@@ -108,6 +109,7 @@ class Server {
     new DexcomRoutes(this.app).routesConfig();
     new PlanRoutes(this.app).routesConfig();
     new AgentRoutes(this.app).routesConfig();
+    new MealPlanRoutes(this.app).routesConfig();
     new WorkoutRoutes(this.app).routesConfig();
     new LabsJourneyRoutes(this.app).routesConfig();
   }

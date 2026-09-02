@@ -117,6 +117,7 @@ model Patient {
   lastPhysicalStatus   String?
   lastPhysicalAt       DateTime?
   healthPlans          HealthPlan[]          @relation("PatientPlans")
+  mealPlans            MealPlan[]            @relation("PatientMealPlans")
   createdAt            DateTime?             @default(now())
   resetPassword        ResetPassword[]
   timeZone             String?
@@ -554,14 +555,30 @@ model FoodEntry {
   fruitServings     Float? // NEW: Fruit servings
   createdAt         String?
   isProcessedFood   Boolean?
+  /// Meal portion dial (light | normal | hearty | lots) chosen for this meal — null on entries logged before it existed. Feeds the per-user portion bias.
+  portionStop       String?
   ingredients       MealIngredient[] // Phase 3: per-ingredient breakdown (source of truth for the totals above)
 }
 
 model FavMeal {
-  id                String      @id @default(uuid())
+  id                String              @id @default(uuid())
   userId            String
   mealType          MealType
-  ingredients       FoodEntry[]
+  /// "This is my usual <slot>" — null when the favourite is just a named dish.
+  /// A slot lets "my usual breakfast" resolve without naming the dish.
+  slot              MealType?
+  /// Extra names the user calls it ("the tuna thing"), matched alongside `description`.
+  aliases           String[]            @default([])
+  useCount          Int                 @default(0)
+  lastUsedAt        DateTime?
+  /// Per-ingredient rows — the source of truth. Logging a favourite copies these
+  /// verbatim: no model call, no USDA call, same numbers every time.
+  ingredients       FavMealIngredient[]
+  /// LEGACY (pre-2026-08-31): favourites used to be a bag of FoodEntry rows with
+  /// no per-ingredient detail. Backfilled into `ingredients` by
+  /// scripts/backfill-fav-meal-ingredients.ts; drop this relation and
+  /// FoodEntry.favMealId once every environment has been backfilled.
+  legacyEntries     FoodEntry[]
   description       String
   quantity          String
   calories          Int?
@@ -631,6 +648,40 @@ model FavFood {
 // Meal ingredients (Phase 3) — one row per food inside a logged FoodEntry.
 // Totals on FoodEntry are recomputed from these whenever they are edited.
 // ---------------------------------------------------------------------------
+/// Mirrors MealIngredient column for column, so `toPrismaIngredient` and the
+/// rest of calories_tracker/model/mealIngredients.ts serve both.
+model FavMealIngredient {
+  id                   String   @id @default(uuid())
+  favMealId            String
+  favMeal              FavMeal  @relation(fields: [favMealId], references: [id], onDelete: Cascade)
+  sortOrder            Int      @default(0)
+  name                 String
+  searchTerm           String?
+  brand                String?
+  quantity             Float
+  unit                 String
+  grams                Float
+  gramsLow             Float?
+  gramsHigh            Float?
+  portionSource        String?
+  portionAssumption    String?
+  confidence           Float?
+  foodGroup            String?
+  isProcessedFood      Boolean?
+  glycemicIndex        Float?
+  calories             Float
+  nutrients            Json
+  per100g              Json?
+  nutrientSource       String?
+  referenceSource      String?
+  referenceId          String?
+  referenceDescription String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([favMealId])
+}
+
 model MealIngredient {
   id                   String    @id @default(uuid())
   foodEntryId          String
@@ -831,14 +882,14 @@ model PatientInsurance {
 
 // Chat and Messages
 model Chat {
-  id             String    @id @default(uuid())
-  clinicianId    String
-  patientId      String
-  clinician      Clinician @relation(fields: [clinicianId], references: [id], onDelete: Cascade)
-  patient        Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  messages       Message[]
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id          String    @id @default(uuid())
+  clinicianId String
+  patientId   String
+  clinician   Clinician @relation(fields: [clinicianId], references: [id], onDelete: Cascade)
+  patient     Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  messages    Message[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@unique([clinicianId, patientId], name: "unique_clinician_patient_chat")
 }
@@ -928,6 +979,50 @@ model HealthPlan {
   updatedAt     DateTime       @updatedAt
   targets       PlanTarget[]
   watchOuts     PlanWatchOut[]
+}
+
+// Saved meal plan (Aug 2026) — the day-by-day plan Ollie generated, kept as a
+// reference the user can come back to. One ACTIVE per patient; saving a new
+// one marks the previous REPLACED. "Logged" is never stored here: it is
+// derived from FoodEntry rows for the plan's dates (see meal_plan.model.ts).
+model MealPlan {
+  id        String         @id @default(uuid())
+  patientId String
+  patient   Patient        @relation("PatientMealPlans", fields: [patientId], references: [id], onDelete: Cascade)
+  subjectId String? // sub-account the plan is for; null = the patient
+  title     String
+  notes     String?
+  startDate String // local YYYY-MM-DD of day 1
+  days      Int
+  status    PlanStatus     @default(ACTIVE)
+  targets   Json? // DailyTargets snapshot at save time
+  fit       Json? // { ok, issues } from the generator's check
+  source    String? // "ollie" | "manual"
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  meals     MealPlanMeal[]
+
+  @@index([patientId, status])
+}
+
+model MealPlanMeal {
+  id            String    @id @default(uuid())
+  planId        String
+  plan          MealPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  day           Int // 1-based
+  position      Int // order within the day
+  mealType      MealType
+  name          String
+  description   String?
+  ingredients   String[] // "150 g salmon fillet"
+  calories      Int
+  proteins      Float
+  carbohydrates Float
+  fats          Float
+  prepMinutes   Int?
+  swappedAt     DateTime? // set when the user replaced the generated meal
+
+  @@index([planId, day])
 }
 
 model PlanTarget {
@@ -1116,20 +1211,22 @@ model AgentProposal {
 
 /// Per-user switches for the agent's proactive runs. Absent row = defaults.
 model AgentPreference {
-  id                 String    @id @default(uuid())
-  patientId          String    @unique
-  patient            Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  proactiveEnabled   Boolean   @default(true) // master switch
-  dailyCheckinHour   Int? // local hour 0-23; null = off
-  weeklyReviewEnabled Boolean  @default(true) // Monday morning plan review
-  watchOutsEnabled   Boolean   @default(true) // event-driven nudges (new labs, BP)
-  lastDailyCheckinAt DateTime?
-  lastWeeklyReviewAt DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  id                  String    @id @default(uuid())
+  patientId           String    @unique
+  patient             Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  proactiveEnabled    Boolean   @default(true) // master switch
+  dailyCheckinHour    Int? // local hour 0-23; null = off
+  weeklyReviewEnabled Boolean   @default(true) // Monday morning plan review
+  watchOutsEnabled    Boolean   @default(true) // event-driven nudges (new labs, BP)
+  lastDailyCheckinAt  DateTime?
+  lastWeeklyReviewAt  DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 }
 
-/* ------------------------------ Workouts ------------------------------- */
+/**
+ * ------------------------------ Workouts -------------------------------
+ */
 
 /// Where the session record came from. HEALTHKIT = synced summary of a watch/
 /// phone workout; OLLIE = described to the agent (may be linked to a HealthKit

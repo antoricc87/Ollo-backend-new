@@ -157,6 +157,8 @@ export const logMeal = defineTool({
               ingredients: m.ingredients, // server recomputes totals from these
               nutrients: {},
               glycemicLoad: m.glycemicLoad ?? 0,
+              portionStop: m.portion ?? null, // which stop of the dial this was logged at
+
             },
           ],
           when,

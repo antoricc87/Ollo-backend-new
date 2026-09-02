@@ -17,7 +17,8 @@ import {
   analyzeMeal,
   DEFAULT_MEAL_MODEL,
 } from "../../services/meal_analysis/mealAnalysis.service";
-import { MealAnalysisResult } from "../../services/meal_analysis/mealAnalysis.schema";
+import { MealAnalysisResult, PortionStop, PORTION_STOPS } from "../../services/meal_analysis/mealAnalysis.schema";
+import { FIXED_PORTION_SOURCES, gramsAtEveryStop, isPortionScalable } from "../../services/meal_analysis/mealPortion";
 import { analyzeNarration } from "../../services/meal_analysis/mealBatch";
 import { resolveMealDate } from "../../services/meal_analysis/mealDate";
 import {
@@ -42,6 +43,8 @@ interface EvalCase {
   expectHeldBack?: number;
   expectUser?: string[];
   expectAssumed?: string[];
+  /** Meal portion dial: the stop the wording should set ("null" = the text says nothing about overall size). */
+  expectPortion?: PortionStop | null;
   notes?: string;
 }
 
@@ -60,6 +63,11 @@ interface CaseResult {
   datesOk: boolean | null;
   heldBackOk: boolean | null;
   portionChecks: { passed: number; total: number; failures: string[] };
+  /** The dial's guard rail: a stated or branded portion must not move at any stop. */
+  portionInvariance: { ok: boolean; failures: string[] };
+  /** How usable the model's gramsLow–gramsHigh range is for the dial. */
+  band: { scalable: number; degenerate: number; widths: number[] };
+  portionStopOk: boolean | null;
   duplicates: string[];
   items: { name: string; quantity: string; grams: number; portionSource: string; kcal: number; nutrientSource: string; reference: string | null; reason: string | null }[];
   usdaItems: number;
@@ -142,6 +150,9 @@ async function runCase(
       datesOk: null,
       heldBackOk: null,
       portionChecks: { passed: 0, total: 0, failures: [] },
+      portionInvariance: { ok: true, failures: [] },
+      band: { scalable: 0, degenerate: 0, widths: [] },
+      portionStopOk: null,
       duplicates: [],
       items: [],
       usdaItems: 0,
@@ -192,6 +203,37 @@ async function runCase(
     else passed++;
   }
 
+  // The portion dial, checked on every case (see mealPortion.ts).
+  //  - a portion the user stated or a brand's own size must be identical at all four stops;
+  //  - an assumed portion must move, in order, light ≤ normal ≤ hearty ≤ lots.
+  const invariance: string[] = [];
+  const widths: number[] = [];
+  let scalable = 0;
+  let degenerate = 0;
+  for (const i of ings) {
+    const at = gramsAtEveryStop(i as any);
+    const stops = PORTION_STOPS.map((s) => at[s]);
+    if (!isPortionScalable(i as any)) {
+      if (stops.some((g) => g !== i.grams)) {
+        invariance.push(`'${i.name}' (${i.portionSource}) moved with the dial: ${stops.join("/")} vs ${i.grams} g`);
+      }
+      continue;
+    }
+    scalable++;
+    if (!(at.light <= at.normal && at.normal <= at.hearty && at.hearty <= at.lots)) {
+      invariance.push(`'${i.name}' stops out of order: ${stops.join("/")}`);
+    } else if (i.grams >= 3 && !(at.light < at.lots)) {
+      invariance.push(`'${i.name}' does not move: ${stops.join("/")}`);
+    }
+    // No usable range on either side — the dial falls back to the size-word factors.
+    if (!(i.gramsLow < i.grams) && !(i.gramsHigh > i.grams)) degenerate++;
+    else if (i.grams > 0) widths.push((at.hearty - at.light) / i.grams);
+  }
+
+  const expectedStop = c.expectPortion === undefined ? null : c.expectPortion;
+  const gotStop = (result.meals.find((m) => (m as any).portion) as any)?.portion ?? null;
+  const portionStopOk = c.expectPortion === undefined ? null : gotStop === expectedStop;
+
   const names = ings.map((i) => i.name.trim().toLowerCase());
   const duplicates = names.filter((n, idx) => names.indexOf(n) !== idx);
 
@@ -216,6 +258,9 @@ async function runCase(
     datesOk: c.expectedMealDays ? c.expectedMealDays.every((e) => result!.meals.some((m) => m.mealType === e.mealType && mealDay(m) === daysAgo(e.daysAgo))) : null,
     heldBackOk: c.expectHeldBack != null ? heldBack === c.expectHeldBack : null,
     portionChecks: { passed, total, failures },
+    portionInvariance: { ok: !invariance.length, failures: invariance },
+    band: { scalable, degenerate, widths },
+    portionStopOk,
     duplicates,
     items: ings.map((i) => ({
       name: i.name,
@@ -272,7 +317,7 @@ const median = (xs: number[]) => {
   const results = await pool(cases, concurrency, (c) => runCase(c, file.defaultContext, model, effort, resolver));
 
   console.log(
-    pad("case", 30) + pad("kcal pred/ref", 16) + pad("kcal err", 10) + pad("P", 6) + pad("C", 6) + pad("F", 6) + pad("portion", 9) + pad("usda", 6) + pad("ms", 7) + "flags"
+    pad("case", 30) + pad("kcal pred/ref", 16) + pad("kcal err", 10) + pad("P", 6) + pad("C", 6) + pad("F", 6) + pad("portion", 9) + pad("band", 7) + pad("usda", 6) + pad("ms", 7) + "flags"
   );
   for (const r of results) {
     const flags: string[] = [];
@@ -282,7 +327,9 @@ const median = (xs: number[]) => {
     if (r.datesOk === false) flags.push("mealDays!");
     if (r.heldBackOk === false) flags.push("heldBack!");
     if (r.duplicates.length) flags.push(`dup:${r.duplicates.join(",")}`);
+    if (r.portionStopOk === false) flags.push("portionStop!");
     flags.push(...r.portionChecks.failures);
+    flags.push(...r.portionInvariance.failures.map((f) => `DIAL: ${f}`));
     console.log(
       pad(r.id, 30) +
         pad(`${Math.round(r.predicted.kcal)}/${r.expected.kcal}`, 16) +
@@ -291,6 +338,7 @@ const median = (xs: number[]) => {
         pad(pct(r.ape.carbs), 6) +
         pad(pct(r.ape.fat), 6) +
         pad(`${r.portionChecks.passed}/${r.portionChecks.total}`, 9) +
+        pad(r.band.scalable ? `${r.band.scalable - r.band.degenerate}/${r.band.scalable}` : "-", 7) +
         pad(`${r.usdaItems}/${r.totalItems}`, 6) +
         pad(r.latencyMs, 7) +
         flags.join("; ")
@@ -328,6 +376,20 @@ const median = (xs: number[]) => {
       fat: mean(okResults.map((r) => r.ape.fat)),
     },
     portionSourceAccuracy: portionTotal ? portionPassed / portionTotal : null,
+    // The dial's guard rail — anything but 1 is a bug, not a model regression.
+    portionInvariance: results.filter((r) => r.portionInvariance.ok).length / Math.max(1, results.length),
+    portionStopAccuracy: (() => {
+      const xs = results.filter((r) => r.portionStopOk !== null);
+      return xs.length ? xs.filter((r) => r.portionStopOk).length / xs.length : null;
+    })(),
+    // How much room the model leaves the dial: median (hearty − light) / grams, and the
+    // share of assumed items with no range at all (the dial falls back to size-word factors).
+    band: (() => {
+      const widths = results.flatMap((r) => r.band.widths);
+      const scalable = results.reduce((a, r) => a + r.band.scalable, 0);
+      const degenerate = results.reduce((a, r) => a + r.band.degenerate, 0);
+      return { medianWidth: median(widths), degenerateShare: scalable ? degenerate / scalable : null, scalableItems: scalable };
+    })(),
     mealCountAccuracy: (() => {
       const xs = results.filter((r) => r.mealCountOk !== null);
       return xs.length ? xs.filter((r) => r.mealCountOk).length / xs.length : null;
@@ -343,6 +405,12 @@ const median = (xs: number[]) => {
   console.log(`  macros MAPE  P ${pct(summary.macrosMape.protein)}  C ${pct(summary.macrosMape.carbs)}  F ${pct(summary.macrosMape.fat)}`);
   console.log(`  portion-source accuracy ${summary.portionSourceAccuracy == null ? "n/a" : pct(summary.portionSourceAccuracy)} | meal-count accuracy ${summary.mealCountAccuracy == null ? "n/a" : pct(summary.mealCountAccuracy)} | cases with duplicates ${summary.duplicatesCases}`);
   console.log(`  nutrients from USDA: ${usdaItems}/${totalItems} items (${summary.usdaShare == null ? "n/a" : pct(summary.usdaShare)})`);
+  console.log(
+    `  portion dial: invariance ${pct(summary.portionInvariance)}${summary.portionInvariance < 1 ? "  ← STATED PORTIONS MOVED, fix mealPortion.ts" : ""}` +
+      ` | band median width ${summary.band.medianWidth.toFixed(2)}× over ${summary.band.scalableItems} assumed items` +
+      ` | no range ${summary.band.degenerateShare == null ? "n/a" : pct(summary.band.degenerateShare)}` +
+      ` | wording→stop ${summary.portionStopAccuracy == null ? "n/a" : pct(summary.portionStopAccuracy)}`
+  );
   console.log(`  latency mean ${Math.round(summary.latencyMs.mean)} ms, median ${Math.round(summary.latencyMs.median)} ms | tokens in ${inTok} / out ${outTok}${cost != null ? ` | est. cost $${cost.toFixed(4)}` : ""}`);
 
   const outDir = path.join(process.cwd(), "eval-results");

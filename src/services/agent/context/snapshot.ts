@@ -7,6 +7,7 @@ import prisma from "../../../utility/prismaClient";
 import { buildCurrentLabs, labFreshness, LabFreshness } from "../../../utils/labBiomarkers";
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
 import memoryStore from "../memory/memory.store";
+import MealPlanService from "../../meal_plan/model/meal_plan.model";
 import {
   dayKey,
   daysBetween,
@@ -81,6 +82,19 @@ export type PatientSnapshot = {
     outcomeMetric: { metric: string | null; start: number | null; target: number | null; unit: string | null } | null;
     targets: SnapshotTarget[];
     watchOuts: { nutrientKey: string; level: string; limit: number | null; unit: string | null; reason: string | null }[];
+  };
+  /** Saved meal plan covering these days (self only); today/tomorrow meals inline. */
+  mealPlan: null | {
+    id: string;
+    title: string;
+    startDate: string;
+    endDate: string;
+    days: number;
+    todayIndex: number | null;
+    ended: boolean;
+    notStarted: boolean;
+    today: { id: string; mealType: string; name: string; calories: number; proteins: number; ingredients: string[] }[];
+    tomorrow: { id: string; mealType: string; name: string; calories: number; proteins: number; ingredients: string[] }[];
   };
   today_log: {
     calories: number | null;
@@ -248,6 +262,11 @@ export async function buildPatientSnapshot(
       }),
       memoryStore.listActive(patientId, MAX_MEMORIES),
     ]);
+
+  const mealPlan = await MealPlanService.forSnapshot(patientId, today).catch((e) => {
+    console.error("snapshot: meal plan", e);
+    return null;
+  });
 
   /* ----------------------------- today ----------------------------- */
   const todayEntries = todayFood.flatMap((d) => d.foodEntries);
@@ -418,6 +437,7 @@ export async function buildPatientSnapshot(
       onboardingComplete: patient.onBoardingComplete,
     },
     plan: planOut,
+    mealPlan,
     today_log,
     week: weekOut,
     vitals,
@@ -509,6 +529,17 @@ export function renderSnapshot(s: PatientSnapshot): string {
   } else {
     L.push("plan: none active (offer to set one up via the Plan screen)");
   }
+
+  if (s.mealPlan) {
+    const mp = s.mealPlan;
+    const meals = (xs: typeof mp.today) => xs.map((m) => `${m.mealType.toLowerCase()} — ${m.name} (${m.calories} kcal, P${fmt(m.proteins)})`).join("; ");
+    if (mp.todayIndex) {
+      L.push(`meal plan: "${mp.title}" · day ${mp.todayIndex} of ${mp.days} (${mp.startDate}→${mp.endDate}); get_meal_plan for other days`);
+      L.push(`  today's planned meals: ${meals(mp.today) || "none"}`);
+      if (mp.tomorrow.length) L.push(`  tomorrow: ${meals(mp.tomorrow)}`);
+    } else if (mp.notStarted) L.push(`meal plan: "${mp.title}" saved, starts ${mp.startDate} (${mp.days} days)`);
+    else L.push(`meal plan: "${mp.title}" ended ${mp.endDate} — offer a new one if they want`);
+  } else L.push("meal plan: none saved (generate_meal_plan makes one; the card has Save)");
 
   const t = s.today_log;
   L.push(

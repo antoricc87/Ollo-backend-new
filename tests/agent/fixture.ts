@@ -114,6 +114,7 @@ export async function destroyFixture() {
   // Tracker tables hang off userId without FKs — clear them explicitly.
   const uid = p.id;
   await unlinkClinician(uid);
+  await prisma.mealPlan.deleteMany({ where: { patientId: uid } });
   await prisma.foodEntry.deleteMany({ where: { dailyFood: { userId: uid } } });
   await prisma.dailyFood.deleteMany({ where: { userId: uid } });
   await prisma.weeklyFood.deleteMany({ where: { userId: uid } }).catch(() => null);

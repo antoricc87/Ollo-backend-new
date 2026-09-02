@@ -7,7 +7,8 @@ import {
   getClient,
   modelRequestParams,
 } from "./mealAnalysis.service";
-import { AnalyzedMeal, MEAL_TYPES } from "./mealAnalysis.schema";
+import { AnalyzedMeal, MEAL_TYPES, PORTION_STOPS, PortionStop } from "./mealAnalysis.schema";
+import { applyPortionStop, DEFAULT_PORTION_STOP, ensurePortionBase, gramsAtEveryStop, isMealPortionScalable, isPortionStop, rescaleTo } from "./mealPortion";
 import { dayLabel, resolveMealDate } from "./mealDate";
 import type { PatientContext } from "./mealAnalysis.types";
 
@@ -31,6 +32,8 @@ export type BatchMeal = AnalyzedMeal & {
   datePhrase: string;
   /** Unticked meals are shown but not saved. */
   included: boolean;
+  /** How much of it: the meal portion dial, applied to assumed portions only. */
+  portion: PortionStop;
   /** "Already logged" note: description of the existing entry with the same slot. */
   duplicateOf: string | null;
 };
@@ -194,7 +197,17 @@ export async function analyzeNarration(text: string, opts: NarrationOptions): Pr
         });
         continue;
       }
-      meals.push({ ...m, date: resolved.date, datePhrase: phrase, included: true, duplicateOf: null });
+      const portion = isPortionStop((m as any).portion) ? ((m as any).portion as PortionStop) : DEFAULT_PORTION_STOP;
+      const meal: BatchMeal = { ...m, ingredients: m.ingredients.map((i) => ({ ...i })), date: resolved.date, datePhrase: phrase, included: true, duplicateOf: null, portion: DEFAULT_PORTION_STOP };
+      // Stamp the reference grams before anything can scale them, then apply what
+      // the person said about the meal as a whole ("I ate a lot") so the proposal
+      // already reads right and the card opens on the matching stop.
+      ensurePortionBase(meal.ingredients);
+      if (portion !== DEFAULT_PORTION_STOP) {
+        applyPortionStop(meal.ingredients, portion);
+        meal.portion = portion;
+      }
+      meals.push(meal);
     }
   });
   const unique = dedupeMeals(meals);
@@ -235,6 +248,9 @@ export const mealRow = (m: BatchMeal, index: number) => ({
   mealType: m.mealType,
   included: m.included,
   duplicateOf: m.duplicateOf,
+  portion: m.portion ?? DEFAULT_PORTION_STOP,
+  /** False when every item's amount came from the user or a brand — the dial would do nothing. */
+  portionScalable: isMealPortionScalable(m.ingredients as any),
   calories: Math.round(sum(m.ingredients.map((i) => i.calories))),
   protein_g: r1(sum(m.ingredients.map((i) => i.nutrients?.proteins))),
   carbs_g: r1(sum(m.ingredients.map((i) => i.nutrients?.carbohydrates))),
@@ -247,6 +263,8 @@ export const mealRow = (m: BatchMeal, index: number) => ({
     calories: Math.round(i.calories ?? 0),
     portionSource: i.portionSource ?? null,
     nutrientSource: (i as any).nutrientSource ?? null,
+    /** Precomputed on the server so the card never re-derives the band and drifts. */
+    gramsAt: gramsAtEveryStop(i as any),
   })),
 });
 
@@ -287,9 +305,11 @@ export type MealPreview = ReturnType<typeof buildMealPreview>;
 /* ------------------------------- edits ---------------------------------- */
 
 /**
- * Card edits: `{ meals: [{ index, included?, date?, mealType?, ingredients? }] }`
+ * Card edits: `{ meals: [{ index, included?, date?, mealType?, portion?, ingredients? }] }`
  * — `index` addresses `analysis.meals`; `ingredients[].grams: null` removes the
  * ingredient. Calories and every numeric nutrient scale linearly with grams.
+ * `portion` is the coarse dial (see mealPortion.ts); it is applied before any
+ * explicit gram edit, which always wins.
  */
 export const MealEditsSchema = z.object({
   meals: z
@@ -299,6 +319,7 @@ export const MealEditsSchema = z.object({
         included: z.boolean().optional(),
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         mealType: z.enum(MEAL_TYPES).optional(),
+        portion: z.enum(PORTION_STOPS).optional(),
         ingredients: z.array(z.object({ index: z.number().int().min(0), grams: z.number().min(0).max(5000).nullable() })).max(60).optional(),
       })
     )
@@ -315,6 +336,7 @@ export function normalizePreview(preview: any): MealPreview {
     datePhrase: m.datePhrase ?? "",
     included: m.included ?? true,
     duplicateOf: m.duplicateOf ?? null,
+    portion: isPortionStop(m.portion) ? m.portion : DEFAULT_PORTION_STOP,
   }));
   return buildMealPreview(meals, {
     today: preview?.today ?? date,
@@ -332,11 +354,19 @@ export function applyMealEdits(rawPreview: any, rawEdits: unknown): MealPreview 
   const today = preview.today;
   const meals: BatchMeal[] = preview.analysis.meals.map((m) => ({ ...m, ingredients: m.ingredients.map((i) => ({ ...i })) }));
   if (!meals.length) throw new Error("preview has no analysed meals to edit");
+  for (const m of meals) ensurePortionBase(m.ingredients);
   for (const me of edits.meals) {
     const meal = meals[me.index];
     if (!meal) throw new Error(`no meal at index ${me.index}`);
     if (me.included !== undefined) meal.included = me.included;
     if (me.mealType) meal.mealType = me.mealType;
+    // The dial goes first and is recomputed from the untouched band, so sending
+    // the same stop twice changes nothing. An explicit gram edit below is an
+    // absolute target, so it overrides the dial for that ingredient.
+    if (me.portion && me.portion !== meal.portion) {
+      applyPortionStop(meal.ingredients, me.portion);
+      meal.portion = me.portion;
+    }
     if (me.date) {
       if (me.date > today) throw new Error("a meal can't be logged on a future day");
       meal.date = me.date;
@@ -349,13 +379,10 @@ export function applyMealEdits(rawPreview: any, rawEdits: unknown): MealPreview 
         removed.add(ie.index);
         continue;
       }
-      const factor = ing.grams > 0 ? ie.grams / ing.grams : 1;
-      ing.grams = ie.grams;
-      ing.quantity = Math.round((ing.quantity ?? 1) * factor * 100) / 100;
-      ing.calories = Math.round((ing.calories ?? 0) * factor * 10) / 10;
+      rescaleTo(ing, ie.grams);
+      // Typing a weight is the user stating the amount — it also freezes the item
+      // against the dial from here on. The coarse stop never does this.
       ing.portionSource = "user";
-      if (ing.nutrients && typeof ing.nutrients === "object")
-        for (const k of Object.keys(ing.nutrients)) if (typeof ing.nutrients[k] === "number") ing.nutrients[k] = Math.round(ing.nutrients[k] * factor * 1000) / 1000;
     }
     meal.ingredients = meal.ingredients.filter((_, i) => !removed.has(i));
     if (!meal.ingredients.length) throw new Error("a meal must keep at least one ingredient — untick it instead");

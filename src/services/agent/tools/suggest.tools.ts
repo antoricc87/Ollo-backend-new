@@ -6,6 +6,7 @@ import { analyzeMeal } from "../../meal_analysis/mealAnalysis.service";
 import { MEAL_TYPES } from "../../meal_analysis/mealAnalysis.schema";
 import { defineTool, subjectField } from "./registry";
 import { nutritionContext, type MacroRange } from "./generation.tools";
+import MealPlanService from "../../meal_plan/model/meal_plan.model";
 
 /**
  * suggest_meal — ONE meal for the next slot, sized to what is left of today's
@@ -39,12 +40,25 @@ export const suggestMeal = defineTool({
   schema: z.object({
     mealType: z.enum(MEAL_TYPES).optional().describe("Omit to pick the next slot from the time of day"),
     request: z.string().max(400).optional().describe("The user's wishes verbatim: ingredients on hand, cuisine, quick, light, 'like my usual'…"),
+    planDay: z.number().int().min(1).max(7).optional().describe("SWAP in the saved meal plan: the plan day (1-based) whose slot this replaces; pass mealType too. The meal is sized like the one it replaces and the card gets a 'Put in plan' button."),
     subjectId: subjectField,
   }),
   risk: "generate",
   async run(ctx, input) {
     const subject = await ctx.resolveSubject(input.subjectId);
     const mealType = input.mealType ?? slotFor(ctx.timeZone);
+    /* ----------------------------- plan swap ----------------------------- */
+    let planSlot: { planId: string; mealId: string; day: number; date: string; mealType: string; replaces: string; calories: number; proteins: number } | null = null;
+    if (input.planDay) {
+      if (!subject.isSelf) return { result: { error: "Meal-plan swaps are only for the user's own plan." } };
+      if (!input.mealType) return { result: { error: "For a plan swap pass mealType (which slot of that day)." } };
+      const plan = await MealPlanService.getActive(ctx.patientId);
+      const day = plan?.daysOut.find((d) => d.day === input.planDay);
+      const slot = day?.meals.find((m) => m.mealType === input.mealType);
+      if (!plan || !day) return { result: { error: plan ? `The saved plan has ${plan.days} days; there is no day ${input.planDay}.` : "There is no saved meal plan to swap in. Generate one and save it first." } };
+      if (!slot) return { result: { error: `Day ${input.planDay} of the plan has no ${input.mealType.toLowerCase()} slot.` } };
+      planSlot = { planId: plan.id, mealId: slot.id, day: day.day, date: day.date, mealType: slot.mealType, replaces: slot.name, calories: slot.calories, proteins: slot.proteins };
+    }
     const [context, todayFood, favorites, memories] = await Promise.all([
       nutritionContext(ctx.patientId, subject.id),
       prisma.dailyFood.findMany({ where: { userId: subject.id, date: { startsWith: ctx.today } }, include: { foodEntries: { select: { mealType: true, description: true, calories: true, proteins: true, carbohydrates: true, fats: true } } } }),
@@ -67,17 +81,19 @@ export const suggestMeal = defineTool({
     const share = SLOT_SHARE[mealType] / (SLOT_SHARE[mealType] + shareAfter || 1);
     const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
     const isSnack = mealType === "SNACK";
-    const aimKcal = kcalLeft != null ? r0(clamp(kcalLeft * share, isSnack ? 100 : 300, isSnack ? 300 : 900)) : dayKcal != null ? r0(dayKcal * SLOT_SHARE[mealType]) : isSnack ? 200 : 550;
-    const aimProtein = proteinLeft != null ? r0(clamp(proteinLeft * share, isSnack ? 8 : 20, isSnack ? 25 : 60)) : isSnack ? 10 : 35;
+    // A plan swap is sized like the meal it replaces, so the day's totals still hold.
+    const aimKcal = planSlot ? r0(clamp(planSlot.calories, isSnack ? 100 : 300, isSnack ? 300 : 900)) : kcalLeft != null ? r0(clamp(kcalLeft * share, isSnack ? 100 : 300, isSnack ? 300 : 900)) : dayKcal != null ? r0(dayKcal * SLOT_SHARE[mealType]) : isSnack ? 200 : 550;
+    const aimProtein = planSlot ? r0(clamp(planSlot.proteins, isSnack ? 8 : 20, isSnack ? 25 : 60)) : proteinLeft != null ? r0(clamp(proteinLeft * share, isSnack ? 8 : 20, isSnack ? 25 : 60)) : isSnack ? 10 : 35;
 
     /* ----------------------------- generate ----------------------------- */
     const draft = await getLLM().json<{ name: string; description: string; ingredients: { item: string; grams: number; note: string }[]; prepMinutes: number; why: string; alternatives: { name: string; description: string }[] }>({
-      system: `You are a dietitian suggesting ONE ${mealType.toLowerCase()} for right now. Hit the calorie and protein aim (±15%) with realistic portions in grams — count honestly (protein 4 kcal/g, carbs 4, fat 9). Respect allergies (never, in any form), intolerances, dislikes, watch-outs (keep flagged nutrients low) and remembered constraints; lean on likes and favorites when they fit. Honour the request (ingredients on hand, time, cuisine). Simple food people actually cook. Two different alternatives in one line each. No supplements, no medical claims.`,
+      system: `You are a dietitian suggesting ONE ${mealType.toLowerCase()}${planSlot ? ` to REPLACE "${planSlot.replaces}" on day ${planSlot.day} of the user's saved meal plan — something clearly different from it` : " for right now"}. Hit the calorie and protein aim (±15%) with realistic portions in grams — count honestly (protein 4 kcal/g, carbs 4, fat 9). Respect allergies (never, in any form), intolerances, dislikes, watch-outs (keep flagged nutrients low) and remembered constraints; lean on likes and favorites when they fit. Honour the request (ingredients on hand, time, cuisine). Simple food people actually cook. Two different alternatives in one line each. No supplements, no medical claims.`,
       user: JSON.stringify({
         mealType,
         aim: { calories: aimKcal, protein_g: aimProtein },
         today: { eatenKcal, eatenProtein_g: eatenProtein, kcalLeft, proteinLeft_g: proteinLeft, dailyTargets: t },
         request: input.request ?? null,
+        ...(planSlot ? { replacing: { name: planSlot.replaces, calories: planSlot.calories, protein_g: planSlot.proteins } } : {}),
         context,
         favorites: favorites.map((f) => `${f.mealType.toLowerCase()}: ${f.description} (${f.calories} kcal, ${r0(f.proteins)} g protein)`),
         remembered: memories.map((m) => m.content),
@@ -154,6 +170,7 @@ export const suggestMeal = defineTool({
       else if (projected < lo) fit = `Light: day would land at ${r0(projected)} of ${tMin}–${tMax} kcal`;
       else fit = slotsAfter.length ? `Fits: ${nutrition.calories} kcal, leaves ${Math.max(0, laterKcal)} for later` : `Fits: day lands at ${r0(dayAfter)} of ${tMin}–${tMax} kcal`;
     } else fit = kcalLeft != null ? `${nutrition.calories} of ${kcalLeft} kcal left today` : `About ${nutrition.calories} kcal`;
+    if (planSlot) fit = `Swap: ${nutrition.calories} kcal vs ${planSlot.calories} planned (${nutrition.calories > planSlot.calories ? "+" : ""}${r0(nutrition.calories - planSlot.calories)})`;
 
     const data = {
       subject: subject.name,
@@ -171,6 +188,7 @@ export const suggestMeal = defineTool({
       rescaled,
       alternatives: draft.alternatives.slice(0, 2),
       logText,
+      planSlot,
     };
     return {
       result: {
@@ -185,9 +203,10 @@ export const suggestMeal = defineTool({
         fit,
         dayAfterThisMeal: { calories: r0(dayAfter), targetRange: t?.calories ?? null },
         alternatives: draft.alternatives.map((a) => a.name),
-        note: "The card shows the portions and a Log-it button (the user taps it; don't call log_meal yourself). Keep your text to 2–4 lines: name the meal with its calories and protein (e.g. '≈ 700 kcal, 70 g protein'), then repeat `fit` as given — it is the verdict on where the day lands, don't soften 'Light'/'over' into 'within target' — then the alternatives by name.",
+        ...(planSlot ? { planSlot: { day: planSlot.day, date: planSlot.date, replaces: planSlot.replaces } } : {}),
+        note: planSlot ? "The card shows the portions and a 'Put in plan' button that replaces the planned meal when the user taps it — don't say the plan is changed until they do. Keep your text to 2–3 lines: the new meal with its calories and protein versus the one it replaces, then the alternatives by name." : "The card shows the portions and a Log-it button (the user taps it; don't call log_meal yourself). Keep your text to 2–4 lines: name the meal with its calories and protein (e.g. '≈ 700 kcal, 70 g protein'), then repeat `fit` as given — it is the verdict on where the day lands, don't soften 'Light'/'over' into 'within target' — then the alternatives by name.",
       },
-      cards: [{ type: "meal_suggestion", title: `${mealType.charAt(0) + mealType.slice(1).toLowerCase()} idea`, data }],
+      cards: [{ type: "meal_suggestion", title: planSlot ? `Swap · day ${planSlot.day} ${mealType.toLowerCase()}` : `${mealType.charAt(0) + mealType.slice(1).toLowerCase()} idea`, data }],
     };
   },
 });

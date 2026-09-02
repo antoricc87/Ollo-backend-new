@@ -1,7 +1,9 @@
 import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
 import { getLLM } from "../llm/openai.client";
+import { randomUUID } from "crypto";
 import { defineTool, subjectField } from "./registry";
+import { planInputFromCard, registerDraft } from "./mealplan.tools";
 
 /**
  * Generation tools. These are the one place a tool calls the model — as a
@@ -218,14 +220,22 @@ export const generateMealPlan = defineTool({
     }
     for (const d of plan.days) for (const m of d.meals) m.name = cleanName(m.name);
     const fit = { ok: issues.length === 0, issues, targetsFrom: context.targetsFrom, revised };
-    const result = { subject: subject.name, ...plan, targets: context.dailyTargets, fit };
+    const draftId = randomUUID();
+    const result = { subject: subject.name, subjectId: subject.isSelf ? null : subject.id, draftId, ...plan, targets: context.dailyTargets, fit };
+    // Nothing is persisted; the draft is parked so save_meal_plan (or the card's Save) can pick it up.
+    try {
+      registerDraft(draftId, planInputFromCard(result), result);
+    } catch (e) {
+      console.error("generate_meal_plan: draft not registrable", e);
+    }
     return {
       result: {
+        draftId,
         title: plan.title,
         days: plan.days.map((d) => ({ day: d.day, totals: d.totals, meals: d.meals.map((m) => ({ meal: `${m.mealType.toLowerCase()}: ${m.name} (${m.calories} kcal)`, ingredients: m.ingredients })) })),
         notes: plan.notes,
         targets: context.dailyTargets,
-        cardActions: "The card has per-meal 'Log' and 'Recipe' buttons and a 'Shopping list' button; they send you a follow-up. For a shopping-list request, call build_grocery_list with every ingredient line above.",
+        cardActions: "The card has per-meal 'Log' and 'Recipe' buttons, a 'Shopping list' button and a 'Save this week' button. Nothing is saved yet: if the user asks to save/keep/use it, call save_meal_plan with this draftId. For a shopping-list request, call build_grocery_list with every ingredient line above.",
         fit: issues.length ? { ok: false, issues, note: "Tell the user plainly which days miss the targets and by how much; offer to adjust. Do not say it fits." } : { ok: true },
       },
       cards: [{ type: "meal_plan", title: plan.title, data: result }],

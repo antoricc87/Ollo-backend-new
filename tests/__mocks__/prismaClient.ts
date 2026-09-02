@@ -89,6 +89,10 @@ const mockPrisma = {
   favMeal: {
     create: jest.fn(),
   },
+  // createFavMeal loads the entries from the DB rather than trusting the request.
+  foodEntry: {
+    findMany: jest.fn(),
+  },
 
   userFCMToken: {
     deleteMany: jest.fn(),

@@ -15,6 +15,13 @@ import {
 } from "../../../utils/formatDate";
 import CaloriesService from "../../calories_tracker/model/calories.model";
 import {
+  FAV_MEAL_INCLUDE,
+  favMealTotals,
+  ingredientsFromFoodEntries,
+  loadEntriesForFavourite,
+  toPrismaFavIngredient,
+} from "./favMealIngredients";
+import {
   getPatientById,
   updatePatientSummarySection,
 } from "../../patient/model/patient.model";
@@ -755,100 +762,41 @@ class NutritionService {
     }
   }
   // create fav meal
+  /**
+   * Save a favourite from food entries the user already logged.
+   *
+   * The per-ingredient rows are the point: they are loaded from the DB (not
+   * trusted from the request) so logging the favourite later is a verbatim copy
+   * — no model call, no resolver call, identical numbers every time. The scalar
+   * macro columns are a cache recomputed from those rows.
+   */
   async createFavMeal(
     foodEntries: FoodEntry[],
     patientId: string,
     description: string,
-    mealType: any
+    mealType: any,
+    options: { slot?: any; aliases?: string[] } = {}
   ) {
     try {
+      const ids = (foodEntries || []).map((e: any) => e?.id).filter(Boolean);
+      const entries = await loadEntriesForFavourite(ids);
+      if (!entries.length) throw new Error("No food entries found for this favourite");
+      const ingredients = ingredientsFromFoodEntries(entries);
+      if (!ingredients.length) throw new Error("Those food entries have nothing to save");
+
       const favMeal = await prisma.favMeal.create({
+        include: FAV_MEAL_INCLUDE,
         data: {
           userId: patientId,
           description: description,
           mealType: mealType,
+          slot: options.slot ?? null,
+          aliases: options.aliases ?? [],
           quantity: "1",
-          ingredients: {
-            connect: foodEntries.map((entry) => ({ id: entry.id })),
-          },
-          calories: foodEntries.reduce((acc, entry) => acc + entry.calories, 0),
-          carbohydrates: foodEntries.reduce(
-            (acc, entry) => acc + (entry.carbohydrates ?? 0),
-            0
-          ),
-          proteins: foodEntries.reduce(
-            (acc, entry) => acc + (entry.proteins ?? 0),
-            0
-          ),
-          fats: foodEntries.reduce((acc, entry) => acc + (entry.fats ?? 0), 0),
-          fiber: foodEntries.reduce(
-            (acc, entry) => acc + (entry.fiber ?? 0),
-            0
-          ),
-          sodium: foodEntries.reduce(
-            (acc, entry) => acc + (entry.sodium ?? 0),
-            0
-          ),
-          naturalSugar: foodEntries.reduce(
-            (acc, entry) => acc + (entry.naturalSugar ?? 0),
-            0
-          ),
-          addedSugar: foodEntries.reduce(
-            (acc, entry) => acc + (entry.addedSugar ?? 0),
-            0
-          ),
-          calcium: foodEntries.reduce(
-            (acc, entry) => acc + (entry.calcium ?? 0),
-            0
-          ),
-          magnesium: foodEntries.reduce(
-            (acc, entry) => acc + (entry.magnesium ?? 0),
-            0
-          ),
-          iron: foodEntries.reduce((acc, entry) => acc + (entry.iron ?? 0), 0),
-          potassium: foodEntries.reduce(
-            (acc, entry) => acc + (entry.potassium ?? 0),
-            0
-          ),
-          omega_3: foodEntries.reduce(
-            (acc, entry) => acc + (entry.omega_3 ?? 0),
-            0
-          ),
-          cholesterol: foodEntries.reduce(
-            (acc, entry) => acc + (entry.cholesterol ?? 0),
-            0
-          ),
-          zinc: foodEntries.reduce((acc, entry) => acc + (entry.zinc ?? 0), 0),
-          vitaminD: foodEntries.reduce(
-            (acc, entry) => acc + (entry.vitaminD ?? 0),
-            0
-          ),
-          vitaminC: foodEntries.reduce(
-            (acc, entry) => acc + (entry.vitaminC ?? 0),
-            0
-          ),
-          vitaminB12: foodEntries.reduce(
-            (acc, entry) => acc + (entry.vitaminB12 ?? 0),
-            0
-          ),
-          vitaminE: foodEntries.reduce(
-            (acc, entry) => acc + (entry.vitaminE ?? 0),
-            0
-          ),
-          // ✅ Newly added fields
-          glycemicLoad: foodEntries.reduce(
-            (acc, entry) => acc + (entry.glycemicLoad ?? 0),
-            0
-          ),
-          vegetableServings: foodEntries.reduce(
-            (acc, entry) => acc + (entry.vegetableServings ?? 0),
-            0
-          ),
-          fruitServings: foodEntries.reduce(
-            (acc, entry) => acc + (entry.fruitServings ?? 0),
-            0
-          ),
-          isProcessedFood: foodEntries.some((entry) => entry.isProcessedFood),
+          ingredients: { create: ingredients.map(toPrismaFavIngredient) },
+          // Kept until FoodEntry.favMealId is dropped, so old clients still read it.
+          legacyEntries: { connect: entries.map((e) => ({ id: e.id })) },
+          ...favMealTotals(ingredients),
         },
       });
       if (favMeal) return favMeal;
@@ -864,17 +812,18 @@ class NutritionService {
       // First, find the FavMeal to get the associated food entries
       const favMeal = await prisma.favMeal.findUnique({
         where: { id: favMealId },
-        include: { ingredients: true }, // Include food entries
+        include: { legacyEntries: { select: { id: true } } },
       });
 
       if (!favMeal) {
         throw new Error("FavMeal not found");
       }
 
-      // Remove the favMealId from each FoodEntry
+      // FavMealIngredient rows cascade. Only the legacy FoodEntry links have to
+      // be unhooked by hand — they are logged meals and must outlive the favourite.
       await prisma.foodEntry.updateMany({
-        where: { id: { in: favMeal.ingredients.map((entry) => entry.id) } },
-        data: { favMealId: null }, // Set favMealId to null
+        where: { id: { in: favMeal.legacyEntries.map((entry) => entry.id) } },
+        data: { favMealId: null },
       });
 
       // Now delete the FavMeal itself

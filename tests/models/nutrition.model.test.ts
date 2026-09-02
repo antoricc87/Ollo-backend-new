@@ -283,159 +283,126 @@ describe("NutritionService.getNutrientsTracker", () => {
 describe("NutritionService.createFavMeal", () => {
   const mockPatientId = "test-patient-id";
   const mockDescription = "Healthy breakfast";
-  const mockMealType = "Breakfast";
-  const mockFoodEntries = [
+  const mockMealType = "BREAKFAST";
+
+  /**
+   * A favourite is saved from food entries the user already logged. The
+   * per-ingredient rows are copied from the DB (not from the request) so
+   * logging it later is a verbatim copy; the scalar macro columns are a cache
+   * recomputed from those rows.
+   */
+  const mockEntries = [
     {
       id: "food1",
       description: "Grilled Chicken",
       quantity: "1",
-      calories: 200,
-      dailyFoodId: "daily1",
-      favMealId: null,
-      carbohydrates: 30,
-      proteins: 10,
-      fats: 5,
-      fiber: 3,
-      sodium: 100,
-      naturalSugar: 5,
-      addedSugar: 2,
-      calcium: 20,
-      magnesium: 10,
-      iron: 2,
-      potassium: 50,
-      omega_3: 1,
-      cholesterol: 10,
-      zinc: 5,
-      vitaminD: 2,
-      vitaminC: 15,
-      vitaminB12: 0.5,
-      vitaminE: 3,
-      createdAt: "2024-12-14T00:00:00.000Z",
+      calories: 999, // ignored — the ingredient rows are the truth
+      ingredients: [
+        {
+          sortOrder: 0,
+          name: "Grilled chicken breast",
+          searchTerm: "chicken breast, grilled",
+          brand: null,
+          quantity: 150,
+          unit: "g",
+          grams: 150,
+          gramsLow: 130,
+          gramsHigh: 180,
+          portionSource: "personalized_default",
+          portionAssumption: "Assumed a 150 g breast",
+          confidence: 0.8,
+          foodGroup: "protein",
+          isProcessedFood: false,
+          glycemicIndex: 0,
+          calories: 250,
+          nutrients: { proteins: 46, carbohydrates: 0, fats: 6, vegetableServings: 0, fruitServings: 0 },
+          per100g: null,
+          nutrientSource: "usda",
+          referenceSource: "usda",
+          referenceId: "171077",
+          referenceDescription: "Chicken, broilers or fryers, breast",
+        },
+      ],
     },
     {
       id: "food2",
       description: "Roasted Veggies",
-      quantity: "1",
+      quantity: "1 cup",
       calories: 150,
-      dailyFoodId: "daily2",
-      favMealId: null,
+      proteins: 4,
       carbohydrates: 20,
-      proteins: 15,
       fats: 7,
-      fiber: 2,
-      sodium: 80,
-      naturalSugar: 3,
-      addedSugar: 1,
-      calcium: 25,
-      magnesium: 15,
-      iron: 3,
-      potassium: 70,
-      omega_3: 2,
-      cholesterol: 15,
-      zinc: 6,
-      vitaminD: 3,
-      vitaminC: 20,
-      vitaminB12: 0.8,
-      vitaminE: 4,
-      createdAt: "2024-12-14T00:00:00.000Z",
+      ingredients: [], // legacy shape: no breakdown
     },
   ];
 
-  const mockFavMeal = {
-    id: "favMeal1",
-    userId: mockPatientId,
-    description: mockDescription,
-    mealType: mockMealType,
-    quantity: "1",
-    calories: 350,
-    carbohydrates: 50,
-    proteins: 25,
-    fats: 12,
-    fiber: 5,
-    sodium: 180,
-    naturalSugar: 8,
-    addedSugar: 3,
-    calcium: 45,
-    magnesium: 25,
-    iron: 5,
-    potassium: 120,
-    omega_3: 3,
-    cholesterol: 25,
-    zinc: 11,
-    vitaminD: 5,
-    vitaminC: 35,
-    vitaminB12: 1.3,
-    vitaminE: 7,
-    ingredients: mockFoodEntries.map((entry) => ({ id: entry.id })),
-  };
-
   beforeEach(() => {
     jest.clearAllMocks();
+    mockPrisma.foodEntry.findMany.mockResolvedValue(mockEntries);
   });
 
-  it("should create a favorite meal successfully", async () => {
-    // Mock the Prisma create call
-    mockPrisma.favMeal.create.mockResolvedValue(mockFavMeal);
+  it("copies ingredient rows from the logged entries and recomputes the totals", async () => {
+    mockPrisma.favMeal.create.mockResolvedValue({ id: "fav1" });
 
     const result = await NutritionService.createFavMeal(
-      mockFoodEntries,
+      [{ id: "food1" }, { id: "food2" }] as any,
       mockPatientId,
       mockDescription,
-      mockMealType
+      mockMealType,
+      { slot: "BREAKFAST", aliases: ["the chicken one"] }
     );
+    expect(result).toEqual({ id: "fav1" });
 
-    // Verify the result
-    expect(result).toEqual(mockFavMeal);
-
-    // Verify Prisma call
-    expect(mockPrisma.favMeal.create).toHaveBeenCalledWith({
-      data: {
-        userId: mockPatientId,
-        description: mockDescription,
-        mealType: mockMealType,
-        quantity: "1",
-        ingredients: {
-          connect: mockFoodEntries.map((entry) => ({ id: entry.id })),
-        },
-        calories: 350,
-        carbohydrates: 50,
-        proteins: 25,
-        fats: 12,
-        fiber: 5,
-        sodium: 180,
-        naturalSugar: 8,
-        addedSugar: 3,
-        calcium: 45,
-        magnesium: 25,
-        iron: 5,
-        potassium: 120,
-        omega_3: 3,
-        cholesterol: 25,
-        zinc: 11,
-        vitaminD: 5,
-        vitaminC: 35,
-        vitaminB12: 1.3,
-        vitaminE: 7,
-      },
+    // Entries come from the DB, not from the request body.
+    expect(mockPrisma.foodEntry.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ["food1", "food2"] } },
+      include: { ingredients: { orderBy: { sortOrder: "asc" } } },
     });
+
+    const arg = mockPrisma.favMeal.create.mock.calls[0][0];
+    const created = arg.data.ingredients.create;
+    expect(created).toHaveLength(2);
+    expect(created[0]).toMatchObject({
+      sortOrder: 0,
+      name: "Grilled chicken breast",
+      grams: 150,
+      gramsLow: 130,
+      gramsHigh: 180,
+      portionSource: "personalized_default",
+      nutrientSource: "usda",
+      referenceId: "171077",
+    });
+    // The legacy entry becomes one ingredient, frozen against the portion dial.
+    expect(created[1]).toMatchObject({ name: "Roasted Veggies", calories: 150, portionSource: "user" });
+
+    // Totals are the sum of the ingredients (250 + 150), not the entries' own numbers.
+    expect(arg.data).toMatchObject({
+      userId: mockPatientId,
+      description: mockDescription,
+      mealType: mockMealType,
+      slot: "BREAKFAST",
+      aliases: ["the chicken one"],
+      calories: 400,
+      proteins: 50,
+      carbohydrates: 20,
+      fats: 13,
+    });
+    // Legacy links are kept until FoodEntry.favMealId is dropped.
+    expect(arg.data.legacyEntries).toEqual({ connect: [{ id: "food1" }, { id: "food2" }] });
+  });
+
+  it("throws when none of the food entries exist", async () => {
+    mockPrisma.foodEntry.findMany.mockResolvedValue([]);
+    await expect(
+      NutritionService.createFavMeal([{ id: "missing" }] as any, mockPatientId, mockDescription, mockMealType)
+    ).rejects.toThrow(/No food entries found/);
+    expect(mockPrisma.favMeal.create).not.toHaveBeenCalled();
   });
 
   it("should throw an error when Prisma throws an error", async () => {
-    // Mock Prisma to throw an error
     mockPrisma.favMeal.create.mockRejectedValue(new Error("Database error"));
-
     await expect(
-      NutritionService.createFavMeal(
-        mockFoodEntries,
-        mockPatientId,
-        mockDescription,
-        mockMealType
-      )
+      NutritionService.createFavMeal([{ id: "food1" }] as any, mockPatientId, mockDescription, mockMealType)
     ).rejects.toThrow("Database error");
-
-    // Verify Prisma call
-    expect(mockPrisma.favMeal.create).toHaveBeenCalledWith({
-      data: expect.any(Object),
-    });
   });
 });

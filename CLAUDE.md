@@ -256,6 +256,103 @@ Follow-ups done 2026-08-25:
   proposal/audit row on the account, and only on success). All steps pass
   2026-08-27; `npm run eval:agent` 24/24; safety 7/7.
 
+## Saved meal plans (Aug 30 2026) — `src/services/meal_plan/`
+
+Ruling (user, 2026-08-30): meal planning stays Ollie-only, but a plan can be
+SAVED for the coming days; "checking" a meal means LOGGING it, not ticking an
+adherence box (no adherence score — the Health Score judges outcomes).
+- Models `MealPlan` (one ACTIVE per patient; save → previous REPLACED;
+  `startDate` local YYYY-MM-DD, `days`, `targets`/`fit` JSON snapshots,
+  `subjectId` reserved) + `MealPlanMeal` (day/position/mealType/name/
+  ingredients[]/calories/proteins/carbs/fats/prepMinutes/`swappedAt`).
+  Reuses `PlanStatus`. NOTHING about logged state is stored: `model/
+  meal_plan.model.ts` derives `logged {description, calories, matched}` per
+  slot from FoodEntry rows on that date (`looksLike()` = ≥ half of the
+  plan meal's distinctive words appear in the logged description).
+- Routes (patient token): `GET /api/meal-plan/active` → `MealPlanView`
+  (`daysOut[].meals[].logged`, `todayIndex`, `today`), `POST /api/meal-plan`
+  (body = generator card shape; `normalizeMealPlanInput` validates), `PUT
+  /api/meal-plan/:planId/meals/:mealId` (swap in place), `PUT
+  /api/meal-plan/:planId/status`.
+- Agent: `generate_meal_plan` is still a pure draft, but now carries a
+  `draftId` (in-memory 6 h `registerDraft`, and the card persisted in the
+  ASSISTANT row is the fallback). `tools/mealplan.tools.ts`: `get_meal_plan`
+  (read; card `meal_plan` with `data.saved`), `save_meal_plan` (WRITE →
+  proposal `{title, startDate, endDate, days, firstDay, replaces, plan}` →
+  commit `MealPlanService.create` → card `meal_plan_saved`). `suggest_meal`
+  takes `planDay` (+ `mealType`): sized like the meal it replaces, card
+  `data.planSlot {planId, mealId, day, date, replaces}` → the app's "Put in
+  plan" calls the swap route. Snapshot has a `mealPlan` block (today +
+  tomorrow, or "none saved" / "starts …" / "ended …") and the prompt says:
+  answer "what should I eat" from the plan when one covers today, offer a
+  swap, never claim saved before confirmation.
+- Scripts: `scripts/mealplan-smoke.ts [email]` (service round trip, no LLM,
+  self-cleaning — passes 2026-08-30); eval scenario `meal_plan_save`
+  (generate → save proposal). Fixture cleanup deletes `mealPlan` rows.
+
+## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`
+
+"How much of it" as ONE coarse choice per meal (light | normal | hearty | lots)
+instead of quantifying every ingredient. Plan: `docs/low-effort-logging-plan.md`
+§3. Pure module, unit-tested in `tests/mealPortion.test.ts`.
+- Stops walk the analyser's OWN band: light → `gramsLow`, normal → `grams`,
+  hearty → `gramsHigh`, lots → `gramsHigh × 1.25`; per side, a degenerate band
+  falls back to ×0.7 / ×1.4 / ×1.8 (the size-word scale in the prompt).
+- **A portion with `portionSource` "user" or "brand" NEVER moves, at any stop.**
+  This is the whole guard rail — the eval asserts it on every case
+  (`portionInvariance`, 100 % over 89 items; anything less is a bug here).
+- Idempotent AND reversible: every stop is recomputed from `gramsBase` (stamped
+  once by `ensurePortionBase`) and the untouched band, never from current grams.
+  `rescaleTo` moves quantity/calories/nutrients only.
+- `MealEditsSchema` gained meal-level `portion`; `applyMealEdits` applies it
+  FIRST, then explicit `ingredients[].grams` on top (an absolute target, so it
+  wins and — unlike the dial — sets `portionSource: "user"`). `mealRow` sends
+  the app `gramsAt {light,normal,hearty,lots}` per ingredient plus `portion` /
+  `portionScalable`, so the card does no arithmetic and cannot drift. The model
+  never sees `gramsAt` (`modelDays()` is unchanged).
+- Language sets it: `portion` on `MealSchema` (nullable) + ONE bullet in Step 4
+  of the prompt. **Placement matters** — as its own "Step 2b" section between
+  Step 2 and Step 3 it cost 3–8 points of within-tolerance kcal accuracy across
+  two runs; in Step 4 it is back at baseline with wording→stop at 100 %. Measure
+  placement, not just wording (run-to-run failure churn is ~5–8 cases).
+  `analyzeNarration` applies a language-set stop immediately.
+- `FoodEntry.portionStop` records what was logged at (feeds the future per-user
+  portion bias, plan §3.5). Nullable — Railway's boot `db push` handles it.
+
+## Favourite meals, per ingredient (Aug 31 2026) — `src/services/nutrition/model/favMealIngredients.ts`
+
+Step 3 of `docs/low-effort-logging-plan.md` §4.1. `FavMeal` used to be a bag of
+`FoodEntry` links with no per-ingredient detail; now it owns
+**`FavMealIngredient`** rows that mirror `MealIngredient` column for column, so
+`calories_tracker/model/mealIngredients.ts` helpers serve both. The point is
+determinism: logging a favourite will be a verbatim copy of stored rows — no
+model call, no USDA call, identical numbers every time — because a re-estimated
+breakfast makes the weekly trend jitter.
+- `FavMeal` also gained `slot MealType?` ("my usual breakfast" resolves without
+  the dish name), `aliases String[]`, `useCount`, `lastUsedAt`.
+- `createFavMeal(entries, patientId, description, mealType, {slot, aliases})`
+  loads the entries **from the DB, not from the request**, copies their
+  ingredient rows, and recomputes the scalar macro columns from them (those
+  columns are a cache — `favMealTotals`). A legacy entry with no breakdown
+  becomes ONE synthesised ingredient marked `portionSource: "user"` with
+  `grams: 0`, so the portion dial correctly leaves it alone
+  (`isPortionScalable` now also requires grams > 0).
+- The old relation is renamed **`FavMeal.legacyEntries`** (Prisma-side only, no
+  DB change) and is still live. Backfill with
+  `scripts/backfill-fav-meal-ingredients.ts [--dry]` (idempotent) in EVERY
+  environment — Railway included — **before** dropping it and
+  `FoodEntry.favMealId`; that drop needs the one-off
+  `PRISMA_ACCEPT_DATA_LOSS=true`, removed straight after.
+- `deleteFavMeal` relies on the cascade for ingredient rows and only unhooks the
+  legacy `FoodEntry` links (logged meals must outlive the favourite).
+  `fetchFavMeals` includes `ingredients` and orders by `useCount desc` — the old
+  nested include would have thrown at runtime.
+- Note: `FoodEntry.favMealId` is a single FK, so under the old model a logged
+  meal could belong to at most ONE favourite; saving it into a second one
+  silently moved it. Another reason the copy-based shape is right.
+- Smoke: `scripts/favmeal-smoke.ts [email]` — 18/18 on 2026-08-31, self-cleaning
+  (deletes food entries through `CaloriesService.deleteFoodEntry`, never raw).
+
 ## Workouts (Aug 26 2026) — `src/services/workouts/`
 
 One physical training session = one `WorkoutSession` row (+ `WorkoutExercise`

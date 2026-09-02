@@ -39,6 +39,14 @@ export const PORTION_SOURCES = [
 ] as const;
 export type PortionSource = (typeof PORTION_SOURCES)[number];
 
+/**
+ * How much of the meal the person ate, as one coarse choice. Scales only the
+ * portions the analyser assumed (see mealPortion.ts) — never a portion the user
+ * stated or a branded item's own size.
+ */
+export const PORTION_STOPS = ["light", "normal", "hearty", "lots"] as const;
+export type PortionStop = (typeof PORTION_STOPS)[number];
+
 export const FOOD_GROUPS = [
   "vegetable",
   "fruit",
@@ -145,6 +153,12 @@ export const MealSchema = z.object({
     .string()
     .describe(
       "'today' unless the user says otherwise; use their words ('yesterday', 'Monday', '2 days ago') or an ISO date"
+    ),
+  portion: z
+    .enum(PORTION_STOPS)
+    .nullable()
+    .describe(
+      "How much of the WHOLE meal they ate, when they said something about the meal as a whole ('I ate a lot', 'just a small plate', 'I was stuffed'): light | normal | hearty | lots. Null when they said nothing about the overall size — per-item amounts belong in quantity/grams, not here."
     ),
   ingredients: z.array(IngredientSchema),
 });

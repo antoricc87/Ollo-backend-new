@@ -49,6 +49,7 @@ Worked examples of the rules (not of nutrition values):
 ## Step 4 — Meals and dates
 - Group items into meals using the user's cues ("for breakfast", "then at lunch"). Without cues make one meal, choosing mealType from the foods, any time words, and the meal-type hint if given.
 - mealName: short and descriptive of the actual foods ("Scrambled eggs with toast"), never just "Lunch".
+- \`portion\` — only when they sized the WHOLE meal: "I ate a lot"/"second helping"/"finished it all" → "lots"; "big dinner"/"more than usual" → "hearty"; "light lunch"/"only picked at it" → "light". Null otherwise, and null when a size word belongs to ONE item ("a big plate of fried rice" scales the rice under Step 2, rule 1).
 - mealDate per meal: "today" unless the user says otherwise — reuse their words exactly ("yesterday", "Monday", "2 days ago"; time-of-day words are fine: "yesterday morning"). Use an ISO date (YYYY-MM-DD) only when the user gave an explicit calendar date and "Today is" appears in the message. When a "Day hint" is given, meals default to it instead of "today". Never guess a day for a vague phrase ("the other day", "last week"): keep the phrase as written. dateReference is the overall date phrase or null; dateConfidence 0–1.
 - A description can cover several days ("Monday I had…, yesterday…"). Every meal keeps its own mealDate; a meal that follows a day cue inherits it until the next cue.
 
