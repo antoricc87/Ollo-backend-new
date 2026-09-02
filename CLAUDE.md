@@ -662,8 +662,12 @@ match an active `Clinician.externalId`), `requireGrant("id")` (active
 Routes: `GET /api/seam/health`, `GET /api/seam/whoami`, `PUT /api/seam/clinicians/:externalId`
 (S1: directory card upsert — adopts a same-email row that has no externalId, e.g.
 the dev seed, so grants/slots survive; email owned by another externalId → 409;
-`seam.schema.ts` + `model/seam.model.ts`). Patient-scoped reads
-(snapshot, labs, trackers, plan), availability push, bookings and chats arrive
-in S2/S4/S5 — see `../docs/physician-app-plan.md`. Tests: `tests/seam/`.
+`seam.schema.ts` + `model/seam.model.ts`). S2 patient reads (`SeamPatientService`,
+all behind `requireGrant("id")`): `GET /api/seam/patients`,
+`/api/seam/patients/:id/{snapshot,labs/current,labs/risk,plan,trackers?days=}` —
+they reuse `buildPatientSnapshot` (memories/sub-accounts/client/mealPlan stripped),
+`fetchCurrentLabs`, `LabsJourneyService.getRisk`, `PlanService.getActivePlan`, and
+the tracker entry tables. Availability push, bookings and chats arrive in S4/S5 —
+see `../docs/physician-app-plan.md`. Tests: `tests/seam/`.
 Local key lives in `.env` (`SEAM_SERVICE_KEY`) and must equal the one in
 `Ollo-Clinician-Service/.env`. Not on Railway yet (physician app is local-only).
