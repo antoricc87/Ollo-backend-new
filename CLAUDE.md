@@ -649,3 +649,18 @@ UserAlert, LabReport):
   (`deletePatientById` mock has no sub-accounts array, `createPatientMobile`
   whitelist) and `nutrition.model.test.ts` (mock missing FoodEntry fields) —
   both fail on functions this change did not touch.
+
+## Seam API (Sep 2 2026) — `src/services/seam/`, Phase 2 of the backend split
+
+Service-to-service surface for `../Ollo-Clinician-Service` under `/api/seam/*`;
+never accepts a patient JWT. Guards in `seam.auth.ts`: `requireSeamKey`
+(`Authorization: Bearer <SEAM_SERVICE_KEY>`; `SEAM_SERVICE_KEYS` comma list for
+rotation; 503 when unset), `requireClinician` (`X-Clinician-External-Id` must
+match an active `Clinician.externalId`), `requireGrant("id")` (active
+`CareTeamMember` for `req.params.id`), `logSeamAccess(resource)` → `SeamAccessLog`
+(mounted FIRST on each route so 401/403 are recorded too; no FK by design).
+S0 routes: `GET /api/seam/health`, `GET /api/seam/whoami`. Patient-scoped reads
+(snapshot, labs, trackers, plan), availability push, bookings and chats arrive
+in S2/S4/S5 — see `../docs/physician-app-plan.md`. Tests: `tests/seam/`.
+Local key lives in `.env` (`SEAM_SERVICE_KEY`) and must equal the one in
+`Ollo-Clinician-Service/.env`. Not on Railway yet (physician app is local-only).

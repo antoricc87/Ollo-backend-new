@@ -57,6 +57,26 @@ model CareTeamMember {
   @@index([patientId])
 }
 
+/// One row per clinician-service call through the seam (`/api/seam/*`):
+/// which clinician, which patient (when patient-scoped), which resource, and
+/// the response status. This is the record a patient can later be shown
+/// ("Dr. Rossi viewed your labs on …"). No FK on purpose — access history
+/// must outlive both the grant and the directory row.
+model SeamAccessLog {
+  id                  String   @id @default(uuid())
+  clinicianExternalId String?
+  clinicianId         String?
+  patientId           String?
+  method              String
+  path                String
+  resource            String // health | whoami | snapshot | labs.current | …
+  status              Int
+  createdAt           DateTime @default(now())
+
+  @@index([patientId, createdAt])
+  @@index([clinicianExternalId, createdAt])
+}
+
 model WeeklyAvailability {
   id            String              @id @default(uuid())
   clinician     Clinician           @relation(fields: [clinicianId], references: [id], onDelete: Cascade)
