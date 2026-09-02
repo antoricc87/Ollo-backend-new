@@ -21,3 +21,29 @@ export const clinicianUpsertSchema = z.object({
   isActive: z.boolean().optional(),
 });
 export type ClinicianUpsert = z.infer<typeof clinicianUpsertSchema>;
+
+/* ------------------------------ S4: schedule ------------------------------ */
+
+const day = z.string().regex(/^\d{2}-\d{2}-\d{4}$/, "MM-DD-YYYY");
+const hhmm = z.string().regex(/^\d{2}:\d{2}$/, "HH:mm");
+
+/** Concrete slots for a horizon, replacing whatever was published for those weeks. */
+export const availabilityReplaceSchema = z.object({
+  from: day,
+  to: day,
+  weeks: z
+    .array(
+      z.object({
+        weekStartDate: day,
+        weekEndDate: day,
+        days: z.array(z.object({ date: day, slots: z.array(z.object({ startTime: hhmm, endTime: hhmm })).max(200) })).max(7),
+      })
+    )
+    .max(26),
+});
+export type AvailabilityReplace = z.infer<typeof availabilityReplaceSchema>;
+
+export const bookingStatusSchema = z.object({
+  status: z.enum(["CONFIRMED", "CANCELED"]),
+  note: z.string().max(500).nullable().optional(),
+});

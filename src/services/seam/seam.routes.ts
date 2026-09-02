@@ -23,6 +23,10 @@ export default class Routes {
     this.app.get("/api/seam/patients/:id/labs/risk", ...scoped("labs.risk", SeamHandler.labsRisk));
     this.app.get("/api/seam/patients/:id/plan", ...scoped("plan", SeamHandler.plan));
     this.app.get("/api/seam/patients/:id/trackers", ...scoped("trackers", SeamHandler.trackers));
+    // S4: schedule & bookings (clinician-scoped, not patient-scoped)
+    this.app.put("/api/seam/clinicians/:externalId/availability", logSeamAccess("availability.replace"), requireSeamKey, requireClinician, SeamHandler.replaceAvailability);
+    this.app.get("/api/seam/clinicians/:externalId/bookings", logSeamAccess("bookings"), requireSeamKey, requireClinician, SeamHandler.bookings);
+    this.app.post("/api/seam/bookings/:id/status", logSeamAccess("booking.status"), requireSeamKey, requireClinician, SeamHandler.bookingStatus);
     this.app.get("/api/seam/whoami", logSeamAccess("whoami"), requireSeamKey, requireClinician, SeamHandler.whoami);
   }
 

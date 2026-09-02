@@ -1,8 +1,8 @@
 import { Response } from "express";
 import Util from "../../../utils/response";
 import { SeamRequest } from "../seam.auth";
-import { clinicianUpsertSchema } from "../seam.schema";
-import SeamService, { SeamConflictError, SeamPatientService } from "../model/seam.model";
+import { availabilityReplaceSchema, bookingStatusSchema, clinicianUpsertSchema } from "../seam.schema";
+import SeamService, { SeamConflictError, SeamPatientService, SeamScheduleService } from "../model/seam.model";
 
 /** S0 wiring checks. Patient-scoped resources arrive with S2 (see docs/physician-app-plan.md). */
 class SeamHandler {
@@ -63,6 +63,57 @@ class SeamHandler {
     const days = Math.min(365, Math.max(1, parseInt(String(req.query.days ?? "90"), 10) || 90));
     return SeamPatientService.trackers(id, days);
   });
+
+  /* ---- S4: schedule & bookings (requireClinician ran; :externalId must be the caller) ---- */
+
+  private static own(req: SeamRequest, res: Response) {
+    const c = req.seam!.clinician!;
+    if (String(req.params.externalId ?? c.externalId) !== c.externalId) {
+      res.status(403).json(Util.error({}, "externalId does not match the clinician header"));
+      return null;
+    }
+    return c;
+  }
+
+  async replaceAvailability(req: SeamRequest, res: Response) {
+    const c = SeamHandler.own(req, res);
+    if (!c) return;
+    const parsed = availabilityReplaceSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json(Util.error(parsed.error.flatten().fieldErrors, "Invalid availability payload"));
+    try {
+      const r = await SeamScheduleService.replaceAvailability(c.id, parsed.data);
+      return res.status(200).json(Util.success(r, "Availability published"));
+    } catch (error) {
+      console.error("seam: availability replace failed", error);
+      return res.status(500).json(Util.error({}, "Availability publish failed"));
+    }
+  }
+
+  async bookings(req: SeamRequest, res: Response) {
+    const c = SeamHandler.own(req, res);
+    if (!c) return;
+    try {
+      const status = req.query.status ? String(req.query.status) : undefined;
+      return res.status(200).json(Util.success(await SeamScheduleService.bookingsOf(c.id, status), "Bookings fetched"));
+    } catch (error) {
+      console.error("seam: bookings failed", error);
+      return res.status(500).json(Util.error({}, "Bookings fetch failed"));
+    }
+  }
+
+  async bookingStatus(req: SeamRequest, res: Response) {
+    const c = req.seam!.clinician!;
+    const parsed = bookingStatusSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json(Util.error(parsed.error.flatten().fieldErrors, "Invalid status payload"));
+    try {
+      const b = await SeamScheduleService.setBookingStatus(c.id, String(req.params.id), parsed.data.status, parsed.data.note);
+      if (!b) return res.status(404).json(Util.error({}, "Booking not found"));
+      return res.status(200).json(Util.success(b, "Booking updated"));
+    } catch (error) {
+      console.error("seam: booking status failed", error);
+      return res.status(500).json(Util.error({}, "Booking update failed"));
+    }
+  }
 
   /** Key + clinician header both valid → the directory row the seam resolved. */
   async whoami(req: SeamRequest, res: Response) {

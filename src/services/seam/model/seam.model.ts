@@ -120,3 +120,119 @@ export class SeamPatientService {
     };
   }
 }
+
+/* ------------------------------ S4: schedule ------------------------------ */
+
+import moment from "moment";
+import { AvailabilityReplace } from "../seam.schema";
+import { sendSingleNotification } from "../../../utils/push_notifications";
+
+const DAY_FMT = "MM-DD-YYYY";
+const BOOKING_DATE_RE = /^(\d{2}-\d{2}-\d{4})T(\d{2}:\d{2})/;
+
+/** "MM-DD-YYYYTHH:mm:ss.SSS+00:00" → { date, time } (wall clock, as the app writes it). */
+export const splitBookingDate = (appointmentDate: string) => {
+  const m = BOOKING_DATE_RE.exec(appointmentDate);
+  return m ? { date: m[1], time: m[2] } : null;
+};
+
+export class SeamScheduleService {
+  /**
+   * Replace the published weeks inside [from, to] with the given concrete
+   * slots. Slots that hold a PENDING/CONFIRMED booking are kept booked even
+   * if the new rules would drop them, so a published change never silently
+   * orphans an appointment.
+   */
+  static async replaceAvailability(clinicianId: string, input: AvailabilityReplace) {
+    const bookings = await prisma.booking.findMany({
+      where: { clinicianId, status: { in: ["PENDING", "CONFIRMED"] } },
+      select: { appointmentDate: true, durationMinutes: true },
+    });
+    const booked = new Map<string, { time: string; end: string }>();
+    for (const b of bookings) {
+      const s = splitBookingDate(b.appointmentDate);
+      if (s) booked.set(`${s.date}|${s.time}`, { time: s.time, end: moment(s.time, "HH:mm").add(b.durationMinutes ?? 30, "minutes").format("HH:mm") });
+    }
+    const from = moment(input.from, DAY_FMT);
+    const to = moment(input.to, DAY_FMT);
+    /** A published week that OVERLAPS the horizon is replaced — including legacy weeks that start on another weekday. */
+    const overlaps = (w: { weekStartDate: string; weekEndDate: string }) =>
+      !moment(w.weekEndDate, DAY_FMT).isBefore(from, "day") && !moment(w.weekStartDate, DAY_FMT).isAfter(to, "day");
+
+    let slotCount = 0;
+    await prisma.$transaction(async (tx) => {
+      // Weeks in the horizon that the new payload no longer contains go away (their booked slots are re-created below).
+      const existing = await tx.weeklyAvailability.findMany({ where: { clinicianId }, select: { id: true, weekStartDate: true, weekEndDate: true } });
+      const keep = new Set(input.weeks.map((w) => w.weekStartDate));
+      const stale = existing.filter((w) => overlaps(w) && !keep.has(w.weekStartDate));
+      if (stale.length) await tx.weeklyAvailability.deleteMany({ where: { id: { in: stale.map((w) => w.id) } } });
+
+      for (const week of input.weeks) {
+        let row = await tx.weeklyAvailability.findFirst({ where: { clinicianId, weekStartDate: week.weekStartDate } });
+        row = row
+          ? await tx.weeklyAvailability.update({ where: { id: row.id }, data: { weekEndDate: week.weekEndDate } })
+          : await tx.weeklyAvailability.create({ data: { clinicianId, weekStartDate: week.weekStartDate, weekEndDate: week.weekEndDate } });
+        await tx.dailyAvailability.deleteMany({ where: { weekId: row.id } });
+        for (const day of week.days) {
+          const wanted = new Map(day.slots.map((s) => [s.startTime, s]));
+          // booked appointments on this day survive regardless of the new rules
+          for (const [key, b] of booked) {
+            if (key.startsWith(`${day.date}|`) && !wanted.has(b.time)) wanted.set(b.time, { startTime: b.time, endTime: b.end });
+          }
+          if (wanted.size === 0) continue;
+          const d = await tx.dailyAvailability.create({ data: { weekId: row.id, date: day.date } });
+          const slots = [...wanted.values()]
+            .sort((a, b) => a.startTime.localeCompare(b.startTime))
+            .map((s) => {
+              const isBooked = booked.has(`${day.date}|${s.startTime}`);
+              return { dailyAvailabilityId: d.id, startTime: s.startTime, endTime: s.endTime, isBooked, isAvailable: !isBooked };
+            });
+          await tx.timeSlot.createMany({ data: slots });
+          slotCount += slots.length;
+        }
+      }
+    });
+    return { weeks: input.weeks.length, slots: slotCount, bookedPreserved: booked.size };
+  }
+
+  static bookingsOf(clinicianId: string, status?: string) {
+    return prisma.booking.findMany({
+      where: { clinicianId, ...(status ? { status: status as never } : {}) },
+      orderBy: { appointmentDate: "asc" },
+      select: { id: true, patientId: true, patientName: true, appointmentDate: true, durationMinutes: true, reason: true, status: true, confirmed: true, notes: true, createdAt: true, updatedAt: true },
+    });
+  }
+
+  /** Confirm / decline. Flags the matching slot, notifies the patient (best effort). */
+  static async setBookingStatus(clinicianId: string, bookingId: string, status: "CONFIRMED" | "CANCELED", note?: string | null) {
+    const b = await prisma.booking.findFirst({ where: { id: bookingId, clinicianId }, include: { clinician: { select: { firstName: true, lastName: true } } } });
+    if (!b) return null;
+    const updated = await prisma.booking.update({
+      where: { id: b.id },
+      data: { status, confirmed: status === "CONFIRMED", ...(note !== undefined ? { notes: note } : {}) },
+    });
+    const s = splitBookingDate(b.appointmentDate);
+    if (s) {
+      const slot = await prisma.timeSlot.findFirst({
+        where: { startTime: s.time, dailyAvailability: { date: s.date, weekAvailability: { clinicianId } } },
+        select: { id: true },
+      });
+      if (slot) await prisma.timeSlot.update({ where: { id: slot.id }, data: status === "CONFIRMED" ? { isBooked: true, isAvailable: false } : { isBooked: false, isAvailable: true } }).catch(() => undefined);
+    }
+    try {
+      const token = await prisma.userToken.findFirst({ where: { userId: b.patientId, isActive: true, isDeleted: false }, select: { token: true } });
+      if (token?.token) {
+        const when = s ? moment(`${s.date} ${s.time}`, `${DAY_FMT} HH:mm`).format("ddd D MMM, HH:mm") : "";
+        await sendSingleNotification({
+          token: token.token,
+          title: status === "CONFIRMED" ? "Appointment confirmed" : "Appointment declined",
+          body: `Dr. ${b.clinician.lastName}${when ? ` · ${when}` : ""}${status === "CANCELED" && note ? ` — ${note}` : ""}`,
+          data: { type: "booking", bookingId: b.id, status },
+        });
+      }
+    } catch (e) {
+      console.warn("seam: booking push failed", (e as Error)?.message);
+    }
+    return updated;
+  }
+}

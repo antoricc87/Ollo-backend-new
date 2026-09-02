@@ -667,7 +667,9 @@ all behind `requireGrant("id")`): `GET /api/seam/patients`,
 `/api/seam/patients/:id/{snapshot,labs/current,labs/risk,plan,trackers?days=}` —
 they reuse `buildPatientSnapshot` (memories/sub-accounts/client/mealPlan stripped),
 `fetchCurrentLabs`, `LabsJourneyService.getRisk`, `PlanService.getActivePlan`, and
-the tracker entry tables. Availability push, bookings and chats arrive in S4/S5 —
-see `../docs/physician-app-plan.md`. Tests: `tests/seam/`.
+the tracker entry tables. S4 (`SeamScheduleService`): `PUT /api/seam/clinicians/:externalId/availability`
+replaces overlapping published weeks with concrete slots (booked slots preserved),
+`GET …/bookings`, `POST /api/seam/bookings/:id/status` (confirm/decline → slot flag + FCM push).
+Chats arrive in S5 — see `../docs/physician-app-plan.md`. Tests: `tests/seam/`.
 Local key lives in `.env` (`SEAM_SERVICE_KEY`) and must equal the one in
 `Ollo-Clinician-Service/.env`. Not on Railway yet (physician app is local-only).
