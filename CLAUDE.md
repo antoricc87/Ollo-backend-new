@@ -157,9 +157,37 @@ unit-tested and read by a human. Rulings 2026-09-09: **US only** at launch,
   feature has), and one runs every prompt, criterion and handout through Phase
   0's `lintOutput` so Phase 1 cannot emit what Phase 0 forbids.
 
-Not built yet: API routes, Prisma models (`Encounter` / `EncounterSlot` /
-`EncounterEvent` / `EncounterCheckIn`), the LLM classify/slot-fill calls, and
-the app screens.
+### Check-in API and LLM layer (2026-09-09)
+
+- Models: `Encounter` (slots + askedKeys + redFlags stored as Json/String[] on
+  the row, the way LabJourney stores `panel`), `EncounterEvent`
+  (**append-only** audit: seq derived from the row count, never updated) and
+  `EncounterCheckIn`. DEVIATION from the design doc, which specified a separate
+  `EncounterSlot` table: the Json column plus the event log already carry the
+  values and their timeline, and it is one write per turn instead of two.
+- `llm/classify.ts` — free text → ONE key from `COMPLAINT_KEYS` (closed enum in
+  the schema). An unknown key or a thrown call becomes `general_unwell`, which
+  asks the safe questions too, so a classifier outage never blocks a check-in.
+  Also returns `askingForDiagnosis` → fixed `DIAGNOSIS_DECLINE` copy.
+- `llm/slotFill.ts` — free text → a value for ONE named slot. The model can
+  only pick options that exist, and `sanitize()` re-checks its answer against
+  the slot anyway (unknown option dropped, scale clamped and rounded, multi
+  filtered). Unplaceable → null, and a required question simply stays up:
+  guessing puts words in the patient's mouth.
+- `domain/escalation.ts` — ESCALATE scripts assembled from the region table in
+  `safety/policy.ts`. Self-harm gets the crisis script with no criteria list;
+  otherwise the matched criteria are shown with their source and NO verdict
+  ("I can't tell you how serious this is" is the body copy).
+- Routes (`/api/encounters`, patient-scoped, identity from the token):
+  `POST /` start · `GET /` list · `GET /:id` · `POST /:id/answer` ·
+  `GET /:id/handout` · `POST /:id/close` · `POST /:id/checkin` ·
+  `GET /:id/checkins`. Wired in `server.ts`.
+- `tests/encounter/guards.test.ts` — 12 more cases on the sanitiser and the
+  escalation copy, including linting every escalation string through Phase 0.
+  33 encounter tests in total.
+
+Not built yet: the app screens, and the Ollie `start_encounter` tool that hands
+a symptom thread over to the flow.
 
 ### Output guard, second key (2026-09-09)
 
