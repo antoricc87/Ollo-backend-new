@@ -118,6 +118,49 @@ Slice 2 (done 2026-08-24) — tools, loop, safety, chat endpoint:
   2026-08-24, the 3 triage/prognosis cases added 2026-09-09 are unrun — no key
   in that session). Run both after ANY prompt, tool or model change.
 
+### Check-in / encounter domain (2026-09-09) — Phase 1 core
+
+`src/services/encounter/domain/` replaces the symptoms checker deleted in the
+app's 23bff38. It is the pure half of the feature: no LLM, no Prisma, no I/O.
+The model's job is to fill slots and phrase questions; every DECISION — next
+question, red flag, completion, handout text — is made here so it can be
+unit-tested and read by a human. Rulings 2026-09-09: **US only** at launch,
+**stepped flow** with Ollie chat as the entry point only.
+
+- `types.ts` — `Slot` / `Protocol` / `EncounterState` / `TrippedFlag`. Reuses
+  `PanelSource` from labs_journey so protocols and flags cite their basis the
+  way panel items already do.
+- `protocols.ts` — 12 complaint protocols on the OLDCARTS frame as DATA
+  (11 named + `general_unwell` fallback). Option values are slugged from their
+  LABELS via the exported `slug()`, so redflags.ts can reference a rule by the
+  words the user saw. Bump `version` when slots change — an old encounter's
+  answers meant something different.
+- `redflags.ts` — 16 rules, `EMERGENCY` / `SEEK_CARE_NOW`, each with a
+  criterion and a source. Two keys: a raw-text prescan REUSING the agent's
+  `detectRedFlag`, plus structured rules over answered slots. Additive and
+  sticky — `evaluate()` never drops a flag, so an answer can never clear one.
+  Tuned for recall.
+  ⚠ **The criteria are drafted, not quoted.** Each must be verified against
+  the body named in its `source` and reworded to match before launch — the
+  compliance argument rests on them being the guideline's criteria, not ours.
+- `stateMachine.ts` — safety slot ALWAYS first, then required, then optional,
+  then RECAP. `MAX_TURNS` 15. Asked-and-skipped is settled (no badgering).
+  `shouldHalt()` ends the interview on self-harm: crisis route, not question 4
+  of 7.
+- `summary.ts` — recap lines, clinician handout (complaint verbatim + history
+  + matched criteria + a provenance line saying it is a self-report captured by
+  software), booking reason. Deliberately NOT model-generated: a summary is
+  exactly where a fluent model adds "which suggests…".
+- `tests/encounter/domain.test.ts` — 21 cases. Two worth keeping: one asserts
+  every red-flag rule points at a slot and option that still exists (reword a
+  label without the rule and it silently stops firing — the worst failure this
+  feature has), and one runs every prompt, criterion and handout through Phase
+  0's `lintOutput` so Phase 1 cannot emit what Phase 0 forbids.
+
+Not built yet: API routes, Prisma models (`Encounter` / `EncounterSlot` /
+`EncounterEvent` / `EncounterCheckIn`), the LLM classify/slot-fill calls, and
+the app screens.
+
 ### Output guard, second key (2026-09-09)
 
 `safety/policy.ts` is the boundary AS DATA — the six forbidden acts
