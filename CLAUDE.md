@@ -91,13 +91,17 @@ Slice 2 (done 2026-08-24) — tools, loop, safety, chat endpoint:
   tool_start/result, card, text, safety, done, error): persist USER →
   **red-flag gate** (`safety/redFlags.ts`, deterministic regexes incl. some
   Italian; on hit the model is bypassed and `emergencyAnswer()` is returned
-  with an `emergency` card, ~10 ms) → snapshot + `prompt/system.ts` (static
+  with an `emergency` card, ~10 ms; emergency numbers come from
+  `safety/policy.ts` via `regionFromTimeZone(Patient.timeZone)`, falling back
+  to the "911 in the US, 112 in Europe" line when the zone says nothing) → snapshot + `prompt/system.ts` (static
   persona/boundary/gray-zone examples first for prefix caching, snapshot +
   thread summary last) → model/tool loop (max 8 steps, tool results
-  truncated at 12k chars, every call audited) → **output classifier**
-  (`safety/outputCheck.ts`, fast model, strict JSON with `analysis` FIRST so
-  it reasons before judging — booleans-first flagged answers its own analysis
-  called safe) → on flag: one rewrite + re-check, else `SAFE_FALLBACK` +
+  truncated at 12k chars, every call audited) → **output guard**
+  (`safety/outputCheck.ts` runs TWO passes and either can flag: the
+  deterministic linter `safety/lint.ts`, then the fast-model classifier —
+  strict JSON with `analysis` FIRST so it reasons before judging;
+  booleans-first flagged answers its own analysis called safe) → on flag:
+  one rewrite + re-check, else `SAFE_FALLBACK` +
   `care_team_handoff` card → text emitted in sentence chunks (never streamed
   raw before the check) → ASSISTANT row with cards + meta (model, usage,
   safety) → async summary fold once ≥8 rows sit outside the verbatim window.
@@ -109,9 +113,46 @@ Slice 2 (done 2026-08-24) — tools, loop, safety, chat endpoint:
   lists the specs.
 - Scripts: `scripts/agent-chat-smoke.ts [email] [--only N] [--keep]` (live 5-
   scenario run: plan comparison, statin/vit-D pressure, chest-pain red flag,
-  remember, memory-aware follow-up), `scripts/agent-safety-check.ts` (7 canned
-  answers the classifier must pass/flag — 7/7 as of 2026-08-24). Run both
-  after ANY prompt, tool or model change.
+  remember, memory-aware follow-up), `scripts/agent-safety-check.ts` (10 canned
+  answers the output guard must pass/flag; 7/7 on the original set as of
+  2026-08-24, the 3 triage/prognosis cases added 2026-09-09 are unrun — no key
+  in that session). Run both after ANY prompt, tool or model change.
+
+### Output guard, second key (2026-09-09)
+
+`safety/policy.ts` is the boundary AS DATA — the six forbidden acts
+(DIAGNOSE, TREAT_OR_DOSE, REASSURE, TRIAGE_VERDICT, PROGNOSE,
+CLAIM_ACCURACY) with the reason each is forbidden, the eight allowed speech
+acts, region → emergency-number table, and the `AGENT_SAFETY_LINT=report`
+rollout switch. The prompt, the classifier rubric and the linter are meant to
+agree with it; it is the thing to edit when the boundary moves.
+
+`safety/lint.ts` is a deterministic pass under the classifier. Rationale: the
+classifier is itself a model and fails OPEN on a bad judgement (the pipeline
+only fails closed when the call throws). Regexes cannot be argued with, cost
+nothing and run offline. It may only RAISE a concern, never clear one.
+
+False positives are the expensive failure here — a finding sends a good
+answer through a rewrite — so every rule needs a FRAME plus a SUBJECT (a
+diagnosis frame beside a condition name; a recommendation frame beside a drug
+or a dose), never a bare keyword. Three exemptions do the heavy lifting:
+refusals ("I can't recommend a statin" contains every word "take a statin"
+does — an exemption marker before the match skips the sentence), conditions
+already on the patient's record, and the DRUG/NUTRIENT split (naming food
+sources is allowed, so "add iron-rich foods" must not read as a
+prescription — nutrients need an explicit supplement form). Doses exclude
+grams (this app talks about grams of protein all day) and mg/dL (a lab unit).
+
+The classifier gained a `reassurance` boolean. Its rubric already forbade
+triaging severity but there was no field to report it in, so that half of the
+boundary could not actually be flagged.
+
+`tests/safety/lint.test.ts` — 31 cases, runs under `npm test` with NO API
+key, so a boundary regression is caught on every push instead of at the next
+manual eval. The CLEAN half of the corpus is the point: it holds the
+gray-zone examples from `prompt/system.ts` and every `expectOk:true` answer
+from `agent-safety-check.ts`. If a new rule flags one of those, the rule is
+wrong.
 Slice 3 (done 2026-08-24) — confirm-gated writes + generation:
 - `AgentProposal` table (PENDING/CONFIRMED/CANCELLED/EXPIRED/FAILED, 24 h
   TTL). A `risk: "write"` tool's `run()` only PREPARES `{title, summary,

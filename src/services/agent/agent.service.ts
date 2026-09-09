@@ -9,6 +9,7 @@ import proposalStore from "./memory/proposals.store";
 import { buildSystemPrompt } from "./prompt/system";
 import { detectRedFlag, emergencyAnswer } from "./safety/redFlags";
 import { checkOutput, rewriteUnsafe, SAFE_FALLBACK, SafetyOutcome, SafetyVerdict } from "./safety/outputCheck";
+import { regionFromTimeZone } from "./safety/policy";
 import { registry } from "./tools";
 import { Card, ToolContext } from "./tools/registry";
 import { makeSubjectResolver } from "./tools/subject";
@@ -111,8 +112,8 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
   /* ------------------------- red-flag gate (no model) ------------------------ */
   const flag = detectRedFlag(message);
   if (flag) {
-    const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { firstName: true } });
-    const text = emergencyAnswer(flag, patient?.firstName);
+    const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { firstName: true, timeZone: true } });
+    const text = emergencyAnswer(flag, patient?.firstName, regionFromTimeZone(patient?.timeZone));
     const card: Card = { type: "emergency", title: "Get help now", data: { category: flag.category, offerCareTeam: true } };
     await audit(patientId, "red_flag", { threadId, messageId: userRow.id, payload: { category: flag.category, matched: flag.matched } });
     const [row] = await threadStore.append(threadId, [{ role: "ASSISTANT", content: text, cards: [card], meta: { redFlag: flag.category, model: null } }]);
@@ -287,10 +288,16 @@ async function* runLoop(p: {
       console.error("agent safety check failed", e);
       void audit(patientId, "error", { threadId, payload: { stage: "safety", error: String(e) } });
       text = SAFE_FALLBACK;
-      verdict = { ok: false, diagnosis: false, medicationAdvice: false, missedRedFlag: false, reasons: "classifier unavailable — fallback used", outcome: "fallback" };
+      verdict = { ok: false, diagnosis: false, medicationAdvice: false, reassurance: false, missedRedFlag: false, lexical: [], reasons: "classifier unavailable — fallback used", outcome: "fallback" };
     }
 
-    const flagged = [verdict.diagnosis && "diagnosis", verdict.medicationAdvice && "medication_advice", verdict.missedRedFlag && "missed_red_flag"].filter((x): x is string => !!x);
+    const flagged = [
+      verdict.diagnosis && "diagnosis",
+      verdict.medicationAdvice && "medication_advice",
+      verdict.reassurance && "reassurance",
+      verdict.missedRedFlag && "missed_red_flag",
+      ...(verdict.lexical ?? []).map((f) => `lexical:${f.ruleId}`),
+    ].filter((x): x is string => !!x);
     yield { type: "safety", verdict: { outcome: verdict.outcome ?? "pass", flagged } };
     for (const c of chunks(text)) yield { type: "text", delta: c };
 

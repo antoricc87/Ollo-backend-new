@@ -1,9 +1,16 @@
 import { LLMClient } from "../llm/types";
+import { lintOutput, describeFindings, LintFinding } from "./lint";
+import { lintMode } from "./policy";
 
 /**
- * Output-side classifier. Runs on the drafted answer before anything is shown
- * to the user, with a fast model in a separate call. It can only FLAG;
- * repair is a rewrite with the violation named, then a fixed fallback.
+ * Output-side guard. Runs on the drafted answer before anything is shown to
+ * the user. Two independent passes, and either one can flag:
+ *
+ *  1. `lint.ts` — deterministic patterns, free and offline.
+ *  2. a fast model with the rubric below — catches paraphrase and implication.
+ *
+ * Both can only FLAG. Repair is a rewrite with the violation named, then a
+ * fixed fallback. Neither pass can clear what the other raised.
  */
 
 export type SafetyOutcome = "pass" | "rewritten" | "fallback";
@@ -12,7 +19,11 @@ export type SafetyVerdict = {
   ok: boolean;
   diagnosis: boolean;
   medicationAdvice: boolean;
+  /** Triage, reassurance or prognosis about a symptom. Escalation is one-way. */
+  reassurance: boolean;
   missedRedFlag: boolean;
+  /** Deterministic findings. Populated even in report mode, where they don't affect `ok`. */
+  lexical: LintFinding[];
   reasons: string;
   outcome?: SafetyOutcome;
 };
@@ -38,12 +49,16 @@ const SCHEMA = {
       type: "boolean",
       description: "TRUE only if the answer recommends, doses, compares, endorses, or tells the user to start/stop/change a medication or supplement. FALSE when the answer declines and refers them to a doctor, restates what is on record, or lists FOOD sources of a nutrient.",
     },
+    reassurance: {
+      type: "boolean",
+      description: "TRUE if the answer judges how serious or urgent a symptom is, reassures about it ('probably nothing', 'not serious'), says the user can wait or does not need to be seen, or predicts how it will resolve. Escalation is one-way: the assistant may raise concern, never lower it. FALSE for statements about the user's own logged data or a lab value's reference range.",
+    },
     missedRedFlag: {
       type: "boolean",
       description: "TRUE only if the user described an emergency-level symptom and the answer did not direct them to urgent care.",
     },
   },
-  required: ["analysis", "diagnosis", "medicationAdvice", "missedRedFlag"],
+  required: ["analysis", "diagnosis", "medicationAdvice", "reassurance", "missedRedFlag"],
   additionalProperties: false,
 } as const;
 
@@ -51,11 +66,11 @@ const SYSTEM = `You audit answers from a wellness assistant inside a health app.
 
 ALLOWED (do not flag): explaining what a biomarker measures and its reference range; saying a value is outside the range the lab flags and suggesting the user discuss it with their doctor; lifestyle guidance (food, sleep, movement, hydration); naming food sources of a nutrient; restating medications/conditions already on the user's record; explicitly declining to advise on a medication or supplement — even while naming it — and handing off to the doctor; offering to summarise labs, message the care team or book a visit.
 
-NOT ALLOWED (flag): stating or implying a diagnosis the user does not have on record; recommending, dosing, comparing or endorsing any medication or supplement, or saying the user should/could take or ask about one as a suggestion; triaging severity ('probably nothing'); ignoring an emergency.
+NOT ALLOWED (flag): stating or implying a diagnosis the user does not have on record; recommending, dosing, comparing or endorsing any medication or supplement, or saying the user should/could take or ask about one as a suggestion; judging how serious or urgent a symptom is, reassuring about it ('probably nothing', 'not serious'), saying it can wait or predicting how it will resolve; ignoring an emergency.
 
 Be precise and literal. A refusal that names the drug is a refusal, not advice.`;
 
-type RawVerdict = { analysis: string; diagnosis: boolean; medicationAdvice: boolean; missedRedFlag: boolean };
+type RawVerdict = { analysis: string; diagnosis: boolean; medicationAdvice: boolean; reassurance: boolean; missedRedFlag: boolean };
 
 export async function checkOutput(llm: LLMClient, userMessage: string, answer: string, onRecord: { conditions: string[]; medications: string[] }): Promise<SafetyVerdict> {
   const v = await llm.json<RawVerdict>({
@@ -64,12 +79,16 @@ export async function checkOutput(llm: LLMClient, userMessage: string, answer: s
     schema: SCHEMA as unknown as Record<string, unknown>,
     schemaName: "safety_verdict",
   });
+  const lexical = lintOutput(answer, { onRecordConditions: onRecord.conditions });
+  const enforced = lintMode() === "enforce" && lexical.length > 0;
   return {
     diagnosis: v.diagnosis,
     medicationAdvice: v.medicationAdvice,
+    reassurance: v.reassurance,
     missedRedFlag: v.missedRedFlag,
-    reasons: v.analysis,
-    ok: !v.diagnosis && !v.medicationAdvice && !v.missedRedFlag,
+    lexical,
+    reasons: lexical.length ? `${v.analysis}\n\nDeterministic findings: ${describeFindings(lexical)}` : v.analysis,
+    ok: !v.diagnosis && !v.medicationAdvice && !v.reassurance && !v.missedRedFlag && !enforced,
   };
 }
 
@@ -77,7 +96,9 @@ export async function rewriteUnsafe(llm: LLMClient, answer: string, verdict: Saf
   const problems = [
     verdict.diagnosis && "it names/implies a diagnosis",
     verdict.medicationAdvice && "it gives medication or supplement advice",
+    verdict.reassurance && "it judges how serious or urgent the symptom is, reassures about it, or predicts how it will resolve",
     verdict.missedRedFlag && "it fails to direct the user to urgent care",
+    verdict.lexical?.length && `specific phrases to remove: ${describeFindings(verdict.lexical)}`,
   ]
     .filter(Boolean)
     .join("; ");

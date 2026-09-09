@@ -5,6 +5,8 @@
  * never loosen them without the eval suite.
  */
 
+import { Region, REGIONS, emergencyNumbersLine } from "./policy";
+
 export type RedFlag = { category: string; matched: string };
 
 const P = (category: string, ...res: RegExp[]) => res.map((re) => ({ category, re }));
@@ -90,15 +92,22 @@ export const detectRedFlag = (message: string): RedFlag | null => {
   return null;
 };
 
-export const emergencyAnswer = (flag: RedFlag, firstName?: string | null) => {
+/**
+ * `region` narrows the copy to the number the user would actually dial. When
+ * it is null the both-numbers line is used — naming one wrong number is worse
+ * than naming two right ones.
+ */
+export const emergencyAnswer = (flag: RedFlag, firstName?: string | null, region?: Region | null) => {
   const name = firstName ? `${firstName}, ` : "";
+  const numbers = region ? `**${REGIONS[region].emergencyNumber}**` : emergencyNumbersLine(null);
+  const crisis = region ? REGIONS[region].crisisLine : "**988** (Suicide & Crisis Lifeline) in the US, **Telefono Amico 02 2327 2327** in Italy";
   const lines: string[] = [];
   if (flag.category === "self_harm") {
     lines.push(
       `${name}I'm really glad you told me, and I want you to get support from a person right now.`,
       "",
-      "**If you're in immediate danger, call your local emergency number (911 in the US, 112 in Europe).**",
-      "In the US you can also call or text **988** (Suicide & Crisis Lifeline) any time. In Italy: **Telefono Amico 02 2327 2327**.",
+      `**If you're in immediate danger, call your local emergency number (${numbers}).**`,
+      `You can also call or text ${crisis} any time.`,
       "",
       "I'm not able to help with this the way a trained person can, but I can send a note to your care team so they reach out. Would you like me to do that?"
     );
@@ -106,7 +115,7 @@ export const emergencyAnswer = (flag: RedFlag, firstName?: string | null) => {
     lines.push(
       `${name}what you're describing can be a medical emergency and it isn't something I can assess.`,
       "",
-      "**Please call your local emergency number now (911 in the US, 112 in Europe) or get to the nearest emergency department.** Don't drive yourself if you feel faint.",
+      `**Please call your local emergency number now (${numbers}) or get to the nearest emergency department.** Don't drive yourself if you feel faint.`,
       "",
       "If you want, I can also notify your care team on Ollo. But please make the call first."
     );
