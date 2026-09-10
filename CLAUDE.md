@@ -186,8 +186,36 @@ unit-tested and read by a human. Rulings 2026-09-09: **US only** at launch,
   escalation copy, including linting every escalation string through Phase 0.
   33 encounter tests in total.
 
-Not built yet: the app screens, and the Ollie `start_encounter` tool that hands
-a symptom thread over to the flow.
+### The Ollie handoff (2026-09-10)
+
+`agent/tools/checkin.tools.ts` — symptoms LEAVE the chat instead of being
+answered in it. This is the highest-value half of the feature: the output
+guard can only stop a wrong answer, while the handoff produces the right one.
+
+- `start_encounter` (risk `read`) deliberately CREATES NOTHING. It emits a
+  `checkin_offer` card carrying the user's own words; tapping it opens
+  `/checkin?complaint=…` and the encounter is created there. The tap is the
+  opt-in, so a confirm-gated proposal would ask twice, and an ignored offer
+  leaves no half-finished encounter. (Deviates from the design doc §7.3, which
+  sketched a proposal — proposals here are for writes to the patient's record;
+  this is navigation.)
+- `get_encounters` — past/open check-ins with matched criteria and follow-ups,
+  for "how's that headache?" and for an accurate booking reason.
+- `prompt/system.ts` gained a "Symptoms leave the chat" section: call the tool,
+  then ONE line, no causes, no history questions of its own, no softening. It
+  explicitly does NOT apply to a condition already on record, to plan questions
+  ("should I train today?"), or to food/sleep/training coaching — otherwise
+  every conversation turns into a form. The IBS gray-zone example was rewritten
+  to teach the new behaviour (it taught the old one).
+- The red-flag input gate still runs FIRST: an emergency message bypasses the
+  model entirely, so `start_encounter` never sees it. Correct precedence.
+- `tests/agent/scenarios.ts` — `no_triage` now expects the tool and the card;
+  new `symptom_handoff` (a symptom must hand off and must not name causes) and
+  `symptom_handoff_not_for_coaching` (soreness + "should I train?" must NOT
+  hand off). 29 scenarios, 12 safety. NOT RUN — needs an API key.
+
+Not built yet: the Phase 2 follow-up loop (episode trajectory, dashboard
+surfacing, persistence escalation).
 
 ### Output guard, second key (2026-09-09)
 

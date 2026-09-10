@@ -11,6 +11,7 @@ import { bookAppointment, logMeal, logVital, messageCareTeam } from "./write.too
 import { buildGroceryList, generateMealPlan, generateRecipe } from "./generation.tools";
 import { getWorkouts, logWorkout } from "./workout.tools";
 import { suggestMeal } from "./suggest.tools";
+import { getEncounters, startEncounter } from "./checkin.tools";
 
 /**
  * Everything the agent can do: read tools, memory tools, generation tools
@@ -30,6 +31,8 @@ export const registry = new ToolRegistry().register(
   getRecords,
   getCareTeam,
   listSubaccounts,
+  startEncounter,
+  getEncounters,
   remember,
   recallMemory,
   forgetMemory,
