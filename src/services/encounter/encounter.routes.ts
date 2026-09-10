@@ -14,6 +14,8 @@ export default class Routes {
   appRoutes() {
     this.app.post("/api/encounters", verifyToken, encounterApi.start);
     this.app.get("/api/encounters", verifyToken, encounterApi.list);
+    // BEFORE /:encounterId — otherwise "open" is read as an id.
+    this.app.get("/api/encounters/open", verifyToken, encounterApi.open);
     this.app.get("/api/encounters/:encounterId", verifyToken, encounterApi.fetch);
     this.app.post("/api/encounters/:encounterId/answer", verifyToken, encounterApi.answer);
     this.app.get("/api/encounters/:encounterId/handout", verifyToken, encounterApi.handout);

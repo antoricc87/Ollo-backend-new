@@ -214,8 +214,46 @@ guard can only stop a wrong answer, while the handoff produces the right one.
   `symptom_handoff_not_for_coaching` (soreness + "should I train?" must NOT
   hand off). 29 scenarios, 12 safety. NOT RUN — needs an API key.
 
-Not built yet: the Phase 2 follow-up loop (episode trajectory, dashboard
-surfacing, persistence escalation).
+### Phase 2 — the follow-up loop and own-data context (2026-09-10)
+
+`domain/followUp.ts` (pure): `FOLLOW_UP_DAYS` [2, 5, 10]; `followUpFor()`
+returns `{day, due, trajectory, persistence}`. Due = a scheduled day has passed
+with nothing recorded on or after it. `persistenceNudge()` needs BOTH
+`PERSISTENCE_DAYS` (5) elapsed AND `PERSISTENCE_REPORTS` (2) consecutive
+non-improving reports, so one bad day never fires it and an improving episode
+never does.
+
+The compliance line here is finer than it looks. Raising concern because
+something dragged on is allowed (escalation is one-way). What is forbidden is
+the REASON: `trajectory` counts what the patient reported and names the latest
+("worse once, no different twice"), and `persistence` is that plus a ROUTE.
+Neither says what the pattern means, whether it is unusual, or how long
+anything "should" take. The subtle trap is the friendly direction — a BETTER
+report must NOT get "sounds like it's clearing up", which is PROGNOSE and
+REASSURE in a nice jumper. It gets a plain acknowledgement.
+
+`domain/context.ts` — OBSERVE_OWN_DATA for the handout. **It never filters by
+the complaint.** Picking the labs that "relate to" chest pain is the
+interpretive step; it implies a connection, which is INTERPRET_AS_DIAGNOSIS by
+LAYOUT rather than by sentence. So it shows everything flagged plus what is on
+record, capped at 8 labs, and the block literally opens with "Listed as
+background, not because they are connected to what the patient described."
+Values carry units, the lab's own range and the collection date. Fed from
+`buildPatientSnapshot` (reused, not re-queried) into `handout()`.
+
+`GET /api/encounters/open` — open episodes whose follow-up is due or which have
+persisted; the app's dashboard row reads it. **Registered BEFORE
+`/:encounterId`**, or "open" is parsed as an id. `get`/`list` now include
+check-ins so the view carries `followUp` (null mid-interview — there is nothing
+to follow up on until the history is done).
+
+`tests/encounter/followup.test.ts` — 19 cases; 52 encounter tests in total.
+The two that matter most assert the traps: an improving episode is never
+nudged toward care, and every trajectory/persistence/own-data string lints
+clean through the Phase 0 guard.
+
+Not built yet: an Ollie tool for recording a follow-up by voice (the dashboard
+row and the recap screen both do it by tap).
 
 ### Output guard, second key (2026-09-09)
 

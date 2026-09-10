@@ -48,6 +48,18 @@ class EncounterHandler {
     }
   }
 
+  /** Open episodes with a due follow-up or a persistence nudge — the dashboard row. */
+  async open(request: any, response: Response) {
+    const { id } = request.user;
+    try {
+      const result = await EncounterService.openEpisodes(id);
+      return response.status(200).json(Util.success(result, "Open check-ins"));
+    } catch (error) {
+      console.error("Error loading open check-ins", error);
+      return response.status(400).json(Util.error({ error }, "Could not load open check-ins"));
+    }
+  }
+
   async answer(request: any, response: Response) {
     const { id } = request.user;
     const { slotKey, value, text } = request.body ?? {};

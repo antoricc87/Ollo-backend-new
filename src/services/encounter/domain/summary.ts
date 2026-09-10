@@ -1,3 +1,4 @@
+import { OwnDataBlock, renderOwnData } from "./context";
 import { EncounterState, Protocol, Slot } from "./types";
 
 /**
@@ -52,7 +53,8 @@ export const flagLines = (state: EncounterState): string[] =>
 export const handout = (
   state: EncounterState,
   protocol: Protocol,
-  patient: { firstName?: string | null; age?: number | null; sex?: string | null } = {}
+  patient: { firstName?: string | null; age?: number | null; sex?: string | null } = {},
+  ownData: OwnDataBlock[] = []
 ): string => {
   const who = [patient.firstName, patient.age ? `${patient.age}` : null, patient.sex].filter(Boolean).join(", ");
   const out: string[] = [];
@@ -71,6 +73,8 @@ export const handout = (
     out.push("CRITERIA THE PATIENT MATCHED");
     for (const line of flagLines(state)) out.push(`- ${line}`);
   }
+
+  for (const line of renderOwnData(ownData)) out.push(line);
 
   out.push("");
   out.push(

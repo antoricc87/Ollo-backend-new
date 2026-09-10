@@ -5,6 +5,9 @@ import { regionFromTimeZone } from "../../agent/safety/policy";
 import { classify, DIAGNOSIS_DECLINE, PROMPT_VERSION as CLASSIFY_VERSION } from "../llm/classify";
 import { fillSlot, sanitize, PROMPT_VERSION as SLOTFILL_VERSION } from "../llm/slotFill";
 import { escalationFor, NEUTRAL_CLOSE } from "../domain/escalation";
+import { ownDataBlocks } from "../domain/context";
+import { followUpFor, FollowUp, CheckInRecord } from "../domain/followUp";
+import { buildPatientSnapshot } from "../../agent/context/snapshot";
 import { resolveProtocol } from "../domain/protocols";
 import { applyAnswer, markAsked, nextStep, open, shouldHalt } from "../domain/stateMachine";
 import { bookingReason, handout, recapLines } from "../domain/summary";
@@ -73,9 +76,17 @@ export type EncounterView = {
   route: EncounterRoute;
   bookingId: string | null;
   createdAt: Date;
+  /** Phase 2: the episode's trajectory and whether it needs checking on. */
+  followUp: FollowUp | null;
 };
 
-const view = (row: any, state: EncounterState, protocol: Protocol, region: ReturnType<typeof regionFromTimeZone>): EncounterView => {
+const view = (
+  row: any,
+  state: EncounterState,
+  protocol: Protocol,
+  region: ReturnType<typeof regionFromTimeZone>,
+  checkIns: CheckInRecord[] | null = null
+): EncounterView => {
   const step = nextStep(state, protocol);
   const total = protocol.slots.filter((s) => s.required).length;
   const asked = protocol.slots.filter((s) => s.required && state.askedKeys.indexOf(s.key) >= 0).length;
@@ -96,6 +107,8 @@ const view = (row: any, state: EncounterState, protocol: Protocol, region: Retur
     route: row.route,
     bookingId: row.bookingId,
     createdAt: row.createdAt,
+    // Only once the interview is finished — mid-interview there is nothing to follow up on yet.
+    followUp: done && checkIns ? followUpFor(row.createdAt, checkIns) : null,
   };
 };
 
@@ -142,11 +155,14 @@ class EncounterService {
   }
 
   async get(patientId: string, id: string) {
-    const row = await prisma.encounter.findFirst({ where: { id, patientId } });
+    const row = await prisma.encounter.findFirst({
+      where: { id, patientId },
+      include: { checkIns: { orderBy: { createdAt: "desc" } } },
+    });
     if (!row) return null;
     const state = toState(row);
     const ctx = await patientContext(patientId);
-    return view(row, state, resolveProtocol(state.complaintKey), ctx.region);
+    return view(row, state, resolveProtocol(state.complaintKey), ctx.region, row.checkIns as any);
   }
 
   async list(patientId: string, status?: EncounterStatus) {
@@ -154,6 +170,7 @@ class EncounterService {
       where: { patientId, ...(status ? { status } : {}) },
       orderBy: { createdAt: "desc" },
       take: 50,
+      include: { checkIns: { orderBy: { createdAt: "desc" } } },
     });
     return rows.map((row) => {
       const state = toState(row);
@@ -166,6 +183,7 @@ class EncounterService {
         redFlagLevel: state.redFlags.some((f) => f.level === "EMERGENCY") ? "EMERGENCY" : state.redFlags.length ? "SEEK_CARE_NOW" : null,
         createdAt: row.createdAt,
         closedAt: row.closedAt,
+        followUp: followUpFor(row.createdAt, row.checkIns as any),
       };
     });
   }
@@ -217,7 +235,25 @@ class EncounterService {
     const state = toState(row);
     const protocol = resolveProtocol(state.complaintKey);
     const ctx = await patientContext(patientId);
-    const text = handout(state, protocol, { firstName: ctx.firstName, age: ctx.age, sex: ctx.sex });
+    const snapshot = await buildPatientSnapshot(patientId).catch(() => null);
+    const ownData = snapshot
+      ? ownDataBlocks({
+          flaggedLabs: snapshot.labs.flagged.map((l) => ({
+            testType: l.testType,
+            result: l.result,
+            units: l.units,
+            referenceRange: l.referenceRange,
+            collectedAt: l.collectedAt,
+          })),
+          conditions: snapshot.records.conditions,
+          medications: snapshot.records.medications,
+          allergies: snapshot.records.allergies,
+          bloodPressure: snapshot.vitals.bloodPressure
+            ? { systolic: snapshot.vitals.bloodPressure.systolic, diastolic: snapshot.vitals.bloodPressure.diastolic, at: snapshot.vitals.bloodPressure.at }
+            : null,
+        })
+      : [];
+    const text = handout(state, protocol, { firstName: ctx.firstName, age: ctx.age, sex: ctx.sex }, ownData);
     await logEvent(id, "recap", { chars: text.length });
     return { text, bookingReason: bookingReason(protocol) };
   }
@@ -243,6 +279,31 @@ class EncounterService {
     const checkIn = await prisma.encounterCheckIn.create({ data: { encounterId: id, day, trend, note: note?.slice(0, 1000) ?? null } });
     await logEvent(id, "checkin", { day, trend });
     return checkIn;
+  }
+
+  /**
+   * Open episodes that need checking on — what the dashboard row reads.
+   * Only finished interviews with a due follow-up, newest first.
+   */
+  async openEpisodes(patientId: string) {
+    const rows = await prisma.encounter.findMany({
+      where: { patientId, status: "OPEN" },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      include: { checkIns: { orderBy: { createdAt: "desc" } } },
+    });
+    return rows
+      .map((row) => {
+        const state = toState(row);
+        return {
+          id: row.id,
+          complaintTitle: resolveProtocol(state.complaintKey).title,
+          complaintText: row.complaintText,
+          startedAt: row.createdAt,
+          followUp: followUpFor(row.createdAt, row.checkIns as any),
+        };
+      })
+      .filter((e) => e.followUp.due || e.followUp.persistence);
   }
 
   async history(patientId: string, id: string) {
