@@ -1240,8 +1240,10 @@ model AgentPreference {
   dailyCheckinHour    Int? // local hour 0-23; null = off
   weeklyReviewEnabled Boolean   @default(true) // Monday morning plan review
   watchOutsEnabled    Boolean   @default(true) // event-driven nudges (new labs, BP)
+  planWeekEnabled     Boolean   @default(true) // Sunday evening: Ollie lays out next week's training
   lastDailyCheckinAt  DateTime?
   lastWeeklyReviewAt  DateTime?
+  lastPlanWeekAt      DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 }

@@ -37,6 +37,19 @@ async function main() {
   const pref = await prisma.agentPreference.findUnique({ where: { patientId: pid } });
   assert(pref?.lastWeeklyReviewAt, "stamped");
 
+  /* Sunday planning: lays out next week as a draft card, never saves */
+  const pw: any = await runProactiveFor(pid, "plan_week", { notify: false });
+  assert(pw.threadId && pw.text, JSON.stringify(pw));
+  threads.push(pw.threadId);
+  show("plan_week", pw);
+  const pwt = await threadStore.getWithMessages(pid, pw.threadId, { includeTool: true });
+  const pwTools = pwt!.messages.filter((m) => m.role === "TOOL").map((m) => m.toolName);
+  console.log("  tools:", pwTools.join(", "));
+  assert(pwTools.includes("generate_workout_plan"), "plan_week must lay out next week");
+  assert(!pwTools.includes("save_workout_plan"), "plan_week must not save");
+  assert((pw.cards ?? []).some((c: any) => c.type === "workout_plan"), "week card attached");
+  assert((await prisma.agentPreference.findUnique({ where: { patientId: pid } }))?.lastPlanWeekAt, "stamped");
+
   /* daily check-in */
   const d: any = await runProactiveFor(pid, "daily_checkin", { notify: false });
   assert(d.threadId && d.text);

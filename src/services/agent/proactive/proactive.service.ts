@@ -11,12 +11,14 @@ import { isoWeekRange, safeTz } from "../memory/dates";
  *   weekly_review  Monday morning — judge last week vs the plan, propose tweaks
  *   daily_checkin  user-chosen local hour — today vs targets, one action
  *   watch_out      event-driven — a new lab report / flagged reading
+ *   plan_week      Sunday evening — lay out next week's training (a draft card)
  * Each run creates (or reuses) a PROACTIVE thread and pushes a notification
  * that deep-links to it. Eligibility is decided here, not in the worker.
  */
 
 export const DEFAULT_CHECKIN_HOUR = 18;
 export const WEEKLY_REVIEW_HOUR = 8; // local, Monday
+export const PLAN_WEEK_HOUR = 18; // local, Sunday
 const INACTIVE_AFTER_DAYS = 14;
 
 export type Preference = {
@@ -24,8 +26,10 @@ export type Preference = {
   dailyCheckinHour: number | null;
   weeklyReviewEnabled: boolean;
   watchOutsEnabled: boolean;
+  planWeekEnabled: boolean;
   lastDailyCheckinAt: Date | null;
   lastWeeklyReviewAt: Date | null;
+  lastPlanWeekAt: Date | null;
 };
 
 export const DEFAULT_PREFERENCE: Preference = {
@@ -33,14 +37,16 @@ export const DEFAULT_PREFERENCE: Preference = {
   dailyCheckinHour: DEFAULT_CHECKIN_HOUR,
   weeklyReviewEnabled: true,
   watchOutsEnabled: true,
+  planWeekEnabled: true,
   lastDailyCheckinAt: null,
   lastWeeklyReviewAt: null,
+  lastPlanWeekAt: null,
 };
 
 export const getPreference = async (patientId: string): Promise<Preference> =>
   (await prisma.agentPreference.findUnique({ where: { patientId } })) ?? DEFAULT_PREFERENCE;
 
-export const setPreference = (patientId: string, patch: Partial<Pick<Preference, "proactiveEnabled" | "dailyCheckinHour" | "weeklyReviewEnabled" | "watchOutsEnabled">>) =>
+export const setPreference = (patientId: string, patch: Partial<Pick<Preference, "proactiveEnabled" | "dailyCheckinHour" | "weeklyReviewEnabled" | "watchOutsEnabled" | "planWeekEnabled">>) =>
   prisma.agentPreference.upsert({ where: { patientId }, create: { patientId, ...patch }, update: patch });
 
 /** Logged anything in the last N days? Keeps jobs from nagging dormant accounts. */
@@ -60,6 +66,12 @@ const weeklyInstruction = (tz: string) => {
   return `[Weekly plan review for the week ${lastWeek.start} → ${lastWeek.end}. Use get_nutrition_summary, get_activity and get_workouts for that exact range (from=${lastWeek.start}, to=${lastWeek.end}) before judging. Compare against the plan targets. If a target should change, call update_plan_targets with the full new target list.]`;
 };
 
+const planWeekInstruction = (tz: string) => {
+  const thisWeek = isoWeekRange(tz, moment().tz(tz));
+  const nextMonday = thisWeek.next;
+  return `[Sunday planning for the week starting ${nextMonday}. First call get_workouts with status=all from=${thisWeek.start} to=${thisWeek.end} to see what was planned and done this week. Then call generate_workout_plan with startDate=${nextMonday}, days=7 (sessionsPerWeek from the plan target; keep what worked, adjust what was missed). Present the split in a few lines and say the card has Save. Do NOT call save_workout_plan.]`;
+};
+
 const dailyInstruction = (tz: string) =>
   `[Daily check-in at ${moment().tz(tz).format("HH:mm")} local. Use the snapshot; call get_meals only if you need meal detail.]`;
 
@@ -71,6 +83,7 @@ const TITLES: Record<ProactiveKind, string> = {
   weekly_review: "Your weekly review",
   daily_checkin: "Daily check-in",
   watch_out: "Something new in your data",
+  plan_week: "Next week's training",
 };
 
 export async function runProactiveFor(patientId: string, kind: ProactiveKind, opts: { reason?: string; notify?: boolean; threadId?: string | null } = {}) {
@@ -78,11 +91,11 @@ export async function runProactiveFor(patientId: string, kind: ProactiveKind, op
   if (!patient) return { skipped: "no patient" as const };
   const tz = safeTz(patient.timeZone);
   const instruction =
-    kind === "weekly_review" ? weeklyInstruction(tz) : kind === "daily_checkin" ? dailyInstruction(tz) : watchOutInstruction(opts.reason ?? "new data");
+    kind === "weekly_review" ? weeklyInstruction(tz) : kind === "daily_checkin" ? dailyInstruction(tz) : kind === "plan_week" ? planWeekInstruction(tz) : watchOutInstruction(opts.reason ?? "new data");
   const title = kind === "weekly_review" ? `Weekly review · ${isoWeekRange(tz, moment().tz(tz).subtract(1, "week")).start}` : TITLES[kind];
 
   const r = await runProactiveCollect({ patientId, kind, title, instruction, threadId: opts.threadId ?? null });
-  const stamp = kind === "weekly_review" ? { lastWeeklyReviewAt: new Date() } : kind === "daily_checkin" ? { lastDailyCheckinAt: new Date() } : {};
+  const stamp = kind === "weekly_review" ? { lastWeeklyReviewAt: new Date() } : kind === "daily_checkin" ? { lastDailyCheckinAt: new Date() } : kind === "plan_week" ? { lastPlanWeekAt: new Date() } : {};
   if (Object.keys(stamp).length)
     await prisma.agentPreference.upsert({ where: { patientId }, create: { patientId, ...stamp }, update: stamp });
   if (!r.done) {
@@ -116,10 +129,12 @@ export async function runProactiveFor(patientId: string, kind: ProactiveKind, op
  * Patients whose LOCAL clock is at the given hour right now and who are due.
  * Called once per UTC hour by the worker; cheap enough to scan all patients.
  */
-export async function duePatients(kind: "weekly_review" | "daily_checkin", now = new Date()) {
+export type ScheduledKind = "weekly_review" | "daily_checkin" | "plan_week";
+
+export async function duePatients(kind: ScheduledKind, now = new Date()) {
   const patients = await prisma.patient.findMany({
     where: { subAccountOf: null, onBoardingComplete: true },
-    select: { id: true, timeZone: true, agentPreference: true, healthPlans: { where: { status: "ACTIVE" }, select: { id: true }, take: 1 } },
+    select: { id: true, timeZone: true, agentPreference: true, trainingProfile: { select: { patientId: true } }, workoutPlans: { where: { status: "ACTIVE" }, select: { id: true }, take: 1 }, healthPlans: { where: { status: "ACTIVE" }, select: { id: true }, take: 1 } },
   });
   const due: string[] = [];
   for (const p of patients) {
@@ -130,6 +145,11 @@ export async function duePatients(kind: "weekly_review" | "daily_checkin", now =
       if (!pref.weeklyReviewEnabled || local.isoWeekday() !== 1 || local.hour() !== WEEKLY_REVIEW_HOUR) continue;
       if (!p.healthPlans.length) continue; // nothing to review against
       if (pref.lastWeeklyReviewAt && moment(pref.lastWeeklyReviewAt).isAfter(local.clone().startOf("isoWeek"))) continue;
+    } else if (kind === "plan_week") {
+      // Sunday evening, for people who train with Ollie: a saved week, a training profile, or a plan with an exercise target.
+      if (!pref.planWeekEnabled || local.isoWeekday() !== 7 || local.hour() !== PLAN_WEEK_HOUR) continue;
+      if (!p.workoutPlans.length && !p.trainingProfile && !p.healthPlans.length) continue;
+      if (pref.lastPlanWeekAt && moment(pref.lastPlanWeekAt).isAfter(local.clone().startOf("isoWeek"))) continue;
     } else {
       if (pref.dailyCheckinHour === null || local.hour() !== pref.dailyCheckinHour) continue;
       if (pref.lastDailyCheckinAt && moment(pref.lastDailyCheckinAt).tz(safeTz(p.timeZone)).isSame(local, "day")) continue;
@@ -141,7 +161,7 @@ export async function duePatients(kind: "weekly_review" | "daily_checkin", now =
 }
 
 /** Run every due patient for this hour, sequentially (one model at a time). */
-export async function runDue(kind: "weekly_review" | "daily_checkin") {
+export async function runDue(kind: ScheduledKind) {
   const ids = await duePatients(kind);
   const results: { patientId: string; ok: boolean }[] = [];
   for (const patientId of ids) {

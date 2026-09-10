@@ -332,6 +332,35 @@ export const saveWorkoutPlan = defineTool({
   },
 });
 
+export const moveWorkout = defineTool({
+  name: "move_workout",
+  description: "Move a planned session to another day of the user's training week (same session, same time of day). Pass the planned session id (from the snapshot or get_workouts status=planned) and the new day. The user confirms in the app.",
+  schema: z.object({
+    sessionId: z.string(),
+    plannedFor: dayString.describe("The new day. Never in the past."),
+  }),
+  risk: "write",
+  async run(ctx, input) {
+    if (input.plannedFor < ctx.today) return { result: { error: "that day is in the past" } };
+    const row = await WorkoutService.get(ctx.patientId, input.sessionId);
+    if (!row || row.status !== "PLANNED") return { result: { error: "No planned session with that id — get_workouts status=planned lists them." } };
+    const title = row.title ?? activityByKey(row.activityKey).label;
+    const from = row.plannedFor ?? moment(row.startedAt).tz(ctx.timeZone).format("YYYY-MM-DD");
+    const clash = (await WorkoutService.listPlanned(ctx.patientId, input.plannedFor, input.plannedFor)).filter((s) => s.id !== row.id);
+    const preview = { sessionId: row.id, title, from, to: input.plannedFor, fromLabel: moment.utc(from, "YYYY-MM-DD").format("ddd D MMM"), toLabel: moment.utc(input.plannedFor, "YYYY-MM-DD").format("ddd D MMM"), clash: clash.map((s) => s.title ?? activityByKey(s.activityKey).label) };
+    return {
+      result: { previewOf: { title, from, to: input.plannedFor, alsoThatDay: preview.clash } },
+      proposal: { title: `Move ${title}`, summary: `${preview.fromLabel} → ${preview.toLabel}${clash.length ? ` (that day already has ${preview.clash.join(", ")})` : ""}`, preview },
+    };
+  },
+  async commit(ctx, input) {
+    const moved = await WorkoutService.movePlanned(ctx.patientId, input.sessionId, input.plannedFor);
+    if (!moved) throw new Error("planned session not found");
+    const result = { id: moved.id, title: moved.title, plannedFor: moved.plannedFor };
+    return { result, cards: [{ type: "workout_moved", title: "Session moved", data: result }] };
+  },
+});
+
 export const updateTrainingProfile = defineTool({
   name: "update_training_profile",
   description:

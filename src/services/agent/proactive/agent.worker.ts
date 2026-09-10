@@ -15,8 +15,9 @@ if (process.env.NODE_ENV !== "development") {
       if (job.name !== AGENT_TICK_JOB) return; // meal reminders are handled by notifications.worker
       const weekly = await runDue("weekly_review");
       const daily = await runDue("daily_checkin");
-      console.log(`agent tick: weekly ${weekly.filter((r) => r.ok).length}/${weekly.length}, daily ${daily.filter((r) => r.ok).length}/${daily.length}`);
-      return { weekly: weekly.length, daily: daily.length };
+      const planWeek = await runDue("plan_week");
+      console.log(`agent tick: weekly ${weekly.filter((r) => r.ok).length}/${weekly.length}, daily ${daily.filter((r) => r.ok).length}/${daily.length}, plan_week ${planWeek.filter((r) => r.ok).length}/${planWeek.length}`);
+      return { weekly: weekly.length, daily: daily.length, planWeek: planWeek.length };
     },
     {
       connection: { host: process.env.REDIS_HOST, port: 6379, password: process.env.REDIS_PASSWORD },

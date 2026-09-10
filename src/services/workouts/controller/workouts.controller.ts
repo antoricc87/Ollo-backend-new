@@ -80,6 +80,20 @@ class WorkoutHandler {
     }
   }
 
+  /** Move a planned session to another day. Body: { plannedFor: YYYY-MM-DD }. */
+  async move(request: any, response: Response) {
+    const { id } = request.user;
+    const plannedFor = String(request.body?.plannedFor ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedFor)) return response.status(400).json(Util.error({}, "plannedFor (YYYY-MM-DD) is required"));
+    try {
+      const session = await WorkoutService.movePlanned(id, request.params.sessionId, plannedFor);
+      if (!session) return response.status(404).json(Util.error({}, "Not found"));
+      return response.status(200).json(Util.success(session, "Session moved"));
+    } catch (error: any) {
+      return response.status(400).json(Util.error({}, error?.message ?? "Error moving session"));
+    }
+  }
+
   /* ------------------------------ training week ------------------------------ */
 
   async planActive(request: any, response: Response) {

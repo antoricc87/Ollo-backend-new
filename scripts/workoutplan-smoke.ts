@@ -198,11 +198,22 @@ async function main() {
   assert.equal(put.plan.daysOut[4].state, "planned");
   log("✓ single workout put on a day of the active week");
 
+  /* 7b. move the day-5 session to day 6 */
+  const day5row = put.plan.daysOut[4].planned!;
+  const moved = await WorkoutService.movePlanned(pid, day5row.id, shiftDay(today, 2));
+  assert(moved && moved.plannedFor === shiftDay(today, 2) && moment(moved.startedAt).tz(tz).format("HH:mm") === "18:30", "moved keeps the slot time");
+  const v5 = await WorkoutPlanService.getActive(pid);
+  assert.equal(v5!.daysOut[4].state, "rest");
+  assert.equal(v5!.daysOut[2].state, "planned", "moved onto the yoga day: planned wins the state, yoga stays in other");
+  assert.equal(v5!.daysOut[2].other.length, 1);
+  await assert.rejects(() => WorkoutService.movePlanned(pid, day5row.id, shiftDay(today, -1)), /past/);
+  log("✓ move keeps the time, refuses the past");
+
   /* 8. snapshot block */
   const snap = await WorkoutPlanService.forSnapshot(pid, today);
   assert(snap && snap.todayIndex === 1 && snap.done === 2 && snap.planned === 4, JSON.stringify(snap));
   assert(snap!.today?.state === "done" && /Bench press 4×8/.test(snap!.today.text), snap!.today?.text);
-  assert.equal(snap!.next?.date, day4.plannedFor);
+  assert.equal(snap!.next?.date, shiftDay(today, 2), "next = the moved session");
   log(`✓ snapshot: today ${snap!.today!.text} | next ${snap!.next!.date} ${snap!.next!.text}`);
 
   /* 9. replacing the week keeps completed rows, drops planned ones */

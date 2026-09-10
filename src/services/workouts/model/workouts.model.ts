@@ -189,6 +189,17 @@ class WorkoutServiceImpl {
     return fresh;
   }
 
+  /** Move a planned session to another day (same slot time; a day in the past is refused). */
+  async movePlanned(patientId: string, id: string, plannedFor: string) {
+    const row = await prisma.workoutSession.findFirst({ where: { id, patientId, deletedAt: null, status: "PLANNED" }, select: { id: true, startedAt: true, durationSec: true } });
+    if (!row) return null;
+    const tz = await this.tzOf(patientId);
+    if (plannedFor < moment().tz(tz).format(DAY)) throw new Error("that day is in the past");
+    const time = moment(row.startedAt).tz(tz).format("HH:mm");
+    const startedAt = moment.tz(`${plannedFor} ${time}`, "YYYY-MM-DD HH:mm", tz);
+    return prisma.workoutSession.update({ where: { id: row.id }, data: { plannedFor, startedAt: startedAt.toDate(), endedAt: startedAt.clone().add(row.durationSec, "seconds").toDate() }, include: SESSION_INCLUDE });
+  }
+
   /**
    * The planned row a real session completes: same local day, compatible
    * activity, ranked like the watch match. Also considers rows the watch

@@ -294,7 +294,7 @@ class AgentHandler {
     const { id } = request.user;
     const b = request.body ?? {};
     const patch: any = {};
-    for (const k of ["proactiveEnabled", "weeklyReviewEnabled", "watchOutsEnabled"]) if (typeof b[k] === "boolean") patch[k] = b[k];
+    for (const k of ["proactiveEnabled", "weeklyReviewEnabled", "watchOutsEnabled", "planWeekEnabled"]) if (typeof b[k] === "boolean") patch[k] = b[k];
     if (b.dailyCheckinHour === null) patch.dailyCheckinHour = null;
     else if (b.dailyCheckinHour !== undefined) {
       const h = Number(b.dailyCheckinHour);

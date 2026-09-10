@@ -485,6 +485,20 @@ the user's words) is the structured brief every design reads.
   Dev seed: `scripts/seed-training-week.ts [email] [--clear]` — training
   profile + a 7-day week (Mon–Sun of this ISO week, Mon completed in place)
   for the sim render; `--clear` removes it.
+- S5 (same day): `move_workout` (write proposal → `WorkoutService.movePlanned`,
+  same slot time, past days refused; REST `PUT /api/workouts/:id/move
+  {plannedFor}`); proactive kind `plan_week` — Sunday `PLAN_WEEK_HOUR` 18:00
+  local for patients with a saved week / training profile / active plan,
+  gated by `AgentPreference.planWeekEnabled` + `lastPlanWeekAt` (additive
+  columns), instruction = read this week with `get_workouts status=all`
+  then `generate_workout_plan` for next Monday, NEVER save; prompt section
+  `PROACTIVE.plan_week`; `weekly_review` now offers (only offers) a week when
+  none covers this one; `daily_checkin` names today's planned session first.
+  Worker runs `runDue("plan_week")` after the daily check-ins; preferences
+  route accepts `planWeekEnabled`. Proactive smoke has a `plan_week` block.
+  Ring minutes: nothing on the phone reads `DailyExercise` any more (Trends
+  and Plan v1 use the workouts API); the backend keeps it only for today's
+  `get_activity` ring minutes and the legacy exercises_tracker routes.
 
 ## Labs journey (Aug 27 2026) — `src/services/labs_journey/`
 

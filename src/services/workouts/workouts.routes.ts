@@ -24,6 +24,7 @@ export default class Routes {
     this.app.put("/api/training-profile", verifyToken, workoutApi.profilePut);
     this.app.get("/api/workouts/:sessionId", verifyToken, workoutApi.get);
     this.app.post("/api/workouts/:sessionId/complete", verifyToken, workoutApi.complete);
+    this.app.put("/api/workouts/:sessionId/move", verifyToken, workoutApi.move);
     this.app.delete("/api/workouts/:sessionId", verifyToken, workoutApi.remove);
   }
 

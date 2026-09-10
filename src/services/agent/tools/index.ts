@@ -12,7 +12,7 @@ import { buildGroceryList, generateMealPlan, generateRecipe } from "./generation
 import { getWorkouts, logWorkout } from "./workout.tools";
 import { suggestMeal } from "./suggest.tools";
 import { getMealPlan, saveMealPlan } from "./mealplan.tools";
-import { generateWorkout, generateWorkoutPlan, saveWorkoutPlan, updateTrainingProfile } from "./workoutplan.tools";
+import { generateWorkout, generateWorkoutPlan, moveWorkout, saveWorkoutPlan, updateTrainingProfile } from "./workoutplan.tools";
 
 /**
  * Everything the agent can do: read tools, memory tools, generation tools
@@ -50,7 +50,8 @@ export const registry = new ToolRegistry().register(
   generateWorkout,
   generateWorkoutPlan,
   saveWorkoutPlan,
-  updateTrainingProfile
+  updateTrainingProfile,
+  moveWorkout
 );
 
 export { ToolRegistry } from "./registry";
