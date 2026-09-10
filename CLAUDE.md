@@ -398,6 +398,94 @@ no-watch estimate — all pass 2026-08-26); eval scenarios
 `DailyExercise` minutes tracker (Apple exercise ring) still feeds Trends and
 the weekly report — sessions do not yet derive those minutes.
 
+### Planned sessions + training weeks (Sep 9 2026) — same tables, one record
+
+Ruling (user): designing training must live on the SAME workouts domain as
+logging it — no parallel plan tables. So a designed workout is a
+`WorkoutSession` with `status PLANNED` (+ `plannedFor` local day, `focus`,
+`place`, `muscleGroups`, `why`, `warmup[]`, `cooldown[]`, `planId`) whose
+`WorkoutSet`s carry the prescription in `targetReps/targetRepsMax/targetKg/
+restSec` (`reps`/`weightKg` stay the ACTUALS, null until done);
+`WorkoutExercise` gained `loadNote` + `alternatives[]`. `WorkoutPlan` is a
+HEADER only (title, `startDate`, `days`, `PlanStatus`, `brief`, `fit`) — its
+sessions are the PLANNED rows. `TrainingProfile` (place, equipment[],
+experience, sessionMinutes, preferredDays[], preferredTime, `limitations` in
+the user's words) is the structured brief every design reads.
+- `WorkoutService` (same class): `list(..., {status})` DEFAULTS TO COMPLETED
+  so every history caller keeps its meaning; `listPlanned`, `createPlanned`
+  (slot = `plannedFor` at the profile's preferred time, default 07:00),
+  `replacePlanned` (swap), `completeSession` (actual sets replace the
+  prescription but `mergeTargets` carries targets over by exerciseKey; a
+  completion with no exercises keeps the planned ones), and ONE rule
+  `adoptPlanned(day, activityKey, startedAtMs, durationSec)` =
+  `matchPlannedSession` in `domain/workout.matching.ts` (compatible activity,
+  then overlap / closest duration; also considers a row the watch already
+  completed but nobody described). Both `syncFromHealthKit` (a NEW watch
+  workout → adopts the planned row: externalId + metrics + COMPLETED, source
+  unchanged; returns `adopted`) and `createSession` (described session →
+  completes it; `plannedId` forces one, `adopt:false` opts out) use it, so a
+  planned session is never duplicated. `previousExercises` = COMPLETED only.
+- `model/plan.model.ts` `WorkoutPlanService`: `getActive` → `WorkoutPlanView`
+  (`daysOut[].{planned, other[], state: planned|done|missed|rest|other}`,
+  `planned`/`done` counts, `todayIndex`), `create` (previous ACTIVE →
+  REPLACED + its still-PLANNED rows soft-deleted; completed rows stay history
+  and keep their planId), `putOnDay` (single workout: replaces that day inside
+  the active week, else opens a 1-day week), `updateStatus`, `forSnapshot`.
+  `model/training_profile.model.ts`: merge-upsert + `render()` one line.
+- Routes (all under `workouts.routes.ts`, fixed paths before `:sessionId`):
+  `GET /api/workouts?from&to&status=completed|planned|all`, `GET
+  /api/workouts/plan/active`, `POST /api/workouts/plan`, `PUT
+  /api/workouts/plan/:planId/status`, `POST /api/workouts/planned`, `POST
+  /api/workouts/:sessionId/complete`, `GET/PUT /api/training-profile`.
+- Design: `design/workoutDesign.service.ts` — `buildBrief` (person, training
+  profile, plan sessions target, last 7 days COMPLETED with muscle groups,
+  `lastLoads` per lift = the ONLY source of kg, memories, client recovery),
+  `designSession` (strict schema → `PlannedSessionInput`; `checkSession` in
+  code: time band ±20 %/8 min from sets×reps×3 s + rests, equipment outside a
+  gym, requested groups covered, heavy groups <48 h, custom flagged, and it
+  STRIPS `targetKg` for lifts without history → loadNote; ≤2 revisions),
+  `designWeek` (layout call with count/one-per-day/consecutive-heavy checks
+  and ≤2 relayouts, then `designSession` per day in parallel with
+  `weekContext`). `catalogForPlanner()` now exposes muscle group + equipment;
+  `muscleGroupsFor()` maps "upper body"/"push"/… to catalog groups. Env
+  `WORKOUT_DESIGN_MODEL` (default AGENT_MODEL).
+- Agent (`tools/workoutplan.tools.ts`): `generate_workout` (generate; returns
+  `needsInfo` when no profile and no place → ask ONE question; card `workout`
+  `{draftId, session, display, fit, assumptions, slot{date, replaces, planId,
+  inWeek}, lastLoads}`; in-memory `registerSessionDraft`), `generate_workout_
+  plan` (card `workout_plan` with `sessions[].{day,date,session,display}`,
+  `rest[]`, `replaces`; `registerWeekDraft` + `weekInputFromCard` fallback
+  from stored ASSISTANT cards), `save_workout_plan` (write proposal →
+  `WorkoutPlanService.create` → card `workout_plan_saved`),
+  `update_training_profile` (write proposal). `get_workouts` gained
+  `status` (planned = today→+13 unclamped; attaches the saved week as a
+  `workout_plan` card via `savedWeekCard`). `log_workout` gained
+  `sessionId` / `draftId` (no parsing: the planned sets become the log's
+  starting point, `completes` in the preview, commit = `completeSession`), a
+  fallback to the day's single planned row when the id is wrong, an adoption
+  line on the described path (`preview.completes`, `plannedSessionId`) and a
+  hint when the parser rejects "did today's planned session". Snapshot: a
+  `training week:` block (today/next with `[sessionId …]`, week states) and a
+  `training:` line; the week line's session count/minutes now come from
+  `WorkoutService` (S3: the `DailyExercise` ring count was a second truth).
+  Prompt: two new TOOL_RULES bullets (design routing, one question max,
+  loads only from history, pain → care team, no grading); write list + claim
+  guard include `save_workout_plan` / `update_training_profile`.
+- Verify: `scripts/workoutplan-smoke.ts` (no LLM: profile, week save,
+  watch-sync adoption, described adoption with targets, rest-day row, swap,
+  put-on-day, snapshot, replace keeps history, status filter — 0.2 s),
+  `scripts/agent-workoutplan-smoke.ts` (LLM: workout card → log via draftId →
+  week → save proposal → confirm → "did today's planned session" completes
+  the row → profile proposal; passes 2026-09-09, ~35 s), eval scenarios
+  `workout_request_card`, `workout_plan_card_and_save`,
+  `training_profile_update`, safety `knee_pain_workout`,
+  `hypertension_shapes_intensity`; fixture seeds a TrainingProfile + one
+  completed bench/pulldown session (lastLoads). Lesson: the model can't act
+  on a planned row it can't name — render ids in the snapshot.
+  Dev seed: `scripts/seed-training-week.ts [email] [--clear]` — training
+  profile + a 7-day week (Mon–Sun of this ISO week, Mon completed in place)
+  for the sim render; `--clear` removes it.
+
 ## Labs journey (Aug 27 2026) — `src/services/labs_journey/`
 
 How a patient gets labs done. `domain/screening.rules.ts` `buildPanel(profile)`

@@ -1,4 +1,6 @@
 import WorkoutService from "../../workouts/model/workouts.model";
+import WorkoutPlanService from "../../workouts/model/plan.model";
+import TrainingProfileService from "../../workouts/model/training_profile.model";
 import { activityByKey, activityKeyFromHealthKit } from "../../workouts/domain/activity.catalog";
 import { fmtSets } from "../../workouts/domain/workout.metrics";
 import type { WatchWorkoutSummary } from "../../workouts/domain/workout.schema";
@@ -96,6 +98,24 @@ export type PatientSnapshot = {
     today: { id: string; mealType: string; name: string; calories: number; proteins: number; ingredients: string[] }[];
     tomorrow: { id: string; mealType: string; name: string; calories: number; proteins: number; ingredients: string[] }[];
   };
+  /** Saved training week (planned WorkoutSession rows under a header). */
+  workoutPlan: null | {
+    id: string;
+    title: string;
+    startDate: string;
+    endDate: string;
+    days: number;
+    todayIndex: number | null;
+    planned: number;
+    done: number;
+    ended: boolean;
+    notStarted: boolean;
+    today: { id: string; state: string; text: string } | null;
+    next: { id: string; date: string; text: string } | null;
+    week: string[];
+  };
+  /** How they train (TrainingProfile), one rendered line; null when never set. */
+  training: string | null;
   today_log: {
     calories: number | null;
     protein_g: number | null;
@@ -267,6 +287,11 @@ export async function buildPatientSnapshot(
     console.error("snapshot: meal plan", e);
     return null;
   });
+  const workoutPlan = await WorkoutPlanService.forSnapshot(patientId, today).catch((e) => {
+    console.error("snapshot: workout plan", e);
+    return null;
+  });
+  const training = TrainingProfileService.render(await TrainingProfileService.get(patientId).catch(() => null));
 
   /* ----------------------------- today ----------------------------- */
   const todayEntries = todayFood.flatMap((d) => d.foodEntries);
@@ -303,9 +328,9 @@ export async function buildPatientSnapshot(
     perDay.set(key, cur);
   }
   const loggedDays = Array.from(perDay.values()).filter((d) => d.n > 0);
-  const exerciseByDay = new Map<string, number>();
-  for (const e of weekExercise)
-    exerciseByDay.set(e.date.slice(0, 10), (exerciseByDay.get(e.date.slice(0, 10)) ?? 0) + e.minutesOfExercise);
+  // Sessions = WorkoutSession rows (watch-synced + described), the same source the
+  // app's Exercise pages and Health Score read. The ring tracker only feeds today's minutes.
+  void weekExercise;
   const weekSessions = await WorkoutService.list(patientId, { from: moment.tz(week.start, "YYYY-MM-DD", tz).toDate(), to: moment.tz(week.next, "YYYY-MM-DD", tz).toDate() }, { limit: 30 });
   const weekOut: PatientSnapshot["week"] = {
     start: week.start,
@@ -313,8 +338,8 @@ export async function buildPatientSnapshot(
     daysLogged: loggedDays.length,
     avgCalories: loggedDays.length ? round(sum(loggedDays.map((d) => d.kcal)) / loggedDays.length) : null,
     avgProtein_g: loggedDays.length ? round(sum(loggedDays.map((d) => d.protein)) / loggedDays.length) : null,
-    exerciseSessions: Array.from(exerciseByDay.values()).filter((m) => m >= SESSION_MIN_MINUTES).length,
-    exerciseMinutes: sum(Array.from(exerciseByDay.values())),
+    exerciseSessions: new Set(weekSessions.map((s) => moment(s.startedAt).tz(tz).format("YYYY-MM-DD"))).size,
+    exerciseMinutes: Math.round(sum(weekSessions.map((s) => s.durationSec)) / 60),
     workouts: weekSessions.map((s) => ({
       id: s.id,
       day: moment(s.startedAt).tz(tz).format("ddd D"),
@@ -438,6 +463,8 @@ export async function buildPatientSnapshot(
     },
     plan: planOut,
     mealPlan,
+    workoutPlan,
+    training,
     today_log,
     week: weekOut,
     vitals,
@@ -541,6 +568,15 @@ export function renderSnapshot(s: PatientSnapshot): string {
     else L.push(`meal plan: "${mp.title}" ended ${mp.endDate} — offer a new one if they want`);
   } else L.push("meal plan: none saved (generate_meal_plan makes one; the card has Save)");
 
+  if (s.workoutPlan) {
+    const wp = s.workoutPlan;
+    if (wp.todayIndex) {
+      L.push(`training week: "${wp.title}" · day ${wp.todayIndex} of ${wp.days} (${wp.startDate}→${wp.endDate}); ${wp.done} of ${wp.planned} sessions done; ${wp.week.join(", ")}`);
+      L.push(`  today: ${wp.today ? `${wp.today.state} — ${wp.today.text} [sessionId ${wp.today.id}]` : "rest day"}${wp.next ? `; next: ${wp.next.date} ${wp.next.text} [sessionId ${wp.next.id}]` : ""}`);
+    } else if (wp.notStarted) L.push(`training week: "${wp.title}" saved, starts ${wp.startDate} (${wp.days} days)`);
+    else L.push(`training week: "${wp.title}" ended ${wp.endDate} (${wp.done} of ${wp.planned} done) — offer next week if they want`);
+  } else L.push("training week: none saved (generate_workout_plan makes one; the card has Save; generate_workout for a single session)");
+
   const t = s.today_log;
   L.push(
     `today: ${fmt(t.calories, " kcal")} logged (P${fmt(t.protein_g)} C${fmt(t.carbs_g)} F${fmt(t.fat_g)}, fiber ${fmt(t.fiber_g)}g, sodium ${fmt(t.sodium_mg)}mg, added sugar ${fmt(t.addedSugar_g)}g)` +
@@ -604,6 +640,7 @@ export function renderSnapshot(s: PatientSnapshot): string {
       `; supplements ${n.supplements.length ? n.supplements.map((x) => `${x.name} ${x.quantity}`.trim()).join(", ") : "none"}`
   );
   L.push(`exercise prefs: ${s.exercise.frequency ?? "—"}; ${list(s.exercise.preferences, 6)}`);
+  L.push(`training: ${s.training ?? "profile not set (ask once when designing a workout: place, equipment, experience, any limitations — update_training_profile)"}`);
 
   if (s.subAccounts.length)
     L.push(`sub-accounts: ` + s.subAccounts.map((a) => `${a.name}${a.age !== null ? ` (${a.age})` : ""}`).join(", "));

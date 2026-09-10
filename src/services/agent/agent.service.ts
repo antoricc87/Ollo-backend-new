@@ -216,7 +216,7 @@ async function* runLoop(p: {
           messages.push({
             role: "user",
             content:
-              "[System: your reply describes a card or asks the user to confirm, but no tool was called this turn — nothing was prepared. Call the right tool now with the user's words verbatim (log_meal, log_workout, log_vital, message_care_team, book_appointment, update_plan_targets), or answer plainly without claiming anything was prepared.]",
+              "[System: your reply describes a card or asks the user to confirm, but no tool was called this turn — nothing was prepared. Call the right tool now with the user's words verbatim (log_meal, log_workout, log_vital, message_care_team, book_appointment, update_plan_targets, save_workout_plan, update_training_profile), or answer plainly without claiming anything was prepared.]",
           });
           continue;
         }

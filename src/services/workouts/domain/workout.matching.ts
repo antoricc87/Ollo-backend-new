@@ -55,3 +55,37 @@ export const matchWatchWorkout = (d: Described, candidates: WatchWorkoutSummary[
   }
   return { kind: "ambiguous", candidates: pool };
 };
+
+/* ------------------------- planned-session adoption ------------------------- */
+
+export type PlannedCandidate = {
+  id: string;
+  activityKey: string;
+  /** ISO instants of the planned slot. */
+  startedAt: string;
+  endedAt: string;
+  durationSec: number;
+};
+
+/**
+ * Which planned row does a real session (watch workout or described) complete?
+ * Same ranking as the watch match: compatible activity first, time overlap
+ * when a start is known, else closest duration; a lone compatible candidate
+ * wins outright. Returns null when nothing on that day fits — the caller
+ * then creates a fresh row, never a duplicate of a planned one.
+ */
+export const matchPlannedSession = (d: Described, planned: PlannedCandidate[]): PlannedCandidate | null => {
+  const compatible = planned.filter((p) => activitiesCompatible(d.activityKey, p.activityKey));
+  if (!compatible.length) return null;
+  if (compatible.length === 1) return compatible[0];
+  if (d.startedAtMs !== null) {
+    const dur = (d.durationSec ?? 45 * 60) * 1000;
+    const scored = compatible
+      .map((p) => ({ p, overlap: overlapSeconds(d.startedAtMs!, d.startedAtMs! + dur, ms(p.startedAt), ms(p.endedAt)) }))
+      .filter((x) => x.overlap > 0)
+      .sort((a, b) => b.overlap - a.overlap);
+    if (scored.length) return scored[0].p;
+  }
+  const want = d.durationSec ?? 45 * 60;
+  return [...compatible].sort((a, b) => Math.abs(a.durationSec - want) - Math.abs(b.durationSec - want))[0];
+};

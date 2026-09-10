@@ -105,6 +105,32 @@ export async function createFixture(): Promise<Fixture> {
   );
   const todayCalories = Array.isArray(lunch) ? lunch.reduce((a: number, e: any) => a + (e.calories ?? 0), 0) : 520;
   await seedClinicianFor(EVAL_EMAIL); // Dr. Giulia Rossi (Clinician + CareTeamMember)
+  // How they train + one completed session three days ago, so generated workouts have a real load to progress from.
+  await prisma.trainingProfile.create({ data: { patientId: patient.id, place: "gym", equipment: ["barbell", "dumbbell", "cable", "machine"], experience: "some", sessionMinutes: 45, preferredDays: ["mon", "wed", "fri"], preferredTime: "18:30", limitations: "left knee — no deep squats" } });
+  const threeDaysAgo = moment().tz(EVAL_TZ).subtract(3, "days").hour(18).minute(30).second(0).millisecond(0);
+  await prisma.workoutSession.create({
+    data: {
+      patientId: patient.id,
+      source: "OLLIE",
+      activityKey: "strength",
+      title: "Upper body",
+      focus: "strength",
+      place: "gym",
+      muscleGroups: ["chest", "back"],
+      startedAt: threeDaysAgo.toDate(),
+      endedAt: threeDaysAgo.clone().add(45, "minutes").toDate(),
+      durationSec: 45 * 60,
+      calories: 280,
+      metricsSource: "estimate",
+      description: "bench 4x8 at 60, pulldown 3x10 at 55",
+      exercises: {
+        create: [
+          { sortOrder: 0, exerciseKey: "bench_press", name: "Bench press", muscleGroup: "chest", equipment: "barbell", sets: { create: [0, 1, 2, 3].map((i) => ({ sortOrder: i, reps: 8, weightKg: 60 })) } },
+          { sortOrder: 1, exerciseKey: "lat_pulldown", name: "Lat pulldown", muscleGroup: "back", equipment: "cable", sets: { create: [0, 1, 2].map((i) => ({ sortOrder: i, reps: 10, weightKg: 55 })) } },
+        ],
+      },
+    },
+  });
   return { patientId: patient.id, todayCalories };
 }
 
@@ -115,6 +141,9 @@ export async function destroyFixture() {
   const uid = p.id;
   await unlinkClinician(uid);
   await prisma.mealPlan.deleteMany({ where: { patientId: uid } });
+  await prisma.workoutSession.deleteMany({ where: { patientId: uid } });
+  await prisma.workoutPlan.deleteMany({ where: { patientId: uid } });
+  await prisma.trainingProfile.deleteMany({ where: { patientId: uid } });
   await prisma.foodEntry.deleteMany({ where: { dailyFood: { userId: uid } } });
   await prisma.dailyFood.deleteMany({ where: { userId: uid } });
   await prisma.weeklyFood.deleteMany({ where: { userId: uid } }).catch(() => null);

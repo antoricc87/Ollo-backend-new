@@ -128,3 +128,38 @@ export const canonicalExercise = (name: string, hintKey?: string | null): { key:
 
 /** Compact catalog listing for the parser prompt: "key — name (aliases…)". */
 export const catalogForPrompt = () => EXERCISES.map((e) => `${e.key}: ${e.name}${e.aliases.length ? ` (${e.aliases.slice(0, 4).join(", ")})` : ""}`).join("\n");
+
+/** Catalog listing for the planner prompt — WITH muscle group and equipment, grouped. */
+export const catalogForPlanner = () => {
+  const groups = new Map<string, string[]>();
+  for (const e of EXERCISES) (groups.get(e.muscleGroup) ?? groups.set(e.muscleGroup, []).get(e.muscleGroup)!).push(`${e.key} (${e.equipment})`);
+  return [...groups.entries()].map(([g, xs]) => `${g}: ${xs.join(", ")}`).join("\n");
+};
+
+export const MUSCLE_GROUPS = ["chest", "back", "shoulders", "arms", "legs", "glutes", "core", "full_body", "cardio"] as const;
+
+/** Loose words people use for muscle groups → catalog groups (for coverage checks). */
+export const muscleGroupsFor = (word: string): string[] => {
+  const w = word.trim().toLowerCase().replace(/[-\s]+/g, "_");
+  const map: Record<string, string[]> = {
+    upper: ["chest", "back", "shoulders", "arms"],
+    upper_body: ["chest", "back", "shoulders", "arms"],
+    lower: ["legs", "glutes"],
+    lower_body: ["legs", "glutes"],
+    push: ["chest", "shoulders"],
+    pull: ["back"],
+    biceps: ["arms"],
+    triceps: ["arms"],
+    abs: ["core"],
+    quads: ["legs"],
+    hamstrings: ["legs"],
+    calves: ["legs"],
+    glute: ["glutes"],
+    leg: ["legs"],
+    full: ["full_body"],
+    full_body: ["full_body"],
+    total_body: ["full_body"],
+  };
+  if (map[w]) return map[w];
+  return (MUSCLE_GROUPS as readonly string[]).includes(w) ? [w] : [];
+};

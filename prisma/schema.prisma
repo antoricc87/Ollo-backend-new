@@ -161,6 +161,8 @@ model Patient {
   agentAuditLogs       AgentAuditLog[]
   agentProposals       AgentProposal[]
   workoutSessions      WorkoutSession[]      @relation("PatientWorkouts")
+  workoutPlans         WorkoutPlan[]         @relation("PatientWorkoutPlans")
+  trainingProfile      TrainingProfile?
   agentPreference      AgentPreference?
   labJourneys          LabJourney[]          @relation("PatientLabJourneys")
 }
@@ -1257,6 +1259,13 @@ enum WorkoutSource {
   MANUAL
 }
 
+/// PLANNED = designed (by Ollie or the user) for a day, not yet done — the SAME
+/// row becomes COMPLETED when the watch sync adopts it or the user logs it.
+enum WorkoutStatus {
+  PLANNED
+  COMPLETED
+}
+
 /// One physical training session. Metrics (calories, heart rate, zones) come
 /// from the linked HealthKit workout when there is one, otherwise estimated.
 /// Heart-rate traces are never stored — the phone reads them from HealthKit.
@@ -1281,6 +1290,19 @@ model WorkoutSession {
   rpe           Int? // 1–10, user-reported
   notes         String?
   description   String? // what the user said, verbatim
+  /// Planning (Sep 2026): a planned row keeps its slot in startedAt/endedAt
+  /// (preferred time on plannedFor) and its prescription in the sets' target*.
+  status        WorkoutStatus     @default(COMPLETED)
+  plannedFor    String? // local YYYY-MM-DD while PLANNED
+  planId        String? // WorkoutPlan header when part of a saved week
+  plan          WorkoutPlan?      @relation(fields: [planId], references: [id], onDelete: SetNull)
+  focus         String? // strength | hypertrophy | conditioning | mobility | endurance | mixed
+  place         String? // gym | home | outdoor | anywhere
+  muscleGroups  String[]
+  why           String? // one line: how it fits the plan / recovery
+  warmup        String[]
+  cooldown      String[]
+  completedAt   DateTime?
   deletedAt     DateTime? // soft delete (removed from Health, or by the user)
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
@@ -1288,6 +1310,7 @@ model WorkoutSession {
 
   @@unique([patientId, externalId])
   @@index([patientId, startedAt])
+  @@index([patientId, status, plannedFor])
 }
 
 model WorkoutExercise {
@@ -1300,6 +1323,8 @@ model WorkoutExercise {
   muscleGroup String?
   equipment   String?
   notes       String?
+  loadNote    String? // planned: "same as last time +2.5 kg" / "a weight you could do 12 with"
+  alternatives String[] // planned: catalog keys to swap in when kit is busy/missing
   sets        WorkoutSet[]
 
   @@index([sessionId])
@@ -1318,8 +1343,53 @@ model WorkoutSet {
   rpe         Float?
   toFailure   Boolean         @default(false)
   isWarmup    Boolean         @default(false)
+  /// Prescription (planned sessions). reps/weightKg above stay the ACTUALS,
+  /// null until the session is completed — so planned vs done needs no join.
+  targetReps    Int?
+  targetRepsMax Int?
+  targetKg      Float?
+  restSec       Int?
 
   @@index([exerciseId])
+}
+
+/// A saved training week: header only. Its sessions are PLANNED
+/// WorkoutSession rows (planId), which become COMPLETED in place.
+/// One ACTIVE per patient; saving a new week → previous REPLACED and its
+/// still-planned rows soft-deleted (completed ones are history and stay).
+model WorkoutPlan {
+  id        String           @id @default(uuid())
+  patientId String
+  patient   Patient          @relation("PatientWorkoutPlans", fields: [patientId], references: [id], onDelete: Cascade)
+  subjectId String? // reserved: sub-account the plan is for
+  title     String
+  notes     String?
+  startDate String // local YYYY-MM-DD of day 1
+  days      Int
+  status    PlanStatus       @default(ACTIVE)
+  brief     Json? // { sessionsPerWeek, sessionMinutes, focus, place } it was built from
+  fit       Json? // { ok, issues } from the generator's checks
+  source    String? // "ollie" | "manual"
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  sessions  WorkoutSession[]
+
+  @@index([patientId, status])
+}
+
+/// How the user trains — the structured brief every generated workout reads.
+/// `limitations` is repeated to Ollie in the user's words, never interpreted.
+model TrainingProfile {
+  patientId      String   @id
+  patient        Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  place          String? // gym | home | outdoor | mixed
+  equipment      String[] // barbell dumbbell machine cable kettlebell band bodyweight bike rower treadmill
+  experience     String? // new | some | experienced
+  sessionMinutes Int?
+  preferredDays  String[] // mon … sun
+  preferredTime  String? // HH:mm local, the slot planned rows are placed at
+  limitations    String?
+  updatedAt      DateTime @updatedAt
 }
 
 /// Labs journey (Aug 2026): one row per attempt to get labs. The panel is
