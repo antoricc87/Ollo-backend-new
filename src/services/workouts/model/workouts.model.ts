@@ -258,6 +258,14 @@ class WorkoutServiceImpl {
         adopted += 1;
         continue;
       }
+      // Already completed without a watch — the live session's Finish, or a
+      // manual completion. Attach this workout's metrics to that row rather
+      // than creating a second one for the same session.
+      if (planned && planned.status === "COMPLETED" && !planned.externalId) {
+        await prisma.workoutSession.update({ where: { id: planned.id }, data: { ...data, externalId: w.externalId } });
+        adopted += 1;
+        continue;
+      }
       await prisma.workoutSession.create({ data: { patientId, source: "HEALTHKIT", externalId: w.externalId, activityKey, ...data } });
       created += 1;
     }

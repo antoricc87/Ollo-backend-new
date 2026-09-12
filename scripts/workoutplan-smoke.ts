@@ -4,6 +4,7 @@
  *   → watch sync on a planned day ADOPTS the row (no duplicate)
  *   → a described session on another planned day ADOPTS it, carrying targets
  *   → a described session on a rest day creates a fresh row
+ *   → a session finished in the app, then the watch syncs it: one row
  *   → swap a day; put a single workout on a day; replacing the week keeps
  *     completed rows and drops still-planned ones; training profile round trip.
  * Self-cleaning.  npx ts-node --transpile-only scripts/workoutplan-smoke.ts [email]
@@ -231,6 +232,45 @@ async function main() {
   const all = await WorkoutService.list(pid, { from: moment().tz(tz).add(6, "days").toDate(), to: moment().tz(tz).add(14, "days").toDate() }, { status: "ALL" });
   assert.equal(all.filter((s) => s.planId === next.id).length, 3);
   log("✓ list status filter");
+
+  /* 11. a session finished in the app (no watch, no description — the live
+     session's Finish), then the watch syncs the same workout: one row */
+  const week2 = await WorkoutPlanService.getActive(pid);
+  const liveRow = week2!.daysOut[0].planned!;
+  const liveStart = moment.tz(`${liveRow.plannedFor} 18:30`, "YYYY-MM-DD HH:mm", tz);
+  const finished = await WorkoutService.completeSession(
+    pid,
+    liveRow.id,
+    SessionInput.parse({
+      activityKey: "strength",
+      title: null,
+      startedAt: liveStart.toISOString(),
+      endedAt: liveStart.clone().add(44, "minutes").toISOString(),
+      durationSec: 44 * 60,
+      exercises: [{ exerciseKey: "bench_press", name: "Bench press", sets: [1, 2, 3, 4].map(() => ({ reps: 8, weightKg: 60, targetReps: 8, targetKg: 60 })) }],
+      watch: null,
+    }),
+    "MANUAL"
+  );
+  assert.equal(finished!.status, "COMPLETED");
+  assert.equal(finished!.externalId, null, "no watch yet");
+  const lateWatch = { externalId: `${TAG}-WATCH-2`, activityName: "TraditionalStrengthTraining", startedAt: liveStart.clone().add(1, "minute").toISOString(), endedAt: liveStart.clone().add(45, "minutes").toISOString(), durationSec: 44 * 60, calories: 280, avgHr: 118, peakHr: 150, lowHr: 78, zoneSeconds: [400, 1000, 800, 200, 40] };
+  const s2 = await WorkoutService.syncFromHealthKit(pid, { windowStart: liveStart.clone().subtract(1, "day").toISOString(), windowEnd: liveStart.clone().add(1, "day").toISOString(), workouts: [lateWatch] });
+  assert.equal(s2.created, 0, "no second row for a session the app already finished");
+  assert.equal(s2.adopted, 1, JSON.stringify(s2));
+  const merged = await WorkoutService.get(pid, liveRow.id);
+  assert.equal(merged!.externalId, lateWatch.externalId);
+  assert.equal(merged!.calories, 280);
+  assert.equal(merged!.metricsSource, "watch");
+  assert.equal(merged!.source, "MANUAL", "source unchanged");
+  assert.equal(merged!.exercises[0].sets[0].reps, 8, "the sets ticked in the app survive");
+  assert.equal(merged!.exercises[0].sets[0].targetKg, 60, "…with their targets");
+  assert.equal(
+    await prisma.workoutSession.count({ where: { patientId: pid, deletedAt: null, startedAt: { gte: liveStart.clone().subtract(2, "hours").toDate(), lt: liveStart.clone().add(4, "hours").toDate() } } }),
+    1,
+    "one row for that slot"
+  );
+  log("✓ watch attached to the session the app finished — one row, actuals and targets kept");
 
   log(`\nall good in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   await cleanup();

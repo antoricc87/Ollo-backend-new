@@ -424,7 +424,14 @@ the user's words) is the structured brief every design reads.
   workout → adopts the planned row: externalId + metrics + COMPLETED, source
   unchanged; returns `adopted`) and `createSession` (described session →
   completes it; `plannedId` forces one, `adopt:false` opts out) use it, so a
-  planned session is never duplicated. `previousExercises` = COMPLETED only.
+  planned session is never duplicated. A watch workout landing on a row that
+  is already COMPLETED with no `externalId` — the app's live-session Finish
+  (see the mobile CLAUDE.md), or a manual completion — attaches to it
+  (externalId + metrics, status and source unchanged, counted as `adopted`)
+  instead of creating a second row (Sep 12 2026; smoke case 11). Ollie logs
+  carry a `description`, so `adoptPlanned` never offers them and
+  `createSession` folds the watch in through `input.watch`.
+  `previousExercises` = COMPLETED only.
 - `model/plan.model.ts` `WorkoutPlanService`: `getActive` → `WorkoutPlanView`
   (`daysOut[].{planned, other[], state: planned|done|missed|rest|other}`,
   `planned`/`done` counts, `todayIndex`), `create` (previous ACTIVE →
