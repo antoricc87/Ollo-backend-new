@@ -219,8 +219,7 @@ class AgentHandler {
       }
     } catch (error) {
       console.error("agent chat stream", error);
-      // TEMP (Sep 13 2026): surface the cause while diagnosing the standalone-app failure — revert after.
-      if (!abort.signal.aborted) send("error", { message: `Something went wrong (${String((error as any)?.message ?? error).slice(0, 180)})` });
+      if (!abort.signal.aborted) send("error", { message: "Something went wrong" });
     } finally {
       clearInterval(heartbeat);
       response.end();
