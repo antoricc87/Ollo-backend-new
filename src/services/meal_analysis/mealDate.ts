@@ -59,19 +59,81 @@ export function resolveMealDate(phrase: string | null | undefined, today: string
     return bad();
   }
 
+  // Calendar dates without a year — "the 2nd", "Sep 2", "2 September", "Tuesday
+  // the 2nd", "Tue 2 Sep" — the most recent such day that isn't in the future.
+  // A weekday named alongside must agree, or the phrase is held back.
+  const cal = calendarDay(s, t);
+  if (cal) return cal === "bad" ? bad() : ok(cal);
+
   // Weekday names: the most recent occurrence, today if it is that weekday.
-  // "last monday" reads the same way — for meals it never means the week before.
-  const wd = s.match(/^(?:last |this )?([a-z]+)$/);
+  // "last monday" reads the same way — for meals it never means the week before —
+  // except said ON a Monday, where it means a week ago, not today.
+  const wd = s.match(/^(last |this )?([a-z]+)$/);
   if (wd) {
-    const name = wd[1];
+    const name = wd[2];
     const idx = WEEKDAYS.indexOf(name) >= 0 ? WEEKDAYS.indexOf(name) : WEEKDAY_ABBR[name];
     if (idx !== undefined && idx >= 0) {
       const diff = (t.day() - idx + 7) % 7;
-      return ok(t.clone().subtract(diff, "day"));
+      return ok(t.clone().subtract(diff === 0 && wd[1] === "last " ? 7 : diff, "day"));
     }
   }
 
   return bad();
+}
+
+const MONTHS: Record<string, number> = {
+  jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3, may: 4, jun: 5, june: 5,
+  jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8, september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11,
+};
+
+/**
+ * A day of the month, optionally with a month and/or weekday, in any order.
+ * Needs an ordinal ("2nd"), a month or a weekday next to the number — a bare
+ * "8" is more likely a clock time than a date. Null = not a calendar phrase.
+ */
+function calendarDay(s: string, t: moment.Moment): moment.Moment | "bad" | null {
+  let dom: number | null = null;
+  let ordinal = false;
+  let month: number | null = null;
+  let weekday: number | null = null;
+  for (const w of s.split(" ")) {
+    if (w === "of" || w === "last") continue;
+    const n = w.match(/^(\d{1,2})(st|nd|rd|th)?$/);
+    if (n) {
+      if (dom !== null) return null;
+      dom = Number(n[1]);
+      ordinal = !!n[2];
+      continue;
+    }
+    if (w in MONTHS) {
+      if (month !== null) return null;
+      month = MONTHS[w];
+      continue;
+    }
+    const wd = WEEKDAYS.indexOf(w) >= 0 ? WEEKDAYS.indexOf(w) : WEEKDAY_ABBR[w];
+    if (wd !== undefined && wd >= 0) {
+      if (weekday !== null) return null;
+      weekday = wd;
+      continue;
+    }
+    return null;
+  }
+  if (dom === null || !(ordinal || month !== null || weekday !== null)) return null;
+  if (dom < 1 || dom > 31) return "bad";
+
+  // Walk back month by month to the latest valid, non-future occurrence.
+  let found: moment.Moment | null = null;
+  for (let back = 0; back <= 12 && !found; back++) {
+    const base = t.clone().startOf("month").subtract(back, "month");
+    if (month !== null && base.month() !== month) continue;
+    if (dom > base.daysInMonth()) continue;
+    const c = base.clone().date(dom);
+    if (c.isAfter(t, "day")) continue;
+    found = c;
+  }
+  if (!found) return "bad";
+  if (weekday !== null && found.day() !== weekday) return "bad";
+  return found;
 }
 
 /** Short label for a day relative to today: "Today", "Yesterday", "Tue 25 Aug". */

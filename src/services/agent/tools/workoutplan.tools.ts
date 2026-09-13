@@ -210,7 +210,7 @@ export const generateWorkout = defineTool({
         warmup: designed.session.warmup,
         assumptions: designed.assumptions,
         fit: designed.fit.ok ? { ok: true } : { ok: false, issues: designed.fit.issues, note: "Say plainly what still misses; do not claim it fits." },
-        cardActions: `The card has 'Log it as done' (when they've done it), 'Put in plan · ${moment.utc(designed.session.plannedFor!, "YYYY-MM-DD").format("ddd D")}' (writes it onto that day of their week — direct, no proposal) and 'Something else'. Nothing is saved yet. Keep your text to the highlights: the split, the one or two key lifts with their loads, and the why.`,
+        cardActions: `The card has 'Log it as done' (when they've done it), 'Put in plan · ${moment.utc(designed.session.plannedFor!, "YYYY-MM-DD").format("ddd D")}' (writes it onto that day of their week — direct, no proposal) and 'Something else'. Nothing is saved and nothing needs confirming: it is a plan to do, not a log — never call log_workout for it unless they say they did it, and don't ask them to confirm. Keep your text to the highlights: the split, the one or two key lifts with their loads, and the why.`,
         design: { model: designed.model, latencyMs: designed.latencyMs },
       },
       cards: [{ type: "workout", title: designed.session.title!, data: cardData }],

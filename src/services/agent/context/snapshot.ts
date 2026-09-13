@@ -116,6 +116,8 @@ export type PatientSnapshot = {
   };
   /** How they train (TrainingProfile), one rendered line; null when never set. */
   training: string | null;
+  /** Last day before today with any food logged, and how many days ago — drives the catch-up offer. */
+  food_gap: { lastLoggedDay: string | null; daysSince: number | null };
   today_log: {
     calories: number | null;
     protein_g: number | null;
@@ -292,6 +294,16 @@ export async function buildPatientSnapshot(
     return null;
   });
   const training = TrainingProfileService.render(await TrainingProfileService.get(patientId).catch(() => null));
+  const lastFood = await prisma.dailyFood.findFirst({
+    where: { userId: patientId, date: { lt: today }, foodEntries: { some: {} } },
+    orderBy: { date: "desc" },
+    select: { date: true },
+  });
+  const lastLoggedDay = lastFood ? lastFood.date.slice(0, 10) : null;
+  const food_gap: PatientSnapshot["food_gap"] = {
+    lastLoggedDay,
+    daysSince: lastLoggedDay ? moment.tz(today, "YYYY-MM-DD", tz).diff(moment.tz(lastLoggedDay, "YYYY-MM-DD", tz), "days") : null,
+  };
 
   /* ----------------------------- today ----------------------------- */
   const todayEntries = todayFood.flatMap((d) => d.foodEntries);
@@ -465,6 +477,7 @@ export async function buildPatientSnapshot(
     mealPlan,
     workoutPlan,
     training,
+    food_gap,
     today_log,
     week: weekOut,
     vitals,
@@ -589,6 +602,11 @@ export function renderSnapshot(s: PatientSnapshot): string {
   if (t.meals.length)
     L.push(`  meals: ` + t.meals.map((m) => `${(m.mealType ?? "meal").toLowerCase()} — ${m.description} (${m.calories} kcal)`).join("; "));
   else L.push("  meals: nothing logged yet today");
+  // Yesterday counts as current; from 3 days on it's a gap worth a catch-up.
+  // Someone who has never logged before today has nothing to catch up on.
+  const g = s.food_gap;
+  if (g?.lastLoggedDay && g.daysSince !== null && g.daysSince >= 3)
+    L.push(`food log: nothing logged before today since ${g.lastLoggedDay} (${g.daysSince} days) — a catch-up is get_logging_gaps then log_meal with fill`);
 
   const w = s.week;
   L.push(

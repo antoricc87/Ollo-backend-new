@@ -36,7 +36,19 @@ export type BatchMeal = AnalyzedMeal & {
   portion: PortionStop;
   /** "Already logged" note: description of the existing entry with the same slot. */
   duplicateOf: string | null;
+  /** "usual_day" = copied onto a catch-up day from the person's normal day. Anything else is decided at commit (see entrySource). */
+  source?: MealSource | null;
 };
+
+/**
+ * How an entry got into the log when it wasn't logged in the moment. Stored on
+ * FoodEntry.source so the agent knows a day is an estimate; it counts in every
+ * total and score like any other entry.
+ */
+export type MealSource = "recall" | "usual_day";
+
+/** Described two or more days after the fact. */
+export const RECALL_AFTER_DAYS = 2;
 
 export type HeldBackMeal = {
   name: string;
@@ -60,7 +72,7 @@ export type MealEdits = z.infer<typeof MealEditsSchema>;
 /* ---------------------------- segmentation ------------------------------ */
 
 const DAY_CUE =
-  /\b(yesterday|today|tonight|last night|this morning|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|days? ago|day before yesterday|the other day|last week|weekend|\d{4}-\d{2}-\d{2})\b/gi;
+  /\b(yesterday|today|tonight|last night|this morning|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|days? ago|day before yesterday|the other day|last week|weekend|\d{4}-\d{2}-\d{2}|\d{1,2}(?:st|nd|rd|th)|(?:jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]* \d{1,2}|\d{1,2} (?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*)\b/gi;
 
 export const SEGMENT_MIN_CHARS = Number(process.env.NUTRITION_SEGMENT_MIN_CHARS || 400);
 
@@ -84,7 +96,7 @@ const SegmentsSchema = z.object({
 });
 
 const SEGMENT_SYSTEM = `You cut a person's account of what they ate into one segment per day.
-- Segments are contiguous, non-overlapping slices of the original text, in order, copied character for character. Cut exactly where a new day expression begins ("yesterday", "on Monday", "two days ago", "the other day"); the day expression starts its segment. Together the segments must reproduce the whole text once — nothing repeated, nothing dropped.
+- Segments are contiguous, non-overlapping slices of the original text, in order, copied character for character. Cut exactly where a new day expression begins ("yesterday", "on Monday", "two days ago", "the other day", "on the 2nd", "Sep 4"); the day expression starts its segment. Together the segments must reproduce the whole text once — nothing repeated, nothing dropped.
 - dayPhrase is the day expression at the start of the segment, exactly as written; null when the segment has none (that means today).
 - Meals that follow a day cue belong to that day until the next cue. "Then for dinner…" after "yesterday" is still yesterday.
 - Do not resolve phrases into dates; keep the person's words.
@@ -228,7 +240,7 @@ export function dedupeMeals<T extends { date: string; mealType?: string; ingredi
 
 /* --------------------------- preview building --------------------------- */
 
-const MEAL_ORDER: Record<string, number> = { BREAKFAST: 0, LUNCH: 1, DINNER: 2, SNACK: 3 };
+export const MEAL_ORDER: Record<string, number> = { BREAKFAST: 0, LUNCH: 1, DINNER: 2, SNACK: 3 };
 const r1 = (n: number) => Math.round(n * 10) / 10;
 const sum = (xs: (number | null | undefined)[]) => xs.reduce<number>((a, b) => a + (b ?? 0), 0);
 
@@ -248,6 +260,8 @@ export const mealRow = (m: BatchMeal, index: number) => ({
   mealType: m.mealType,
   included: m.included,
   duplicateOf: m.duplicateOf,
+  /** Filled from the person's usual day rather than described. */
+  usual: m.source === "usual_day",
   portion: m.portion ?? DEFAULT_PORTION_STOP,
   /** False when every item's amount came from the user or a brand — the dial would do nothing. */
   portionScalable: isMealPortionScalable(m.ingredients as any),
@@ -285,6 +299,8 @@ export function buildMealPreview(meals: BatchMeal[], ctx: PreviewContext) {
       date,
       label: dayLabel(date, ctx.today, ctx.timeZone),
       calories: ms.filter((m) => m.included).reduce((a, m) => a + m.calories, 0),
+      /** Every meal on the day came from the usual day — the card folds these. */
+      usual: ms.every((m) => m.usual),
       meals: ms,
     }));
   const included = rows.filter((r) => r.included);
@@ -323,7 +339,8 @@ export const MealEditsSchema = z.object({
         ingredients: z.array(z.object({ index: z.number().int().min(0), grams: z.number().min(0).max(5000).nullable() })).max(60).optional(),
       })
     )
-    .max(60),
+    // A three-week catch-up is up to ~84 meals.
+    .max(120),
 });
 
 /** Old single-day previews (pending when this shipped) are lifted into the batch shape. */
@@ -407,6 +424,115 @@ export function markDuplicates(meals: BatchMeal[], existing: Record<string, Exis
     const duplicateOf = `${hit.description} (${hit.calories} kcal)`;
     return { ...m, duplicateOf, included: MAIN_SLOTS.includes(m.mealType) ? false : m.included };
   });
+}
+
+/* ------------------------------ catch-up -------------------------------- */
+
+/**
+ * Catching up on days that were never logged: the person describes the days
+ * that were different and says the rest were "normal". The normal day is
+ * analysed ONCE and copied onto every empty slot in the window, so ten
+ * normal days carry identical numbers instead of ten re-estimates.
+ *
+ *   usual day text ─► analyzeMeal (once per pattern) ─► portion stop applied
+ *                  ─► planFills: every date in the window × every usual meal
+ *                     whose slot is empty (nothing logged, nothing described)
+ */
+
+export const USUAL_ON = ["all", "weekdays", "weekends"] as const;
+export type UsualOn = (typeof USUAL_ON)[number];
+export type UsualDay = { on: UsualOn; portion: PortionStop; meals: AnalyzedMeal[] };
+
+/** Longest window a catch-up fills in one proposal. */
+export const FILL_MAX_DAYS = 21;
+
+const isWeekend = (date: string) => {
+  const d = new Date(`${date}T00:00:00Z`).getUTCDay();
+  return d === 0 || d === 6;
+};
+
+const addDays = (date: string, n: number) => {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+
+/** Every day from→to, never today or later (today is logged live), at most the last FILL_MAX_DAYS of it. */
+export function fillDates(from: string, to: string, today: string): string[] {
+  const yesterday = addDays(today, -1);
+  const end = to < yesterday ? to : yesterday;
+  const start = from > addDays(end, -(FILL_MAX_DAYS - 1)) ? from : addDays(end, -(FILL_MAX_DAYS - 1));
+  const out: string[] = [];
+  for (let d = start; d <= end; d = addDays(d, 1)) out.push(d);
+  return out;
+}
+
+/** The usual day that applies to a date: a weekday/weekend pattern beats "all". */
+const usualFor = (usual: UsualDay[], date: string) =>
+  usual.find((u) => u.on === (isWeekend(date) ? "weekends" : "weekdays")) ?? usual.find((u) => u.on === "all") ?? null;
+
+/**
+ * Usual meals for every empty slot in `dates`. A slot is taken when something
+ * is already logged there or the person described a meal for it; a day with a
+ * legacy entry that has no meal type counts as logged. Pure.
+ */
+export function planFills(usual: UsualDay[], dates: string[], existing: Record<string, ExistingEntry[]>, described: BatchMeal[]): BatchMeal[] {
+  const out: BatchMeal[] = [];
+  for (const date of dates) {
+    const u = usualFor(usual, date);
+    if (!u) continue;
+    const logged = existing[date] ?? [];
+    if (logged.some((e) => !e.mealType)) continue;
+    const taken = new Set([...logged.map((e) => e.mealType), ...described.filter((m) => m.date === date).map((m) => m.mealType)]);
+    for (const m of u.meals) {
+      if (taken.has(m.mealType)) continue;
+      out.push({
+        ...m,
+        mealDate: date,
+        ingredients: m.ingredients.map((i: any) => ({ ...i, nutrients: { ...(i.nutrients ?? {}) } })),
+        date,
+        datePhrase: "usual day",
+        included: true,
+        duplicateOf: null,
+        portion: u.portion,
+        source: "usual_day",
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Analyse each usual-day description once. The portion stop is the caller's
+ * ("slightly more than usual" → hearty), else whatever the words said, else normal.
+ */
+export async function analyzeUsualDays(
+  entries: { description: string; on: UsualOn; portion?: PortionStop }[],
+  opts: { patientId?: string; patientContext?: PatientContext; today: string }
+): Promise<UsualDay[]> {
+  return Promise.all(
+    entries.map(async (e) => {
+      const res = await analyzeMeal({ text: e.description, todayLocal: opts.today }, { patientId: opts.patientId, patientContext: opts.patientContext });
+      const said = res.meals.map((m: any) => m.portion).find((p: unknown) => isPortionStop(p) && p !== DEFAULT_PORTION_STOP) as PortionStop | undefined;
+      const portion = e.portion ?? said ?? DEFAULT_PORTION_STOP;
+      const meals = res.meals
+        .filter((m) => m.ingredients?.length)
+        .map((m) => {
+          const copy = { ...m, ingredients: m.ingredients.map((i: any) => ({ ...i, nutrients: { ...(i.nutrients ?? {}) } })) };
+          ensurePortionBase(copy.ingredients);
+          if (portion !== DEFAULT_PORTION_STOP) applyPortionStop(copy.ingredients, portion);
+          return copy;
+        })
+        .sort((a, b) => MEAL_ORDER[a.mealType] - MEAL_ORDER[b.mealType]);
+      return { on: e.on, portion, meals };
+    })
+  );
+}
+
+/** What FoodEntry.source gets at commit — from the final (possibly moved) date. */
+export function entrySource(meal: Pick<BatchMeal, "date" | "source">, today: string): MealSource | null {
+  if (meal.source === "usual_day") return "usual_day";
+  return meal.date <= addDays(today, -RECALL_AFTER_DAYS) ? "recall" : null;
 }
 
 /** Main slots with nothing proposed and nothing logged, per day — only worth asking about in a multi-day batch. */

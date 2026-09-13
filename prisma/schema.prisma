@@ -579,6 +579,8 @@ model FoodEntry {
   isProcessedFood   Boolean?
   /// Meal portion dial (light | normal | hearty | lots) chosen for this meal — null on entries logged before it existed. Feeds the per-user portion bias.
   portionStop       String?
+  /// How it was logged when not in the moment: "recall" (described 2+ days later) | "usual_day" (a catch-up day filled from the person's normal day). Null = logged live. Counts in every total like any entry.
+  source            String?
   ingredients       MealIngredient[] // Phase 3: per-ingredient breakdown (source of truth for the totals above)
 }
 

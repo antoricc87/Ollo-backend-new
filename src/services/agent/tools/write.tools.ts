@@ -3,15 +3,23 @@ import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
 import {
   analyzeNarration,
+  analyzeUsualDays,
   applyMealEdits,
   buildMealPreview,
+  entrySource,
+  fillDates,
   markDuplicates,
+  MEAL_ORDER,
   missingSlots,
   normalizePreview,
+  planFills,
+  USUAL_ON,
   type BatchMeal,
   type ExistingEntry,
   type MealPreview,
+  type UsualDay,
 } from "../../meal_analysis/mealBatch";
+import { PORTION_STOPS } from "../../meal_analysis/mealAnalysis.schema";
 import CaloriesService from "../../calories_tracker/model/calories.model";
 import WeightService from "../../weight_tracker/model/weight.model";
 import BFPService from "../../bodyFatPercentage/model/bfp.model";
@@ -20,7 +28,7 @@ import GlucoseService from "../../glucose_tracker/model/glucose.model";
 import MessagingService from "../../messaging/model/messaging.model";
 import ClinicianService from "../../clinicians/model/clinicians.model";
 import BookingService from "../../bookings/model/bookings.model";
-import { dayString, defineTool, subjectField } from "./registry";
+import { dayString, defineTool, subjectField, type ToolContext } from "./registry";
 
 /**
  * Confirm-gated write tools. `run` prepares a proposal (what will happen,
@@ -58,42 +66,92 @@ const existingMealsByDay = async (userId: string, dates: string[]): Promise<Reco
   return out;
 };
 
+// Usual days are the same meals over and over — the model gets one line each.
 const modelDays = (preview: MealPreview) =>
-  preview.days.map((d) => ({
-    date: d.date,
-    label: d.label,
-    meals: d.meals.map((m) => ({ mealType: m.mealType, name: m.name, calories: m.calories, included: m.included, ...(m.duplicateOf ? { alreadyLogged: m.duplicateOf } : {}) })),
-  }));
+  preview.days.map((d) =>
+    d.usual
+      ? { date: d.date, label: d.label, usualDay: true, calories: d.calories }
+      : {
+          date: d.date,
+          label: d.label,
+          meals: d.meals.map((m) => ({ mealType: m.mealType, name: m.name, calories: m.calories, included: m.included, ...(m.usual ? { usualDay: true } : {}), ...(m.duplicateOf ? { alreadyLogged: m.duplicateOf } : {}) })),
+        }
+  );
+
+const LogMealSchema = z
+  .object({
+    description: z
+      .string()
+      .max(4000)
+      .optional()
+      .describe("What was eaten, verbatim from the user, incl. portions and day references. In a catch-up: only the days they described; omit when every day was 'normal'"),
+    mealType: z.enum(MEAL_TYPES).optional().describe("Only for a single meal, if the user said or it is obvious from time of day"),
+    date: dayString.optional().describe("Day ALL meals in `description` were eaten. Omit when the description carries its own day words ('yesterday', 'Monday', 'the 2nd'); set it when re-sending a held-back meal after the user said which day"),
+    fill: z
+      .object({
+        from: dayString.describe("First day of the catch-up window (get_logging_gaps fillWindow.from)"),
+        to: dayString.describe("Last day of the window (fillWindow.to)"),
+        usual: z
+          .array(
+            z.object({
+              description: z.string().min(3).max(1500).describe("A normal day, breakfast to dinner: the user's words, or — when they only said 'normal' — what their logged history shows they usually eat"),
+              on: z.enum(USUAL_ON).optional().describe("Which days it applies to; default all. Use two entries when weekends looked different"),
+              portion: z.enum(PORTION_STOPS).optional().describe("Compared with that day: 'a bit more' → hearty, 'a lot more' → lots, 'less' → light"),
+            })
+          )
+          .min(1)
+          .max(2),
+      })
+      .optional()
+      .describe("Catch-up only: put the usual day on every empty meal slot from→to (at most 21 days; never today — today is logged as it happens). Meals in `description` and meals already logged keep their slots."),
+    subjectId: subjectField,
+  })
+  .refine((v) => (v.description?.trim().length ?? 0) >= 3 || !!v.fill, { message: "describe what was eaten, or pass fill" });
+
+type LogMealInput = z.infer<typeof LogMealSchema>;
+
+/** Analyse, date, de-duplicate and fill — shared by run and the no-preview commit path. */
+async function prepareMeals(ctx: ToolContext, input: LogMealInput, subjectId: string) {
+  const text = input.description?.trim() ?? "";
+  const fillDays = input.fill ? fillDates(input.fill.from, input.fill.to, ctx.today) : [];
+  const [analysis, usual] = await Promise.all([
+    text.length >= 3
+      ? analyzeNarration(text, { patientId: subjectId, today: ctx.today, timeZone: ctx.timeZone, mealTypeHint: input.mealType, dateOverride: input.date })
+      : Promise.resolve({ meals: [] as BatchMeal[], heldBack: [], model: "", segments: 0 }),
+    input.fill
+      ? analyzeUsualDays(
+          input.fill.usual.map((u) => ({ description: u.description, on: u.on ?? "all", portion: u.portion })),
+          { patientId: subjectId, today: ctx.today }
+        )
+      : Promise.resolve([] as UsualDay[]),
+  ]);
+  const existing = await existingMealsByDay(subjectId, [...new Set([...analysis.meals.map((m) => m.date), ...fillDays])]);
+  const described = markDuplicates(analysis.meals, existing);
+  const fills = planFills(usual, fillDays, existing, described);
+  const meals = [...described, ...fills].sort((a, b) => (a.date === b.date ? MEAL_ORDER[a.mealType] - MEAL_ORDER[b.mealType] : a.date < b.date ? -1 : 1));
+  return { analysis, usual, fillDays, fills, existing, meals, model: analysis.model || "" };
+}
 
 export const logMeal = defineTool({
   name: "log_meal",
   description:
-    "Log food the user ate (their own or a family member's) — a single meal or a catch-up over several days ('yesterday I had…, Tuesday dinner was…'). Pass the user's words verbatim in ONE call: foods, portions, brand names and every day/time reference. The tool analyses them into dated meals with calories and macros and returns a PREVIEW the user confirms in the app (ticking meals on/off, editing portions) before anything is saved. Meals whose day it cannot pin down come back as heldBack: ask the user which day and call the tool again for those with `date` set. Do not call it for hypothetical meals or meal ideas.",
-  schema: z.object({
-    description: z.string().min(3).max(4000).describe("What was eaten, verbatim from the user, incl. portions and day references"),
-    mealType: z.enum(MEAL_TYPES).optional().describe("Only for a single meal, if the user said or it is obvious from time of day"),
-    date: dayString.optional().describe("Day ALL meals in this call were eaten. Omit when the description carries its own day words ('yesterday', 'Monday'); set it when re-sending a held-back meal after the user said which day"),
-    subjectId: subjectField,
-  }),
+    "Log food the user ate (their own or a family member's) — a single meal, several days ('yesterday I had…, Tuesday dinner was…'), or a catch-up over days they never logged. Pass the user's words verbatim in ONE call: foods, portions, brand names and every day/time reference. For a catch-up, `fill` puts their normal day on every empty slot in the window, so they only describe the days that were different. The tool analyses everything into dated meals with calories and macros and returns a PREVIEW the user confirms in the app (ticking meals or whole days on/off, editing portions) before anything is saved. Meals whose day it cannot pin down come back as heldBack: ask the user which day and call the tool again for those with `date` set. Do not call it for hypothetical meals or meal ideas.",
+  schema: LogMealSchema,
   risk: "write",
   applyPreviewEdits: applyMealEdits,
   async run(ctx, input) {
     const subject = await ctx.resolveSubject(input.subjectId);
     if (input.date && input.date > ctx.today) return { result: { error: "That day is in the future — meals can only be logged for today or earlier." } };
-    const analysis = await analyzeNarration(input.description, {
-      patientId: subject.id,
-      today: ctx.today,
-      timeZone: ctx.timeZone,
-      mealTypeHint: input.mealType,
-      dateOverride: input.date,
-    });
-    if (!analysis.meals.length && !analysis.heldBack.length)
+    if (input.fill && input.fill.from > input.fill.to) return { result: { error: "fill.from is after fill.to." } };
+    const { analysis, usual, fillDays, fills, existing, meals, model } = await prepareMeals(ctx, input, subject.id);
+    if (!meals.length && !analysis.heldBack.length) {
+      if (input.fill && usual.some((u) => u.meals.length) && fillDays.length)
+        return { result: { proposed: false, note: "Every meal slot in that window is already logged or described — nothing to fill." } };
       return { result: { error: "I couldn't identify any food in that description — could you describe the meal again with the main items?" } };
+    }
 
-    const existing = await existingMealsByDay(subject.id, [...new Set(analysis.meals.map((m) => m.date))]);
-    const meals = markDuplicates(analysis.meals, existing);
-    const preview = buildMealPreview(meals, { today: ctx.today, timeZone: ctx.timeZone, subject: subject.name, subjectId: subject.id, model: analysis.model, heldBack: analysis.heldBack });
-    const missing = missingSlots(meals, existing);
+    const preview = buildMealPreview(meals, { today: ctx.today, timeZone: ctx.timeZone, subject: subject.name, subjectId: subject.id, model, heldBack: analysis.heldBack });
+    const missing = input.fill ? {} : missingSlots(meals, existing);
 
     if (!meals.length) {
       return {
@@ -105,18 +163,35 @@ export const logMeal = defineTool({
       };
     }
     const forWhom = subject.isSelf ? "" : ` for ${subject.name}`;
+    const usualDays = preview.days.filter((d) => d.usual).length;
+    const span = `${preview.days[0].date} → ${preview.days[preview.days.length - 1].date}`;
     const summary =
-      preview.days.length === 1
+      fills.length
+        ? `Catch-up ${span}: ${preview.days.length - usualDays} described day(s), ${usualDays} usual day(s) — ${preview.totals.included} meals${forWhom}`
+        : preview.days.length === 1
         ? `${preview.days[0].meals.map((m) => `${m.mealType.toLowerCase()}: ${m.name} (${m.calories} kcal)`).join("; ")} on ${preview.days[0].date}${forWhom}`
-        : `${preview.totals.included} meals over ${preview.days.length} days (${preview.days[0].date} → ${preview.days[preview.days.length - 1].date})${forWhom}`;
-    const title =
-      preview.days.length > 1 ? `Log ${preview.totals.meals} meals · ${preview.days.length} days` : preview.totals.meals === 1 ? `Log ${preview.days[0].meals[0].mealType.toLowerCase()}` : `Log ${preview.totals.meals} meals`;
+        : `${preview.totals.included} meals over ${preview.days.length} days (${span})${forWhom}`;
+    const title = fills.length
+      ? `Catch up · ${preview.days.length} days`
+      : preview.days.length > 1
+      ? `Log ${preview.totals.meals} meals · ${preview.days.length} days`
+      : preview.totals.meals === 1
+      ? `Log ${preview.days[0].meals[0].mealType.toLowerCase()}`
+      : `Log ${preview.totals.meals} meals`;
     const duplicates = meals.filter((m) => m.duplicateOf).length;
+    const kcalOf = (ms: { ingredients: { calories?: number | null }[] }[]) => Math.round(sum(ms.flatMap((m) => m.ingredients.map((i) => i.calories))));
     return {
       result: {
         previewFor: subject.name,
         days: modelDays(preview),
         totalCalories: preview.totals.calories,
+        ...(input.fill
+          ? {
+              usualDay: usual.map((u) => ({ on: u.on, portion: u.portion, calories: kcalOf(u.meals), meals: u.meals.map((m) => `${m.mealType.toLowerCase()}: ${m.mealName} (${kcalOf([m])} kcal)`) })),
+              filled: { days: new Set(fills.map((f) => f.date)).size, meals: fills.length, windowDays: fillDays.length },
+              fillNote: "Nothing is saved yet: say what you PREPARED (never 'I logged'), in one line which usual day you used and its kcal so they can correct it; the card folds usual days and each can be unticked.",
+            }
+          : {}),
         ...(duplicates ? { note: `${duplicates} meal(s) look already logged for that slot and are unticked by default — mention it briefly; the user can tick them back.` } : {}),
         ...(analysis.heldBack.length ? { heldBack: analysis.heldBack, heldBackNote: "Not in the card: I couldn't tell which day. Ask the user, then call log_meal again with `date` and the description given." } : {}),
         ...(Object.keys(missing).length ? { missingSlots: missing, missingNote: "Slots with nothing logged or proposed. Ask about at most one, only if it seems useful; never invent meals." } : {}),
@@ -132,8 +207,8 @@ export const logMeal = defineTool({
     if (!preview) {
       const subject = await ctx.resolveSubject(input.subjectId);
       subjectId = subject.id;
-      const analysis = await analyzeNarration(input.description, { patientId: subject.id, today: ctx.today, timeZone: ctx.timeZone, mealTypeHint: input.mealType, dateOverride: input.date });
-      preview = buildMealPreview(analysis.meals, { today: ctx.today, timeZone: ctx.timeZone, subject: subject.name, subjectId, model: analysis.model, heldBack: analysis.heldBack });
+      const prepared = await prepareMeals(ctx, input, subject.id);
+      preview = buildMealPreview(prepared.meals, { today: ctx.today, timeZone: ctx.timeZone, subject: subject.name, subjectId, model: prepared.model, heldBack: prepared.analysis.heldBack });
     }
     const toSave = preview.analysis.meals.filter((m) => m.included && m.ingredients?.length);
     if (!toSave.length) throw new Error("Nothing is ticked — tick at least one meal on the card before confirming");
@@ -158,7 +233,7 @@ export const logMeal = defineTool({
               nutrients: {},
               glycemicLoad: m.glycemicLoad ?? 0,
               portionStop: m.portion ?? null, // which stop of the dial this was logged at
-
+              source: entrySource(m, ctx.today), // recall / usual_day — so the agent knows the day is an estimate
             },
           ],
           when,

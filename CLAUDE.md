@@ -233,6 +233,15 @@ Follow-ups done 2026-08-25:
   the loop nudges it ONCE with a bracketed user message to call the tool or
   answer plainly; audited as `error` stage `claim_without_proposal`. Trigger
   was a lunch already logged for the day making the model skip `log_meal`.
+  **Sep 12 2026: skipped when a `risk: "generate"` tool ran this turn**
+  (`generatedThisTurn`). Its card is real, so "check the card" is honest; the
+  nudge fired on 6/10 "give me a 40-minute workout" turns and every
+  `workout_request_card` failure (a `log_workout` proposal for a session
+  nobody did) came right after it. Probe: scratchpad `workout-card-probe.ts`
+  pattern — run the turn ×10 on a fresh fixture, read `AgentAuditLog` stages
+  before the next `createFixture` deletes them. The nudge text no longer says
+  "no tool was called" (a read/generate tool may have been), and
+  `generate_workout`'s `cardActions` says it's a plan, not a log.
 - **Weekly-review read guard** (same place, `usedTools`): a `weekly_review`
   run that reaches its final text without any tool call is nudged once to
   call get_nutrition_summary / get_activity / get_workouts for the review
@@ -318,6 +327,47 @@ instead of quantifying every ingredient. Plan: `docs/low-effort-logging-plan.md`
   `analyzeNarration` applies a language-set stop immediately.
 - `FoodEntry.portionStop` records what was logged at (feeds the future per-user
   portion bias, plan §3.5). Nullable — Railway's boot `db push` handles it.
+
+## Catch-up logging (Sep 12 2026) — `meal_analysis/mealBatch.ts` "catch-up" + `loggingGaps.ts`
+
+For days that were never logged: the person describes only the days that were
+different and says the rest were "normal". Conversation: `get_logging_gaps`
+(read; default the 14 days before today, max 31; `emptyRuns[].text` ready to
+read back, `partial` = one meal type or fewer — the Health Score's rule,
+`lastLoggedDay`, `fillWindow`, and `nextStep` = the whole catch-up recipe) →
+Ollie asks ONE question → ONE `log_meal`
+with `description` (the described days, verbatim, optional) + `fill {from, to,
+usual: [{description, on: all|weekdays|weekends, portion?}] (≤2)}`.
+- `analyzeUsualDays` analyses each usual day ONCE (portion stop: the tool's
+  `portion` ("a bit more" → hearty), else the words, else normal);
+  `planFills(usual, fillDates(from, to, today), existing, described)` copies
+  it onto every EMPTY slot in the window (≤ `FILL_MAX_DAYS` 21, never past
+  today) — a slot is taken by a logged entry or a described meal; a day with
+  an untyped legacy entry is skipped; weekday/weekend pattern beats `all`.
+  Copies deep-clone ingredients so a portion edit on one day moves only that day.
+  If they only said "normal", `nextStep` has Ollie read `get_meals` for the 30
+  days before the gap and write the usual day itself (history rows are too often
+  ingredient-less to copy directly). **The recipe lives in the tool result, not
+  the system prompt, on purpose:** it only matters once the tool has run, and the
+  prompt keeps a one-line pointer. (The `workout_request_card` flake first
+  blamed on the long bullet was the claim guard — see "Agent hardening".)
+- Preview: rows carry `usual`, days carry `usual` (every meal usual); the model
+  gets usual days as one line each (`modelDays`) plus `usualDay` (meals + kcal)
+  and a `fillNote` to say which usual day it used. `MealEditsSchema` cap 120.
+- `FoodEntry.source` (nullable, additive): `usual_day` for fills, `recall` for
+  a described meal whose final date is ≥ 2 days back (`entrySource`, decided at
+  commit so a ±1-day move is honoured), null = live. Counts in every total and
+  the Health Score like any entry (user ruling: it is data). `get_meals` shows
+  `loggedAs`, `get_nutrition_summary` days show `usualDay: true`.
+- `resolveMealDate` now reads calendar dates without a year ("the 2nd", "Sep 2",
+  "Tue 2 Sep"; a weekday that disagrees → held back; a bare number is a clock
+  time, not a date) and "last <today's weekday>" = a week ago. The segmenter's
+  `DAY_CUE` knows ordinals/month dates.
+- Snapshot `food_gap {lastLoggedDay, daysSince}` renders a `food log:` line at
+  ≥3 days; `daily_checkin` then offers a catch-up instead of today's numbers.
+- Tests: `tests/mealCatchup.test.ts`, `tests/mealDate.test.ts`; eval scenario
+  `catch_up_two_weeks` (two turns: gaps → describe + normal → proposal with
+  ≥10 usual days and the described day intact).
 
 ## Favourite meals, per ingredient (Aug 31 2026) — `src/services/nutrition/model/favMealIngredients.ts`
 

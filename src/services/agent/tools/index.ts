@@ -1,6 +1,6 @@
 import { ToolRegistry } from "./registry";
 import { getPlan, updatePlanTargets } from "./plan.tools";
-import { getFavorites, getMeals, getNutritionSummary } from "./nutrition.tools";
+import { getFavorites, getLoggingGaps, getMeals, getNutritionSummary } from "./nutrition.tools";
 import { getActivity } from "./activity.tools";
 import { getVitals } from "./vitals.tools";
 import { getLabs } from "./labs.tools";
@@ -24,6 +24,7 @@ export const registry = new ToolRegistry().register(
   getPlan,
   getMeals,
   getNutritionSummary,
+  getLoggingGaps,
   getFavorites,
   getActivity,
   getWorkouts,

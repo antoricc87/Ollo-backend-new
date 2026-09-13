@@ -500,6 +500,7 @@ class CaloriesService {
                 fruitServings: entry.fruitServings,
                 mealType: entry.mealType,
                 portionStop: entry.portionStop ?? null,
+                source: entry.source ?? null,
                 createdAt: date,
               },
             });

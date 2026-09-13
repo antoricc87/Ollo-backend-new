@@ -181,6 +181,9 @@ async function* runLoop(p: {
   let steps = 0;
   let draft = "";
   let proposedThisTurn = false;
+  // A generate tool (workout, meal plan, recipe…) renders a card of its own, so a
+  // reply that talks about "the card" is honest — the claim guard must not fire.
+  let generatedThisTurn = false;
   let usedTools = false;
   let nudged = false;
 
@@ -209,14 +212,17 @@ async function* runLoop(p: {
           });
           continue;
         }
-        if (!nudged && !proposedThisTurn && !p.proactive && CLAIMS_CARD.test(res.text ?? "")) {
+        // Not after a generate tool: its card is real, and nudging there once turned
+        // "give me a workout" into a log_workout proposal (Sep 12 2026: every one of
+        // the flaky workout_request_card failures followed this nudge).
+        if (!nudged && !proposedThisTurn && !generatedThisTurn && !p.proactive && CLAIMS_CARD.test(res.text ?? "")) {
           nudged = true;
           void audit(patientId, "error", { threadId, payload: { stage: "claim_without_proposal", text: (res.text ?? "").slice(0, 300) } });
           messages.push({ role: "assistant", content: res.text ?? "" });
           messages.push({
             role: "user",
             content:
-              "[System: your reply describes a card or asks the user to confirm, but no tool was called this turn — nothing was prepared. Call the right tool now with the user's words verbatim (log_meal, log_workout, log_vital, message_care_team, book_appointment, update_plan_targets, save_workout_plan, update_training_profile, move_workout), or answer plainly without claiming anything was prepared.]",
+              "[System: your reply describes a card or asks the user to confirm, but nothing was prepared for them to confirm this turn. If they asked to log or send something, call the right tool now with their words verbatim (log_meal, log_workout, log_vital, message_care_team, book_appointment, update_plan_targets, save_workout_plan, update_training_profile, move_workout); otherwise answer plainly without claiming anything was prepared.]",
           });
           continue;
         }
@@ -230,6 +236,7 @@ async function* runLoop(p: {
         usedTools = true;
         yield { type: "tool_start", id: call.id, name: call.name, input: call.input };
         const tool = registry.get(call.name);
+        if (tool?.risk === "generate") generatedThisTurn = true;
         void audit(patientId, tool?.risk === "memory" ? "memory_write" : "tool_call", { threadId, toolName: call.name, payload: { input: call.input } });
         const out = await registry.execute(call.name, call.input, ctx);
         let modelResult: unknown = out.result;

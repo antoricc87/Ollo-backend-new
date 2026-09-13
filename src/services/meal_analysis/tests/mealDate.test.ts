@@ -34,10 +34,31 @@ describe("resolveMealDate", () => {
     expect(r("Sat dinner").date).toBe("2026-08-22");
     expect(r("Sunday night").date).toBe("2026-08-23");
   });
+  test("'last <today's weekday>' is a week ago, not today", () => {
+    expect(r("last Wednesday").date).toBe("2026-08-19");
+    expect(r("this Wednesday").date).toBe(TODAY);
+  });
   test("ISO dates", () => {
     expect(r("2026-08-20").date).toBe("2026-08-20");
     expect(r("2026-08-20T00:00:00Z").date).toBe("2026-08-20");
     expect(r("2026-09-01").unresolved).toBe(true); // future
+  });
+  test("calendar dates without a year resolve to the latest past occurrence", () => {
+    expect(r("the 20th").date).toBe("2026-08-20");
+    expect(r("on the 2nd").date).toBe("2026-08-02");
+    expect(r("the 28th").date).toBe("2026-07-28"); // Aug 28 is still ahead
+    expect(r("31st").date).toBe("2026-07-31");
+    expect(r("Aug 20").date).toBe("2026-08-20");
+    expect(r("20 August").date).toBe("2026-08-20");
+    expect(r("Thursday the 20th").date).toBe("2026-08-20");
+    expect(r("Tue 25 Aug").date).toBe("2026-08-25");
+    expect(r("dinner on the 24th of August").date).toBe("2026-08-24");
+    expect(r("September 2nd").date).toBe("2025-09-02");
+  });
+  test("calendar dates that disagree or are really clock times", () => {
+    expect(r("Friday the 20th").unresolved).toBe(true);
+    expect(r("at 8").unresolved).toBe(true);
+    expect(r("the 32nd").unresolved).toBe(true);
   });
   test("vague phrases are held back", () => {
     for (const p of ["the other day", "last week", "the weekend", "a few days ago", "recently", "sometime this week"]) {
