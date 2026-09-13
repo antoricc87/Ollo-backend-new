@@ -583,6 +583,31 @@ the unreachable legacy onboarding screen — delete with it. Script:
 `scripts/labs-panel.ts <email> [--json]`. Restart the dev server after
 `prisma generate` (nodemon doesn't watch node_modules — `touch src/index.ts`).
 
+Plain-language catalog (Sep 12 2026): `domain/screening.catalog.ts`
+`withCatalog(items)` adds `system` / `systemLabel` / `systemOrder` (Heart &
+circulation, Blood sugar & metabolism, Kidney & liver, Blood/iron/vitamins,
+Thyroid, Cancer screening, Bones, Infections, Mood, Pregnancy) plus
+`summary`, `about`, `howDone` to every panel item; `getPanel` applies it
+after `applyCoverage`. A new rule key needs a catalog entry (unknown keys
+fall into "Other"). The copy is Claude-drafted — clinical review pending.
+Wording rule for reasons, catalog and checklist: name who recommends a test
+and whom it covers; never that Ollo recommends it ("due", "you need",
+"should", "no need to repeat" are out).
+
+Lab menu (Sep 12 2026, NOT LIVE — no partner, prices or ordering; for
+testing the "order labs myself" flow): `domain/lab.catalog.ts` holds 3
+Quest-style bundles (basic / comprehensive / elite) + 25 tests and panels in
+8 health areas, each with biomarker keys, fasting and sample type;
+`domain/biomarker.guide.ts` has the plain-language guide for all 55
+biomarker keys (whatItIs, whyChecked, high/low or positive, whatCanBeDone,
+affectedBy — subagent-drafted from MedlinePlus/NIH ODS/CDC memory, numbers
+and cutoffs need clinical review). `buildLabMenu(panelItems, sex)` filters
+sex-specific products, maps open screening LAB items (`SCREENING_LABS`) to
+the smallest covering single product and scores bundles (`bestBundleKey`);
+non-lab items come back as `needsClinician`. `GET /api/labs/menu`
+(`LabsJourneyService.getMenu` = getPanel → buildLabMenu). Every product
+biomarker must have a guide entry.
+
 Annual physical (Aug 28 2026): `Patient.lastPhysicalStatus`
 ("within_year" | "over_year" | "never") + `lastPhysicalAt` (written through
 `updatePatient`); `GET /labs/panel` adds `physical {status, lastAt,

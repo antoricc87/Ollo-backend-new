@@ -2,6 +2,8 @@ import { LabJourneyReason, LabJourneyStatus, LabRoute } from "@prisma/client";
 import prisma from "../../../utility/prismaClient";
 import { getPatientById } from "../../patient/model/patient.model";
 import { buildPanel } from "../domain/screening.rules";
+import { ScreeningInfo, withCatalog } from "../domain/screening.catalog";
+import { buildLabMenu, LabMenu } from "../domain/lab.catalog";
 import { buildRiskReport, RiskProfile, RiskReport } from "../domain/risk";
 import { buildCurrentLabs } from "../../../utils/labBiomarkers";
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
@@ -30,7 +32,7 @@ export type PanelResponse = {
     hasFamilyHistory: boolean;
     family: Record<string, boolean>;
   };
-  items: PanelItemView[];
+  items: (PanelItemView & ScreeningInfo)[];
   counts: { due: number; consider: number; covered: number };
   checklistText: string;
   journey: JourneyView | null;
@@ -78,7 +80,7 @@ class LabsJourneyService {
     const patient = await getPatientById(patientId);
     if (!patient) throw new Error("Patient not found");
     const profile = buildScreeningProfile(patient);
-    const items = applyCoverage(buildPanel(profile), patient.patientSummary?.labResults ?? []);
+    const items = withCatalog(applyCoverage(buildPanel(profile), patient.patientSummary?.labResults ?? []));
     const fh = patient.patientSummary?.familyHistory;
     const hasFamilyHistory = Boolean(
       fh &&
@@ -117,6 +119,12 @@ class LabsJourneyService {
       checklistText: checklistText(items, patient.firstName),
       journey: journey ? toView(journey) : null,
     };
+  }
+
+  /** Lab menu for the "order labs myself" path, matched to the screening panel. Not live. */
+  static async getMenu(patientId: string): Promise<LabMenu> {
+    const panel = await LabsJourneyService.getPanel(patientId);
+    return buildLabMenu(panel.items, panel.profile.sex);
   }
 
   static async getJourney(patientId: string): Promise<JourneyView | null> {
@@ -174,7 +182,7 @@ class LabsJourneyService {
         const panel = await LabsJourneyService.getPanel(patientId);
         await prisma.booking.update({
           where: { id: booking.id },
-          data: { notes: `Suggested panel (Ollo, guideline-based):\n${panel.checklistText}` },
+          data: { notes: `Screenings to discuss (guideline-based, from Ollo):\n${panel.checklistText}` },
         });
       }
     }

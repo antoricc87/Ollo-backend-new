@@ -111,12 +111,12 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       kind: "LAB",
       title: "Lipid panel",
       reason: onStatin
-        ? "You're on a statin, so cholesterol is checked yearly."
+        ? "A statin is on your record; guidelines check cholesterol yearly while on treatment."
         : risk
-        ? "Cholesterol, heart disease or diabetes in your history puts this on a yearly cadence."
+        ? "Cholesterol, heart disease or diabetes is in your history; guidelines move this to yearly."
         : between(age, 40, 75)
-        ? `At ${age}, cholesterol is part of the 10-year heart-risk estimate that guides statin decisions.`
-        : "Every adult gets a baseline lipid profile from age 20; it repeats every 4–6 years.",
+        ? `You're ${age}; from 40 to 75 guidelines use cholesterol to estimate 10-year heart risk, which informs statin decisions.`
+        : "Guidelines list a baseline lipid profile for adults from 20, repeated every 4–6 years.",
       cadence: risk ? "Yearly" : "Every 4–6 years",
       source: between(age, 40, 75) && !risk
         ? USPSTF(2022, "B", "statin-use-in-adults-preventive-medication")
@@ -136,12 +136,12 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
         kind: "LAB",
         title: "HbA1c and fasting glucose",
         reason: managing
-          ? "You have diabetes or prediabetes on record; HbA1c tracks control every 3–6 months."
+          ? "Diabetes or prediabetes is on your record; guidelines track HbA1c every 3–6 months."
           : uspstf
-          ? `At ${age} with a BMI over 25, screening for prediabetes and type 2 diabetes is recommended.`
+          ? `You're ${age} with a BMI over 25; the USPSTF recommends prediabetes and type 2 diabetes screening for that group.`
           : p.family.diabetes
-          ? "Diabetes in a parent or sibling is a screening risk factor."
-          : "Screening for prediabetes is recommended for all adults from 35.",
+          ? "Diabetes in a parent or sibling is a listed risk factor for screening."
+          : "The ADA recommends prediabetes screening for adults from 35.",
         cadence: managing ? "Every 3–6 months" : "Every 3 years if normal",
         source: uspstf
           ? USPSTF(2021, "B", "screening-for-prediabetes-and-type-2-diabetes")
@@ -157,10 +157,10 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
     kind: "LAB",
     title: "Kidney, liver and electrolytes (CMP)",
     reason: diabetes || hypertension || ckd
-      ? "Diabetes, high blood pressure or kidney disease call for yearly kidney function (eGFR) and urine albumin."
+      ? "Diabetes, high blood pressure or kidney disease is on your record; guidelines check kidney function (eGFR) and urine albumin yearly."
       : onStatin || onMetformin || liver
-      ? "Your medication or liver history makes a yearly liver and kidney check sensible."
-      : "Part of a standard annual panel; no USPSTF recommendation for people without risk factors.",
+      ? "Your medication or liver history is on record; liver and kidney function are commonly checked yearly."
+      : "Often part of a routine annual panel; there is no screening guideline for people without risk factors.",
     cadence: "Yearly",
     source: diabetes || hypertension || ckd
       ? { org: "KDIGO / ADA", year: 2024, url: "https://kdigo.org/wp-content/uploads/2024/03/KDIGO-2024-CKD-Guideline.pdf" }
@@ -174,8 +174,8 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
     kind: "LAB",
     title: "Complete blood count (CBC)",
     reason: anemia
-      ? "Anemia on record — hemoglobin and red-cell indices track it."
-      : "Part of a standard annual panel; no USPSTF recommendation for screening without symptoms.",
+      ? "Anemia is on your record; hemoglobin and red-cell indices track it."
+      : "Often part of a routine annual panel; there is no screening guideline for people without symptoms.",
     cadence: "Yearly",
     source: { org: "Common annual-physical panel", year: 2026 },
     priority: anemia ? "DUE" : "CONSIDER",
@@ -187,8 +187,8 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
     kind: "LAB",
     title: "Thyroid (TSH)",
     reason: thyroid || onLevothyroxine
-      ? "A thyroid condition or thyroid medication on record — TSH is checked at least yearly."
-      : "Routine thyroid screening has insufficient evidence; it is often included in an annual panel anyway.",
+      ? "A thyroid condition or thyroid medication is on your record; guidelines check TSH at least yearly."
+      : "The USPSTF finds insufficient evidence for routine thyroid screening; it is often part of an annual panel anyway.",
     cadence: thyroid || onLevothyroxine ? "Every 6–12 months" : "Optional",
     source: thyroid || onLevothyroxine
       ? { org: "American Thyroid Association", year: 2014, url: "https://journals.sagepub.com/doi/10.1089/thy.2014.0028" }
@@ -203,8 +203,8 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       kind: "LAB",
       title: "Vitamin D (25-OH)",
       reason: osteoporosis
-        ? "Osteoporosis or low bone density on record."
-        : "Your history raises the chance of low vitamin D; general screening isn't recommended otherwise.",
+        ? "Osteoporosis or low bone density is on your record."
+        : "Something in your history raises the chance of low vitamin D; the USPSTF finds insufficient evidence for screening otherwise.",
       cadence: "Yearly",
       source: USPSTF(2021, "I", "vitamin-d-deficiency-screening"),
       priority: "DUE",
@@ -218,10 +218,10 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       kind: "LAB",
       title: "Ferritin and vitamin B12",
       reason: onMetformin
-        ? "Metformin lowers B12 over time; periodic checks are recommended."
+        ? "Metformin is on your record; it lowers B12 over time, and the ADA recommends periodic checks."
         : plantBased
-        ? "A plant-based diet makes B12 and iron stores worth checking."
-        : "Anemia on record — iron stores and B12 explain most cases.",
+        ? "A plant-based diet is on your record; B12 and iron stores are commonly checked."
+        : "Anemia is on your record; iron stores and B12 explain most cases.",
       cadence: "Yearly",
       source: onMetformin
         ? { org: "ADA Standards of Care", year: 2025, url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC11635041/" }
@@ -238,8 +238,8 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       kind: "LAB",
       title: "Lipoprotein(a) — once",
       reason: lpaRisk
-        ? "Lp(a) is inherited and not in a standard lipid panel; with your family or personal history one lifetime measurement matters for heart risk."
-        : "Lp(a) is inherited and stable for life, so it is measured once; the 2024 NLA statement recommends it for all adults.",
+        ? "Lp(a) is inherited and not in a standard lipid panel; with the heart or cholesterol history on your record, the NLA recommends measuring it once."
+        : "Lp(a) is inherited and stable for life; the 2024 NLA statement recommends measuring it once in every adult.",
       cadence: "Once",
       source: { org: "National Lipid Association", year: 2024, url: "https://www.sciencedirect.com/science/article/pii/S1933287424000333" },
       priority: lpaRisk ? "DUE" : "CONSIDER",
@@ -252,7 +252,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       key: "hiv",
       kind: "LAB",
       title: "HIV test — once",
-      reason: "One-time screening is recommended for everyone aged 15–65.",
+      reason: "The USPSTF recommends one-time screening for everyone aged 15–65.",
       cadence: "Once (more often with risk)",
       source: USPSTF(2019, "A", "human-immunodeficiency-virus-hiv-infection-screening"),
       priority: "CONSIDER",
@@ -264,7 +264,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       key: "hepatitis_c",
       kind: "LAB",
       title: "Hepatitis C antibody — once",
-      reason: "One-time screening is recommended for all adults 18–79.",
+      reason: "The USPSTF recommends one-time screening for all adults 18–79.",
       cadence: "Once",
       source: USPSTF(2020, "B", "hepatitis-c-screening"),
       priority: "CONSIDER",
@@ -279,10 +279,10 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       kind: "SCREENING",
       title: "Colorectal cancer screening",
       reason: p.family.colorectalCancer
-        ? "A first-degree relative with colorectal cancer means starting at 40, or 10 years before their diagnosis if that is earlier — colonoscopy, every 5 years if they were under 60."
+        ? "With a parent, brother or sister who had colorectal cancer, guidelines start at 40, or 10 years before their diagnosis if earlier — colonoscopy every 5 years if they were under 60."
         : between(age, 45, 49)
-        ? "Screening now starts at 45 — stool test yearly or colonoscopy every 10 years."
-        : "Recommended for everyone 50–75 — stool test yearly or colonoscopy every 10 years.",
+        ? "The USPSTF starts screening at 45 — a yearly stool test or a colonoscopy every 10 years are among the options."
+        : "The USPSTF recommends screening for everyone 50–75 — a yearly stool test or a colonoscopy every 10 years are among the options.",
       cadence: "Stool test yearly · colonoscopy every 10 years",
       source: p.family.colorectalCancer
         ? { org: "US Multi-Society Task Force", year: 2017, url: "https://journals.lww.com/ajg/fulltext/2017/07000/colorectal_cancer_screening__recommendations_for.13.aspx" }
@@ -297,8 +297,8 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       kind: "SCREENING",
       title: "Mammogram",
       reason: p.family.breastOrOvarianCancer
-        ? "Recommended every two years from 40; family history may mean starting earlier or adding MRI — ask."
-        : "Recommended every two years from 40 to 74.",
+        ? "The USPSTF recommends a mammogram every two years from 40; with breast or ovarian cancer in the family, ask whether to start earlier or add MRI."
+        : "The USPSTF recommends a mammogram every two years from 40 to 74.",
       cadence: "Every 2 years",
       source: USPSTF(2024, "B", "breast-cancer-screening"),
       priority: "DUE",
@@ -310,7 +310,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       key: "brca_assessment",
       kind: "SCREENING",
       title: "BRCA risk assessment",
-      reason: "Breast or ovarian cancer in the family — a short risk questionnaire decides whether genetic counselling is worthwhile.",
+      reason: "Breast or ovarian cancer is in your family; the USPSTF recommends a short risk assessment to see whether genetic counselling applies.",
       cadence: "Once",
       source: USPSTF(2019, "B", "brca-related-cancer-risk-assessment-genetic-counseling-and-genetic-testing"),
       priority: "DISCUSS",
@@ -323,8 +323,8 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       kind: "SCREENING",
       title: "Cervical screening (Pap / HPV)",
       reason: between(age, 21, 29)
-        ? "Pap test every 3 years from 21 to 29."
-        : "Pap every 3 years, or HPV test every 5 years, from 30 to 65.",
+        ? "The USPSTF recommends a Pap test every 3 years from 21 to 29."
+        : "The USPSTF recommends a Pap test every 3 years, or an HPV test every 5 years, from 30 to 65.",
       cadence: between(age, 21, 29) ? "Every 3 years" : "Every 3–5 years",
       source: USPSTF(2018, "A", "cervical-cancer-screening"),
       priority: "DUE",
@@ -336,7 +336,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       key: "lung_ldct",
       kind: "SCREENING",
       title: "Low-dose CT for lung cancer",
-      reason: "Yearly for people 50–80 with a 20 pack-year history who smoke or quit within 15 years — check whether that matches you.",
+      reason: "The USPSTF recommends yearly screening for people 50–80 with a 20 pack-year history who smoke or quit in the last 15 years — ask whether that fits you.",
       cadence: "Yearly",
       source: USPSTF(2021, "B", "lung-cancer-screening"),
       priority: "DISCUSS",
@@ -348,7 +348,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       key: "aaa_ultrasound",
       kind: "SCREENING",
       title: "Abdominal aortic aneurysm ultrasound — once",
-      reason: "One-time ultrasound for men 65–75 who have ever smoked.",
+      reason: "The USPSTF recommends a one-time ultrasound for men 65–75 who have ever smoked.",
       cadence: "Once",
       source: USPSTF(2019, "B", "abdominal-aortic-aneurysm-screening"),
       priority: "DUE",
@@ -360,7 +360,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       key: "dxa",
       kind: "SCREENING",
       title: "Bone density (DXA)",
-      reason: "Recommended for all women from 65.",
+      reason: "The USPSTF recommends bone density screening for all women from 65.",
       cadence: "Every 2+ years",
       source: USPSTF(2025, "B", "osteoporosis-screening"),
       priority: "DUE",
@@ -370,7 +370,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       key: "dxa",
       kind: "SCREENING",
       title: "Bone density (DXA)",
-      reason: "Postmenopausal and under 65 with a risk factor — worth a fracture-risk estimate and possibly a scan.",
+      reason: "For postmenopausal women under 65 with a risk factor, the USPSTF recommends a fracture-risk estimate first, then possibly a scan.",
       cadence: "Discuss",
       source: USPSTF(2025, "B", "osteoporosis-screening"),
       priority: "DISCUSS",
@@ -383,8 +383,8 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       kind: "SCREENING",
       title: "PSA (prostate)",
       reason: p.family.prostateCancer
-        ? "An individual decision for men 55–69; family history tilts it toward testing."
-        : "An individual decision for men 55–69 — benefits and harms are close (USPSTF has an update in draft).",
+        ? "The USPSTF calls this an individual decision for men 55–69; family history is one reason men choose to test."
+        : "The USPSTF calls this an individual decision for men 55–69 — benefits and harms are close (an update is in draft).",
       cadence: "Discuss",
       source: USPSTF(2018, "C", "prostate-cancer-screening"),
       priority: "DISCUSS",
@@ -396,7 +396,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       key: "chlamydia_gonorrhea",
       kind: "SCREENING",
       title: "Chlamydia and gonorrhea",
-      reason: "Recommended yearly for sexually active women 24 and under.",
+      reason: "The USPSTF recommends yearly screening for sexually active women 24 and under.",
       cadence: "Yearly",
       source: USPSTF(2021, "B", "chlamydia-and-gonorrhea-screening"),
       priority: "CONSIDER",
@@ -410,8 +410,8 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
     kind: "VISIT",
     title: "Blood pressure",
     reason: hypertension
-      ? "High blood pressure on record — checked at every visit."
-      : "Measured at every visit for all adults.",
+      ? "High blood pressure is on your record; it is measured at every visit."
+      : "The USPSTF recommends blood pressure screening for all adults; it is measured at visits.",
     cadence: "Every visit",
     source: USPSTF(2021, "A", "hypertension-in-adults-screening"),
     priority: "DUE",
@@ -421,7 +421,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
     key: "depression_screen",
     kind: "VISIT",
     title: "Mood check (PHQ-2)",
-    reason: "Two questions at the visit; recommended for all adults.",
+    reason: "The USPSTF recommends depression screening for all adults — two questions at the visit.",
     cadence: "Every visit",
     source: USPSTF(2023, "B", "screening-depression-suicide-risk-adults"),
     priority: "CONSIDER",
@@ -432,7 +432,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       key: "prenatal",
       kind: "VISIT",
       title: "Prenatal panel",
-      reason: "Pregnancy on record — prenatal labs follow their own schedule with your obstetric provider.",
+      reason: "Pregnancy is on your record; prenatal labs follow their own schedule with your obstetric provider.",
       cadence: "Per trimester",
       source: { org: "ACOG", year: 2024, url: "https://www.acog.org/" },
       priority: "DISCUSS",

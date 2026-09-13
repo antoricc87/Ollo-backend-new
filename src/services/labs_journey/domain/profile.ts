@@ -118,14 +118,14 @@ export const checklistText = (items: PanelItemView[], firstName?: string | null)
   const line = (i: PanelItemView) =>
     `• ${i.title} — ${i.cadence} (${i.source.org}${i.source.grade ? ` ${i.source.grade}` : ""}, ${i.source.year})`;
   const parts: string[] = [];
-  parts.push(`Labs and screenings to discuss${firstName ? ` — ${firstName}` : ""}`);
-  parts.push("Guideline-based suggestions from Ollo. Your clinician decides what to order.");
-  if (due.length) parts.push("", "Due:", ...due.map(line));
-  if (consider.length) parts.push("", "Worth discussing:", ...consider.map(line));
+  parts.push(`Labs and screenings to ask about${firstName ? ` — ${firstName}` : ""}`);
+  parts.push("Drawn from published screening guidelines (USPSTF and named societies). Information to discuss, not an order — your clinician decides what to do.");
+  if (due.length) parts.push("", "Ask your clinician about:", ...due.map(line));
+  if (consider.length) parts.push("", "Depends on your situation:", ...consider.map(line));
   if (covered.length)
     parts.push(
       "",
-      "Already current:",
+      "Recent results on file:",
       ...covered.map((i) => `• ${i.title} — last ${i.covered!.collectedAt.slice(0, 10)}`)
     );
   return parts.join("\n");

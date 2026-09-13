@@ -19,6 +19,17 @@ class LabsJourneyHandler {
     }
   }
 
+  async fetchMenu(request: any, response: Response) {
+    const { id } = request.user;
+    try {
+      const menu = await LabsJourneyService.getMenu(id);
+      return response.status(200).json(Util.success(menu, "Lab menu"));
+    } catch (error) {
+      console.error("Error building lab menu", error);
+      return response.status(400).json(Util.error({ error }, "Error building lab menu"));
+    }
+  }
+
   async fetchRisk(request: any, response: Response) {
     const { id } = request.user;
     try {
