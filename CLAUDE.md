@@ -102,11 +102,31 @@ Slice 2 (done 2026-08-24) — tools, loop, safety, chat endpoint:
   raw before the check) → ASSISTANT row with cards + meta (model, usage,
   safety) → async summary fold once ≥8 rows sit outside the verbatim window.
 - `POST /api/agent/chat` `{message, threadId?, client?, stream?}` — SSE by
-  default (`event: <type>` / `data: <json>`, 15 s `: ping` heartbeat; abort is
-  wired to `response.on("close")`, NOT `request` — that fires as soon as the
+  default (`event: <type>` / `data: <json>`, 15 s `: ping` heartbeat; close is
+  watched on `response.on("close")`, NOT `request` — that fires as soon as the
   body is read); `stream:false` returns one JSON `{threadId, messageId, text,
   cards, safety:{outcome, flagged}, usage, model}`. `GET /api/agent/tools`
   lists the specs.
+- **A turn outlives its connection (Sep 14 2026, `liveTurns.ts`).** Before,
+  a closed stream aborted the turn: a phone that locked / lost signal mid-turn
+  kept its USER row but never got (or saved) a reply, silently. Now a closed
+  stream only stops the writes; the turn finishes and saves. Optional body
+  `turnId` (first SSE event is `turn {turnId}`); `POST /api/agent/chat/cancel
+  {turnId? | threadId?}` is the only early stop (Stop button), plus a 5-min
+  hard cap. `GET /threads/:id` carries `answering` (a turn is still running on
+  it) so the app polls for the saved reply. Registry is in-memory — right for
+  the single Railway instance only. Cancel takes effect between steps: a tool
+  already running finishes first; calls of that step that never ran get an
+  "interrupted" TOOL row (runLoop checks the signal before each call). NEVER
+  `break` out of `runTurn` in a consumer — returning the generator at a yield
+  can land between the ASSISTANT tool-call row and its TOOL rows.
+- **Unanswered tool calls break a thread (Sep 14 2026).** OpenAI 400s ("An
+  assistant message with 'tool_calls' must be followed by tool messages…") on
+  any history holding a call with no result, so every later turn answered
+  "Something went wrong answering that". The old close-abort left those rows.
+  `toChatMessages` → `pairToolCalls()` now repairs on read: a missing result
+  becomes an "interrupted" result, a stray TOOL row is dropped — broken
+  threads heal without a data fix.
 - Scripts: `scripts/agent-chat-smoke.ts [email] [--only N] [--keep]` (live 5-
   scenario run: plan comparison, statin/vit-D pressure, chest-pain red flag,
   remember, memory-aware follow-up), `scripts/agent-safety-check.ts` (7 canned

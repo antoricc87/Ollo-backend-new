@@ -4,6 +4,7 @@ import threadStore from "../memory/thread.store";
 import memoryStore, { MEMORY_CATEGORIES, MemoryCategory } from "../memory/memory.store";
 import { buildPatientSnapshot, renderSnapshot, ClientContext } from "../context/snapshot";
 import { runTurn, runTurnCollect } from "../agent.service";
+import { liveTurns } from "../liveTurns";
 import { registry } from "../tools";
 import proposalStore from "../memory/proposals.store";
 import { getPreference, runProactiveFor, setPreference } from "../proactive/proactive.service";
@@ -76,7 +77,8 @@ class AgentHandler {
         includeTool: request.query?.tools === "true",
       });
       if (!thread) return response.status(404).json(Util.error({}, "Thread not found"));
-      return response.status(200).json(Util.success(thread, "Thread"));
+      // `answering`: a turn is still running on this thread (its reply is not saved yet).
+      return response.status(200).json(Util.success({ ...thread, answering: liveTurns.isAnswering(id, threadId) }, "Thread"));
     } catch (error) {
       console.error("agent getThread", error);
       return response.status(400).json(Util.error({}, "Error fetching thread"));
@@ -161,13 +163,26 @@ class AgentHandler {
   /**
    * One turn. Streams Server-Sent Events (`event: <type>` / `data: <json>`)
    * unless `stream: false` is sent, in which case the final result is one
-   * JSON reply. Body: `{ message, threadId?, client?, stream? }`.
+   * JSON reply. Body: `{ message, threadId?, client?, stream?, turnId? }`.
+   * The turn outlives the connection (see liveTurns.ts): a closed stream
+   * stops the writes, not the turn — only `POST /agent/chat/cancel` does.
    */
   async chat(request: any, response: Response) {
     const { id } = request.user;
     const body = request.body ?? {};
     let message = typeof body.message === "string" ? body.message.trim() : "";
     if (!message) return response.status(400).json(Util.error({}, "message is required"));
+    const threadId = typeof body.threadId === "string" ? body.threadId : null;
+    // Registered before transcription so the thread already reads as answering.
+    const turn = liveTurns.start(id, body.turnId, threadId);
+    try {
+      await AgentHandler.answer(request, response, id, body, message, threadId, turn);
+    } finally {
+      turn.finish();
+    }
+  }
+
+  private static async answer(request: any, response: Response, id: string, body: any, message: string, threadId: string | null, turn: ReturnType<typeof liveTurns.start>) {
     if (body.isAudio === true) {
       // Voice: `message` is base64 audio — transcribe first (same Whisper path the old agent used).
       try {
@@ -180,13 +195,12 @@ class AgentHandler {
     }
     if (message.length > MAX_MESSAGE_CHARS)
       return response.status(400).json(Util.error({}, `message is longer than ${MAX_MESSAGE_CHARS} characters`));
-    const threadId = typeof body.threadId === "string" ? body.threadId : null;
     const client = pickClientContext(body.client);
     const wantsStream = body.stream !== false && body.stream !== "false";
 
     if (!wantsStream) {
       try {
-        const r = await runTurnCollect({ patientId: id, threadId, message, client });
+        const r = await runTurnCollect({ patientId: id, threadId, message, client, signal: turn.signal });
         if (r.error && !r.done) return response.status(502).json(Util.error({ threadId: r.threadId }, r.error));
         return response.status(200).json(
           Util.success(
@@ -206,24 +220,43 @@ class AgentHandler {
     response.setHeader("Connection", "keep-alive");
     response.setHeader("X-Accel-Buffering", "no");
     response.flushHeaders();
-    const abort = new AbortController();
     // NB: listen on the RESPONSE — `request` emits "close" as soon as its body is consumed.
-    response.on("close", () => abort.abort());
-    const heartbeat = setInterval(() => response.write(": ping\n\n"), 15_000);
-    const send = (event: string, data: unknown) => response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    // A closed stream only stops the writes; the turn runs on and saves its reply.
+    let open = true;
+    response.on("close", () => {
+      open = false;
+    });
+    const write = (chunk: string) => {
+      if (open && !response.writableEnded) response.write(chunk);
+    };
+    const heartbeat = setInterval(() => write(": ping\n\n"), 15_000);
+    const send = (event: string, data: unknown) => write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    send("turn", { turnId: turn.turnId });
     try {
-      for await (const ev of runTurn({ patientId: id, threadId, message, client, signal: abort.signal })) {
-        if (abort.signal.aborted) break;
+      // No `break` on cancel: returning the generator at a yield can land between an
+      // ASSISTANT tool-call row and its TOOL rows. runLoop watches the signal itself.
+      for await (const ev of runTurn({ patientId: id, threadId, message, client, signal: turn.signal })) {
+        if (ev.type === "thread") turn.setThread(ev.threadId);
         const { type, ...data } = ev;
         send(type, data);
       }
     } catch (error) {
       console.error("agent chat stream", error);
-      if (!abort.signal.aborted) send("error", { message: "Something went wrong" });
+      if (!turn.signal.aborted) send("error", { message: "Something went wrong" });
     } finally {
       clearInterval(heartbeat);
-      response.end();
+      if (open) response.end();
     }
+  }
+
+  /** Stop a running turn — the Stop button. Body: `{ turnId? , threadId? }`. */
+  async cancelTurn(request: any, response: Response) {
+    const { id } = request.user;
+    const { turnId, threadId } = request.body ?? {};
+    if (typeof turnId !== "string" && typeof threadId !== "string")
+      return response.status(400).json(Util.error({}, "turnId or threadId is required"));
+    const cancelled = liveTurns.cancel(id, { turnId, threadId });
+    return response.status(200).json(Util.success({ cancelled }, cancelled ? "Stopped" : "Nothing running"));
   }
 
   /** Tool catalogue as the model sees it (for the app's debug screen / evals). */

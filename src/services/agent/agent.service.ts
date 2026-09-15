@@ -64,9 +64,43 @@ const SUMMARIZE_AFTER_ROWS = 8;
 const addUsage = (a: Usage | null, b: Usage | null): Usage | null =>
   !a ? b : !b ? a : { inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens, cachedInputTokens: (a.cachedInputTokens ?? 0) + (b.cachedInputTokens ?? 0) };
 
+const INTERRUPTED_RESULT = JSON.stringify({ error: "This tool call was interrupted before it finished. Nothing from it was saved." });
+
+type StoredRow = { role: string; content: string; toolCalls: unknown; toolCallId: string | null; toolName: string | null };
+
+/**
+ * The provider rejects a history where an assistant tool call has no result
+ * (or a result has no call) — and then EVERY later turn in that thread fails
+ * ("Something went wrong answering that"). A turn cut off between the
+ * ASSISTANT row and its TOOL rows left exactly that (Sep 14 2026: a phone that
+ * dropped mid-turn broke its thread). Repair on read: missing results become
+ * an "interrupted" result, stray results are dropped.
+ */
+const pairToolCalls = (rows: StoredRow[]): StoredRow[] => {
+  const out: StoredRow[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (r.role === "TOOL") continue; // consumed with its ASSISTANT row below, or stray
+    out.push(r);
+    const calls = r.role === "ASSISTANT" && Array.isArray(r.toolCalls) ? (r.toolCalls as { id: string; name: string }[]) : [];
+    if (!calls.length) continue;
+    const answered = new Set<string>();
+    while (i + 1 < rows.length && rows[i + 1].role === "TOOL") {
+      const t = rows[++i];
+      if (t.toolCallId && calls.some((c) => c.id === t.toolCallId) && !answered.has(t.toolCallId)) {
+        answered.add(t.toolCallId);
+        out.push(t);
+      }
+    }
+    for (const c of calls)
+      if (!answered.has(c.id)) out.push({ role: "TOOL", content: INTERRUPTED_RESULT, toolCalls: null, toolCallId: c.id, toolName: c.name });
+  }
+  return out;
+};
+
 /** Stored rows → provider messages. TOOL rows carry the JSON result string. */
-const toChatMessages = (rows: { role: string; content: string; toolCalls: unknown; toolCallId: string | null; toolName: string | null }[]): ChatMessage[] =>
-  rows.map((r): ChatMessage => {
+const toChatMessages = (rows: StoredRow[]): ChatMessage[] =>
+  pairToolCalls(rows).map((r): ChatMessage => {
     switch (r.role) {
       case "USER":
         return { role: "user", content: r.content };
@@ -232,7 +266,15 @@ async function* runLoop(p: {
 
       await threadStore.append(threadId, [{ role: "ASSISTANT", content: res.text ?? "", toolCalls: res.toolCalls, meta: { model } }]);
       messages.push({ role: "assistant", content: res.text ?? "", toolCalls: res.toolCalls });
-      for (const call of res.toolCalls) {
+      for (const [n, call] of res.toolCalls.entries()) {
+        if (p.signal?.aborted) {
+          // Stopped mid-step: answer the calls that will not run so the thread stays valid.
+          await threadStore.append(
+            threadId,
+            res.toolCalls.slice(n).map((c) => ({ role: "TOOL" as const, toolCallId: c.id, toolName: c.name, content: INTERRUPTED_RESULT, meta: { ok: false, error: "cancelled" } }))
+          );
+          return;
+        }
         usedTools = true;
         yield { type: "tool_start", id: call.id, name: call.name, input: call.input };
         const tool = registry.get(call.name);
@@ -264,6 +306,8 @@ async function* runLoop(p: {
     if (!draft.trim()) {
       draft = steps >= MAX_STEPS ? "I got a bit lost pulling that together — can you ask me in a smaller piece?" : "I didn't manage to put an answer together. Could you rephrase?";
     }
+
+    if (p.signal?.aborted) return;
 
     /* ---------------------------- output safety ---------------------------- */
     yield { type: "status", text: "Checking" };
