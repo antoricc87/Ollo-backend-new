@@ -307,7 +307,6 @@ export class PatientHandler {
         labDataJSON = {
           labResults: result.labResults,
           labReport: result.labReport,
-          recommendations: result.recommendations,
         };
       }
 
@@ -332,6 +331,8 @@ export class PatientHandler {
         void triggerWatchOut(patientIdToUse, `new lab report uploaded on ${new Date().toISOString().slice(0, 10)} (${labDataJSON.labResults.length} values, ${flaggedCount} outside the reference range)`);
         const responsePayload = {
           ...labDataJSON,
+          labReport: report.labReport,
+          recommendations: {},
           reportId: report.id,
           collectedAt: report.collectedAt ?? report.createdAt,
           collectedAtDetected: !!resolvedCollectedAt,
@@ -344,7 +345,7 @@ export class PatientHandler {
           });
           const notificationData = {
             title: `Your Lab Results Are Ready`,
-            body: `Hi there! Your recent lab results are now available in the app. Tap to review your results and personalized recommendations.`,
+            body: `Hi there! Your recent lab results are now available in the app. Tap to review them.`,
             token: patientFCM.FCMToken,
           };
           sendSingleNotification(notificationData);

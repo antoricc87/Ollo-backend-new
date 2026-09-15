@@ -10,6 +10,7 @@ import {
   generateLabDataJSON,
   generateLabDataJSONFromBase64,
 } from "../openAI/model/openai.model";
+import { buildLabReportSummary } from "../lab_extraction/reportSummary";
 import { parsedLabSchema } from "../openAI/schemas/openai.schema";
 import { PDFRedactWithMask } from "../../utils/redactPHIPdf";
 export class UtilsHandler {
@@ -53,7 +54,13 @@ export class UtilsHandler {
       // if (labDataJSON)
       return response
         .status(200)
-        .json(Util.success(labDataJSON, "Labs generated"));
+        .json(
+          Util.success(
+            // Same rule as the patient upload: summary from the values, no advice.
+            { ...labDataJSON, labReport: buildLabReportSummary(labDataJSON?.labResults), recommendations: {} },
+            "Labs generated"
+          )
+        );
     } catch (error: unknown) {
       console.error(error);
       return response

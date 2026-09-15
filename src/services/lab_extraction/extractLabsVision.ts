@@ -67,8 +67,6 @@ const Entry = z.object({
 const TranscribeSchema = z.object({
   collectedAt: z.string().nullable(), // ISO date
   labResults: z.array(Entry),
-  labReport: z.string(),
-  recommendations: z.object({ nutrition: z.string(), exercise: z.string() }),
 });
 
 const VerifySchema = z.object({
@@ -86,14 +84,12 @@ const VerifySchema = z.object({
   missing: z.array(Entry),
 });
 
-const TRANSCRIBE_PROMPT = `You are a meticulous clinical data-entry assistant reading a scanned laboratory report. Transcribe every measured test result from every page. Copy values EXACTLY as printed — never compute, round, or infer. Do not put a range or an inequality limit in result. If a row shows current and previous values, take the current one. Use these canonical names when they apply: HDL, LDL, TCL (total cholesterol), Triglycerides, Glucose, HbA1c, Albumin, Creatinine, CRP, RDW, WBC, MCV, Lymphocytes, Alkaline Phosphatase; otherwise the name as printed. referenceRange and units exactly as printed ("" if none). page = page number the value is on. collectedAt = the sample collection date (Collected / Drawn / Data prelievo / Date of service) as YYYY-MM-DD, or null if not printed. Do not use the report/print date. Ignore patient identifiers entirely. Then write labReport (patient-friendly summary: for each out-of-range value "Your [test] is [value] ([range]). [Meaning]. [Next step]."; cautious synthesis only if a pattern is clear; never diagnose) and recommendations.nutrition / recommendations.exercise tied to specific abnormal findings (say when nothing evidence-based applies).`;
+const TRANSCRIBE_PROMPT = `You are a meticulous clinical data-entry assistant reading a scanned laboratory report. Transcribe every measured test result from every page. Copy values EXACTLY as printed — never compute, round, or infer. Do not put a range or an inequality limit in result. If a row shows current and previous values, take the current one. Use these canonical names when they apply: HDL, LDL, TCL (total cholesterol), Triglycerides, Glucose, HbA1c, Albumin, Creatinine, CRP, RDW, WBC, MCV, Lymphocytes, Alkaline Phosphatase; otherwise the name as printed. referenceRange and units exactly as printed ("" if none). page = page number the value is on. collectedAt = the sample collection date (Collected / Drawn / Data prelievo / Date of service) as YYYY-MM-DD, or null if not printed. Do not use the report/print date. Ignore patient identifiers entirely.`;
 
 const VERIFY_PROMPT = `You are independently auditing a transcription of a scanned laboratory report. Re-read every page carefully. For EACH entry in the list below, check the result value, reference range and units against the page. Return one check per entry: confirmed=true only when all three match the page exactly; otherwise confirmed=false and give the corrected values EXACTLY as printed (correctedReferenceRange must be "" — an empty string, not null — when no interval is printed for that test; a flag letter like H/L/A after a value is NOT part of the value). Check that each entry's range belongs to ITS OWN row, not the row above or below — misaligned rows are the most common transcription error. Then list in "missing" any measured test on this page that is absent from the list. Also give collectedAt (sample collection date, YYYY-MM-DD, or null). Be strict: a single wrong digit is a mismatch.`;
 
 export type VisionExtraction = {
   labResults: ValidatedEntry[];
-  labReport: string;
-  recommendations: { nutrition: string; exercise: string };
   collectedAt: Date | null;
   passes: 2;
   confirmedCount: number;
@@ -164,8 +160,6 @@ export const extractLabsVision = async (
   const t = {
     collectedAt: transcribed.map((x) => x.out?.collectedAt).find(Boolean) ?? null,
     labResults: merged.map((m) => m.e),
-    labReport: transcribed.map((x) => x.out?.labReport).filter(Boolean).sort((a, b) => (b?.length ?? 0) - (a?.length ?? 0))[0] ?? "",
-    recommendations: transcribed.map((x) => x.out?.recommendations).find((r) => r && (r.nutrition || r.exercise)) ?? { nutrition: "", exercise: "" },
   };
   const stripNotes = merged.map((m) => m.note);
 
@@ -252,8 +246,6 @@ export const extractLabsVision = async (
 
   return {
     labResults: validated,
-    labReport: t.labReport,
-    recommendations: t.recommendations,
     collectedAt: parseIso(v.collectedAt) ?? parseIso(t.collectedAt),
     passes: 2,
     confirmedCount,

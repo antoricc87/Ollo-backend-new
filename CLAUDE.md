@@ -18,7 +18,7 @@ analysis and lab extraction. Mobile app lives in `../healtcare-mobile-app-main`.
   `npx prisma db push` (MongoDB-style, no migrations dir), restart server.
 - `src/config/firebaseConfig.json` is a PLACEHOLDER (real service account not
   committed); `firebaseAdmin.ts` fails soft — push notifications disabled.
-- Full `tsc` has ~11 pre-existing errors (lab_extraction `unknown` narrowing,
+- Full `tsc` has ~7 pre-existing errors (lab_extraction `unknown` narrowing,
   @napi-rs/canvas Float16Array) — runtime uses transpile-only, don't block on them.
 
 ## Health Plan v1 (Aug 2026) — `src/services/plan/`
@@ -686,6 +686,39 @@ Railway after deploy).
   (can't text-redact an image) — `LAB_VISION_FALLBACK=false` re-enables the
   422 rejection. The app tells the user a scan was read visually.
   `LAB_EXTRACTION_ENGINE=legacy` restores the old path.
+  **Summary wording (Sep 15 2026):** the model no longer writes `labReport`
+  or `recommendations` (the old prompt produced "above the recommended range
+  and may increase your risk for heart disease", "no exercise changes are
+  recommended", "levels are all healthy"). `reportSummary.ts`
+  `buildLabReportSummary(entries)` states only what the report shows against
+  its PRINTED ranges — all in range, or "n of N outside…: test value (range)"
+  + "Your clinician can explain what these results mean for you." + values
+  marked to check. No healthy/normal/suggests/recommend/risk/condition names,
+  no diet or exercise advice tied to results; `recommendations` is stored as
+  `{}`. Applied on every write (`createLabReport`, the `labs` summary case,
+  the legacy `/utils` lab route response) AND on read (`fetchPatientLabs`
+  rebuilds it, so old rows never show model text — seam + /labs/current go
+  through it). `scripts/backfill-lab-report-summary.ts [--dry]` rewrites
+  stored rows (dev done Sep 15; run on Railway after deploy). Test
+  `tests/utils/labReportSummary.test.ts` holds the banned-words regex. The
+  patient context (conditions/meds) is no longer sent to the extraction
+  model — it only served the summary.
+  **Explanation lives in Ollie (Sep 15 2026, user ruling):** the app's
+  "Explain my report" button sends `Explain my lab report from <D MMM YYYY>.`;
+  `get_labs {reportDate}` returns that ONE report as uploaded (exact test
+  date, else ±1 day — the app prints local dates, rows store UTC; card title
+  `Report · date`, duplicate keys suffixed). BOUNDARY allows a report
+  walk-through (flagged values first, several general reasons, a recorded
+  condition/medication only as a "commonly monitored with" fact) and forbids
+  verdicts ("healthy", "all good", "no changes needed", "matters more because
+  of your diabetes"); `outputCheck.ts` flags a verdict as `diagnosis`.
+  Also (prompt + eval `NO_TREATMENT_OR_GRADE`): plan watch-outs "relate to" a
+  value, never "help address/lower" it, and no grading ("good cholesterol",
+  "higher is better"). The
+  user considered condition-aware interpretation and chose this instead —
+  patient-specific interpretation is the medical-device line; the compliant
+  routes are clinician review or clearance. Eval: scenario `report_explained`
+  (`NO_VERDICT` regex) + 3 classifier cases in `agent-safety-check.ts` (10/10).
   Eval: `scripts/make-lab-fixtures.ts` (synthetic Quest-style + Italian
   comma-decimal PDFs in tests/fixtures/labs) and
   `scripts/eval-labs.ts [folder] [--model x] [--verify-model y] [--write-expected]`.
@@ -781,8 +814,8 @@ decision.
 
 ## Dev data (user antoricciardelli@gmail.com)
 
-Seeded via psql: 14 lab results (LDL + vitamin D flagged) with report +
-recommendations; 21 days of FoodEntry rows (dinner gaps, takeaway sodium,
+Seeded via psql: 14 lab results (LDL + vitamin D flagged) with a report
+(summaries are built from the values since Sep 15 2026); 21 days of FoodEntry rows (dinner gaps, takeaway sodium,
 matches the nutrition reference); 30 days of DailyExercise minutes.
 `scripts/seed-lab-history.ts` adds two older partial reports (lipids+vit D
 Jun 2025 → stale, thyroid/CRP/ferritin Jan 2026 → aging) so the merged labs

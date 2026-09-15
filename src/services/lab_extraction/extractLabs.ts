@@ -16,10 +16,9 @@ import { extractPdfLayout, PdfLayout } from "./pdfLayout";
 import { detectCollectionDate, redactPIIText } from "../../utils/redactPI";
 import { validateEntries, ValidatedEntry } from "./validateLabs";
 import { LabCategoryEnum } from "../openAI/schemas/openai.schema";
-import { getPatientById } from "../patient/model/patient.model";
-import { calculateAgeFromDob } from "../../utils/calculateAgefromDob";
 import { modelRequestParams } from "../meal_analysis/mealAnalysis.service";
 import { extractLabsVision } from "./extractLabsVision";
+import { buildLabReportSummary } from "./reportSummary";
 
 export const DEFAULT_LAB_MODEL = process.env.LAB_EXTRACTION_MODEL || "gpt-4.1";
 
@@ -42,14 +41,12 @@ const ExtractionSchema = z.object({
       aboutTestType: z.string(),
     })
   ),
-  labReport: z.string(),
-  recommendations: z.object({ nutrition: z.string(), exercise: z.string() }),
 });
 
 export type LabExtractionResult = {
   labResults: ValidatedEntry[];
+  /** Built in code from labResults (reportSummary.ts) — no model-written summary or advice. */
   labReport: string;
-  recommendations: { nutrition: string; exercise: string };
   collectedAt: Date | null;
   collectedAtDetected: boolean;
   extraction: {
@@ -101,13 +98,7 @@ RULES
 7. category = the best fit from the allowed list.
 8. isOutOfRange = your best reading of the row's flag (H/L/*/abnormal marker or comparison to the range). It will be re-checked.
 9. aboutTestType = one plain-language sentence explaining what the test measures.
-10. Do not drop normal results. Do not invent tests that are not on the page.
-
-AFTER the entries, write:
-- labReport: a structured, patient-friendly summary. For each out-of-range value: "Your [test] is [value] ([reference range]). [What it means]. [Sensible next step]." Then, only if the abnormalities form a recognisable pattern (e.g. metabolic syndrome, iron-deficiency anaemia), one cautious synthesis paragraph ("This pattern may suggest…"). Never diagnose.
-- recommendations.nutrition: diet advice tied to specific abnormal results, each linked to the finding it addresses; conditional phrasing when the cause is unconfirmed; if nothing evidence-based applies, say so and refer to the provider.
-- recommendations.exercise: 1-2 specific, evidence-based activity recommendations tied to the abnormal results (type, frequency, benefit); if none applies, say so.
-Prioritise clinically significant findings (lipids, A1c, glucose, kidney, liver) over borderline ones.`;
+10. Do not drop normal results. Do not invent tests that are not on the page.`;
 
 export const extractLabReport = async (
   file: Buffer | Uint8Array,
@@ -120,8 +111,7 @@ export const extractLabReport = async (
     const v = await extractLabsVision(file, { model: ctx.model });
     return {
       labResults: v.labResults,
-      labReport: v.labReport,
-      recommendations: v.recommendations,
+      labReport: buildLabReportSummary(v.labResults),
       collectedAt: v.collectedAt,
       collectedAtDetected: !!v.collectedAt,
       extraction: {
@@ -146,16 +136,6 @@ export const extractLabReport = async (
     redactPIIText(r.text, ctx.firstName, ctx.lastName, ctx.dob)
   );
 
-  const patient = await getPatientById(ctx.patientId);
-  const patientContext = patient
-    ? {
-        gender: patient.gender ?? "unknown",
-        age: calculateAgeFromDob(patient.dob),
-        conditions: patient.patientSummary?.conditions?.map((c: any) => c.condition.name) ?? [],
-        medications: patient.patientSummary?.medications?.map((m: any) => m.medication.name) ?? [],
-      }
-    : {};
-
   const numbered = redactedRows.map((r, i) => `${i + 1}. ${r}`).join("\n");
   const model = ctx.model || DEFAULT_LAB_MODEL;
   const response = await getClient().responses.parse({
@@ -165,7 +145,7 @@ export const extractLabReport = async (
       { role: "system", content: SYSTEM_PROMPT },
       {
         role: "user",
-        content: `PATIENT CONTEXT (for the summary only): ${JSON.stringify(patientContext)}\n\nREPORT ROWS (${redactedRows.length} rows, ${layout.pages} page(s)):\n${numbered}`,
+        content: `REPORT ROWS (${redactedRows.length} rows, ${layout.pages} page(s)):\n${numbered}`,
       },
     ],
     text: { format: zodTextFormat(ExtractionSchema, "lab_extraction") },
@@ -210,8 +190,7 @@ export const extractLabReport = async (
 
   return {
     labResults,
-    labReport: parsed.labReport,
-    recommendations: parsed.recommendations,
+    labReport: buildLabReportSummary(labResults),
     collectedAt,
     collectedAtDetected: !!collectedAt,
     extraction: {

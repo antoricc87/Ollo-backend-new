@@ -1,4 +1,5 @@
 import prisma from "../../../utility/prismaClient";
+import { buildLabReportSummary } from "../../lab_extraction/reportSummary";
 import { Prisma } from "@prisma/client";
 import {
   BiologicalAgeData,
@@ -1070,8 +1071,8 @@ export const updatePatientSummarySection = async (
         const labSummary = await prisma.labResultSummary.create({
           data: {
             patientSummaryId,
-            labReport: data.labReport,
-            recommendations: data.recommendations,
+            labReport: buildLabReportSummary(data.labResults),
+            recommendations: {},
             collectedAt: data.collectedAt ? new Date(data.collectedAt) : null,
           },
         });
@@ -1175,7 +1176,13 @@ export const fetchPatientLabs = async (patientId: string) => {
       console.log("Lab result summaries not found");
       return [];
     }
-    return labResultSummaries;
+    // Summaries are rebuilt from the values on every read, so reports stored
+    // before the Sep 15 2026 wording change never show model-written advice.
+    return labResultSummaries.map((r) => ({
+      ...r,
+      labReport: buildLabReportSummary(r.labResults),
+      recommendations: {},
+    }));
   } catch (error: unknown) {
     console.error("Error fetching patient Labs");
     throw error;
@@ -1220,8 +1227,6 @@ export const createLabReport = async (
       reviewReason?: string | null;
       sourceRow?: string | null;
     }>;
-    labReport: string;
-    recommendations: unknown;
   },
   collectedAt: Date | null
 ) => {
@@ -1232,8 +1237,8 @@ export const createLabReport = async (
   return prisma.labResultSummary.create({
     data: {
       patientSummaryId: patientSummary.id,
-      labReport: data.labReport ?? "",
-      recommendations: (data.recommendations ?? {}) as any,
+      labReport: buildLabReportSummary(data.labResults),
+      recommendations: {},
       collectedAt,
       labResults: {
         create: data.labResults.map((lab) => ({

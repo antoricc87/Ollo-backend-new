@@ -5,6 +5,7 @@
  * Run: npx ts-node --transpile-only scripts/seed-lab-history.ts
  */
 import prisma from "../src/utility/prismaClient";
+import { buildLabReportSummary } from "../src/services/lab_extraction/reportSummary";
 
 const EMAIL = process.env.SEED_EMAIL ?? "antoricciardelli@gmail.com";
 
@@ -15,7 +16,7 @@ async function main() {
   if (!summary) throw new Error("No patient summary");
 
   const marker = await prisma.labResultSummary.findFirst({
-    where: { patientSummaryId: summary.id, labReport: { startsWith: "[seed-history]" } },
+    where: { patientSummaryId: summary.id, collectedAt: new Date("2025-06-10T00:00:00Z") },
   });
   if (marker) { console.log("Seed already present, skipping."); return; }
 
@@ -25,8 +26,8 @@ async function main() {
       patientSummaryId: summary.id,
       collectedAt: new Date("2025-06-10T00:00:00Z"),
       createdAt: new Date("2025-06-12T09:00:00Z"),
-      labReport: "[seed-history] Lipid panel: LDL well above target; HDL and triglycerides within range. Vitamin D low.",
-      recommendations: { nutrition: "Cut saturated fat; add soluble fibre (oats, legumes).", exercise: "150 min/week moderate aerobic activity." },
+      labReport: "",
+      recommendations: {},
       labResults: { create: [
         { category: "Lipid panel", testType: "LDL Cholesterol", result: "168", units: "MG/DL", referenceRange: "0-99", isOutOfRange: true, aboutTestType: "LDL is the cholesterol fraction that builds up in artery walls." },
         { category: "Lipid panel", testType: "HDL", result: "48", units: "MG/DL", referenceRange: "40-60", isOutOfRange: false, aboutTestType: "HDL carries cholesterol away from the arteries." },
@@ -44,8 +45,8 @@ async function main() {
       patientSummaryId: summary.id,
       collectedAt: new Date("2026-01-15T00:00:00Z"),
       createdAt: new Date("2026-01-16T09:00:00Z"),
-      labReport: "[seed-history] Thyroid and inflammatory markers all within range.",
-      recommendations: { nutrition: "No changes indicated.", exercise: "Keep current routine." },
+      labReport: "",
+      recommendations: {},
       labResults: { create: [
         { category: "Thyroid", testType: "TSH", result: "2.1", units: "MIU/L", referenceRange: "0.4-4.0", isOutOfRange: false, aboutTestType: "TSH signals the thyroid to make hormone." },
         { category: "Inflammatory Markers", testType: "hs-CRP", result: "0.8", units: "MG/L", referenceRange: "0-3.0", isOutOfRange: false, aboutTestType: "CRP rises with inflammation." },
@@ -53,6 +54,13 @@ async function main() {
       ] },
     },
   });
+  // Summaries come from the values (reportSummary.ts), never hand-written.
+  const seeded = await prisma.labResultSummary.findMany({
+    where: { patientSummaryId: summary.id, labReport: "" },
+    include: { labResults: true },
+  });
+  for (const r of seeded)
+    await prisma.labResultSummary.update({ where: { id: r.id }, data: { labReport: buildLabReportSummary(r.labResults) } });
   console.log("Seeded 2 historical lab reports.");
 }
 
