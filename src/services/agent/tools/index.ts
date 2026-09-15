@@ -13,6 +13,7 @@ import { getWorkouts, logWorkout } from "./workout.tools";
 import { suggestMeal } from "./suggest.tools";
 import { getMealPlan, saveMealPlan } from "./mealplan.tools";
 import { generateWorkout, generateWorkoutPlan, moveWorkout, saveWorkoutPlan, updateTrainingProfile } from "./workoutplan.tools";
+import { getEncounters, startEncounter } from "./checkin.tools";
 
 /**
  * Everything the agent can do: read tools, memory tools, generation tools
@@ -33,6 +34,8 @@ export const registry = new ToolRegistry().register(
   getRecords,
   getCareTeam,
   listSubaccounts,
+  startEncounter,
+  getEncounters,
   remember,
   recallMemory,
   forgetMemory,

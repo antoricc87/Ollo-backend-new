@@ -165,6 +165,7 @@ model Patient {
   trainingProfile      TrainingProfile?
   agentPreference      AgentPreference?
   labJourneys          LabJourney[]          @relation("PatientLabJourneys")
+  encounters           Encounter[]           @relation("PatientEncounters")
 }
 
 model DexcomToken {
@@ -1431,4 +1432,98 @@ model LabJourney {
   updatedAt  DateTime         @updatedAt
 
   @@index([patientId, status])
+}
+
+/**
+ * ---------------------------- Check-in (encounter) ---------------------------
+ * Structured history-taking. See src/services/encounter/domain and
+ * docs/ai-check-in-architecture.md in the mobile repo.
+ * Self-reported symptoms live HERE and never in PatientSummary. A condition
+ * only reaches the record when the patient confirms a clinician made the
+ * diagnosis, through the ordinary proposal flow.
+ * --------------------------------------------------------------------------
+ */
+
+enum EncounterStatus {
+  OPEN
+  CLOSED
+  ABANDONED
+}
+
+enum EncounterRoute {
+  OWN_DOCTOR
+  OLLO_DOCTOR
+  TRACKING
+  CRISIS
+  UNDECIDED
+}
+
+enum EncounterTrend {
+  BETTER
+  SAME
+  WORSE
+}
+
+model Encounter {
+  id              String             @id @default(uuid())
+  patientId       String
+  patient         Patient            @relation("PatientEncounters", fields: [patientId], references: [id], onDelete: Cascade)
+  status          EncounterStatus    @default(OPEN)
+  /// Protocol key from encounter/domain/protocols.ts — never a diagnosis label.
+  complaintKey    String
+  protocolVersion Int
+  /// What the patient typed to open the check-in, verbatim.
+  complaintText   String
+  phase           String
+  /// Answered slots, keyed by slot key. Shape owned by the domain layer.
+  slots           Json               @default("{}")
+  /// Slots already put to the patient, so a skip is not re-asked.
+  askedKeys       String[]           @default([])
+  /// Tripped red flags. Sticky: entries are added, never removed.
+  redFlags        Json               @default("[]")
+  turns           Int                @default(0)
+  route           EncounterRoute     @default(UNDECIDED)
+  bookingId       String?
+  threadId        String?
+  /// Which consent text the patient accepted, and the region whose copy they saw.
+  consentVersion  String?
+  region          String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  closedAt        DateTime?
+  events          EncounterEvent[]
+  checkIns        EncounterCheckIn[]
+
+  @@index([patientId, status])
+}
+
+/// APPEND-ONLY. The medico-legal record of what was asked, answered and judged.
+/// Never updated, never deleted while the encounter exists.
+model EncounterEvent {
+  id            String    @id @default(uuid())
+  encounterId   String
+  encounter     Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  seq           Int
+  /// "open" | "ask" | "answer" | "red_flag" | "recap" | "route" | "close"
+  kind          String
+  slotKey       String?
+  payload       Json?
+  model         String?
+  promptVersion String?
+  createdAt     DateTime  @default(now())
+
+  @@unique([encounterId, seq])
+  @@index([encounterId])
+}
+
+model EncounterCheckIn {
+  id          String         @id @default(uuid())
+  encounterId String
+  encounter   Encounter      @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  day         Int
+  trend       EncounterTrend
+  note        String?
+  createdAt   DateTime       @default(now())
+
+  @@index([encounterId])
 }

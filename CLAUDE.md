@@ -91,13 +91,17 @@ Slice 2 (done 2026-08-24) — tools, loop, safety, chat endpoint:
   tool_start/result, card, text, safety, done, error): persist USER →
   **red-flag gate** (`safety/redFlags.ts`, deterministic regexes incl. some
   Italian; on hit the model is bypassed and `emergencyAnswer()` is returned
-  with an `emergency` card, ~10 ms) → snapshot + `prompt/system.ts` (static
+  with an `emergency` card, ~10 ms; emergency numbers come from
+  `safety/policy.ts` via `regionFromTimeZone(Patient.timeZone)`, falling back
+  to the "911 in the US, 112 in Europe" line when the zone says nothing) → snapshot + `prompt/system.ts` (static
   persona/boundary/gray-zone examples first for prefix caching, snapshot +
   thread summary last) → model/tool loop (max 8 steps, tool results
-  truncated at 12k chars, every call audited) → **output classifier**
-  (`safety/outputCheck.ts`, fast model, strict JSON with `analysis` FIRST so
-  it reasons before judging — booleans-first flagged answers its own analysis
-  called safe) → on flag: one rewrite + re-check, else `SAFE_FALLBACK` +
+  truncated at 12k chars, every call audited) → **output guard**
+  (`safety/outputCheck.ts` runs TWO passes and either can flag: the
+  deterministic linter `safety/lint.ts`, then the fast-model classifier —
+  strict JSON with `analysis` FIRST so it reasons before judging;
+  booleans-first flagged answers its own analysis called safe) → on flag:
+  one rewrite + re-check, else `SAFE_FALLBACK` +
   `care_team_handoff` card → text emitted in sentence chunks (never streamed
   raw before the check) → ASSISTANT row with cards + meta (model, usage,
   safety) → async summary fold once ≥8 rows sit outside the verbatim window.
@@ -129,9 +133,183 @@ Slice 2 (done 2026-08-24) — tools, loop, safety, chat endpoint:
   threads heal without a data fix.
 - Scripts: `scripts/agent-chat-smoke.ts [email] [--only N] [--keep]` (live 5-
   scenario run: plan comparison, statin/vit-D pressure, chest-pain red flag,
-  remember, memory-aware follow-up), `scripts/agent-safety-check.ts` (7 canned
-  answers the classifier must pass/flag — 7/7 as of 2026-08-24). Run both
-  after ANY prompt, tool or model change.
+  remember, memory-aware follow-up), `scripts/agent-safety-check.ts` (10 canned
+  answers the output guard must pass/flag; 7/7 on the original set as of
+  2026-08-24, the 3 triage/prognosis cases added 2026-09-09 are unrun — no key
+  in that session). Run both after ANY prompt, tool or model change.
+
+### Check-in / encounter domain (2026-09-09) — Phase 1 core
+
+`src/services/encounter/domain/` replaces the symptoms checker deleted in the
+app's 23bff38. It is the pure half of the feature: no LLM, no Prisma, no I/O.
+The model's job is to fill slots and phrase questions; every DECISION — next
+question, red flag, completion, handout text — is made here so it can be
+unit-tested and read by a human. Rulings 2026-09-09: **US only** at launch,
+**stepped flow** with Ollie chat as the entry point only.
+
+- `types.ts` — `Slot` / `Protocol` / `EncounterState` / `TrippedFlag`. Reuses
+  `PanelSource` from labs_journey so protocols and flags cite their basis the
+  way panel items already do.
+- `protocols.ts` — 12 complaint protocols on the OLDCARTS frame as DATA
+  (11 named + `general_unwell` fallback). Option values are slugged from their
+  LABELS via the exported `slug()`, so redflags.ts can reference a rule by the
+  words the user saw. Bump `version` when slots change — an old encounter's
+  answers meant something different.
+- `redflags.ts` — 16 rules, `EMERGENCY` / `SEEK_CARE_NOW`, each with a
+  criterion and a source. Two keys: a raw-text prescan REUSING the agent's
+  `detectRedFlag`, plus structured rules over answered slots. Additive and
+  sticky — `evaluate()` never drops a flag, so an answer can never clear one.
+  Tuned for recall.
+  ⚠ **The criteria are drafted, not quoted.** Each must be verified against
+  the body named in its `source` and reworded to match before launch — the
+  compliance argument rests on them being the guideline's criteria, not ours.
+- `stateMachine.ts` — safety slot ALWAYS first, then required, then optional,
+  then RECAP. `MAX_TURNS` 15. Asked-and-skipped is settled (no badgering).
+  `shouldHalt()` ends the interview on self-harm: crisis route, not question 4
+  of 7.
+- `summary.ts` — recap lines, clinician handout (complaint verbatim + history
+  + matched criteria + a provenance line saying it is a self-report captured by
+  software), booking reason. Deliberately NOT model-generated: a summary is
+  exactly where a fluent model adds "which suggests…".
+- `tests/encounter/domain.test.ts` — 21 cases. Two worth keeping: one asserts
+  every red-flag rule points at a slot and option that still exists (reword a
+  label without the rule and it silently stops firing — the worst failure this
+  feature has), and one runs every prompt, criterion and handout through Phase
+  0's `lintOutput` so Phase 1 cannot emit what Phase 0 forbids.
+
+### Check-in API and LLM layer (2026-09-09)
+
+- Models: `Encounter` (slots + askedKeys + redFlags stored as Json/String[] on
+  the row, the way LabJourney stores `panel`), `EncounterEvent`
+  (**append-only** audit: seq derived from the row count, never updated) and
+  `EncounterCheckIn`. DEVIATION from the design doc, which specified a separate
+  `EncounterSlot` table: the Json column plus the event log already carry the
+  values and their timeline, and it is one write per turn instead of two.
+- `llm/classify.ts` — free text → ONE key from `COMPLAINT_KEYS` (closed enum in
+  the schema). An unknown key or a thrown call becomes `general_unwell`, which
+  asks the safe questions too, so a classifier outage never blocks a check-in.
+  Also returns `askingForDiagnosis` → fixed `DIAGNOSIS_DECLINE` copy.
+- `llm/slotFill.ts` — free text → a value for ONE named slot. The model can
+  only pick options that exist, and `sanitize()` re-checks its answer against
+  the slot anyway (unknown option dropped, scale clamped and rounded, multi
+  filtered). Unplaceable → null, and a required question simply stays up:
+  guessing puts words in the patient's mouth.
+- `domain/escalation.ts` — ESCALATE scripts assembled from the region table in
+  `safety/policy.ts`. Self-harm gets the crisis script with no criteria list;
+  otherwise the matched criteria are shown with their source and NO verdict
+  ("I can't tell you how serious this is" is the body copy).
+- Routes (`/api/encounters`, patient-scoped, identity from the token):
+  `POST /` start · `GET /` list · `GET /:id` · `POST /:id/answer` ·
+  `GET /:id/handout` · `POST /:id/close` · `POST /:id/checkin` ·
+  `GET /:id/checkins`. Wired in `server.ts`.
+- `tests/encounter/guards.test.ts` — 12 more cases on the sanitiser and the
+  escalation copy, including linting every escalation string through Phase 0.
+  33 encounter tests in total.
+
+### The Ollie handoff (2026-09-10)
+
+`agent/tools/checkin.tools.ts` — symptoms LEAVE the chat instead of being
+answered in it. This is the highest-value half of the feature: the output
+guard can only stop a wrong answer, while the handoff produces the right one.
+
+- `start_encounter` (risk `read`) deliberately CREATES NOTHING. It emits a
+  `checkin_offer` card carrying the user's own words; tapping it opens
+  `/checkin?complaint=…` and the encounter is created there. The tap is the
+  opt-in, so a confirm-gated proposal would ask twice, and an ignored offer
+  leaves no half-finished encounter. (Deviates from the design doc §7.3, which
+  sketched a proposal — proposals here are for writes to the patient's record;
+  this is navigation.)
+- `get_encounters` — past/open check-ins with matched criteria and follow-ups,
+  for "how's that headache?" and for an accurate booking reason.
+- `prompt/system.ts` gained a "Symptoms leave the chat" section: call the tool,
+  then ONE line, no causes, no history questions of its own, no softening. It
+  explicitly does NOT apply to a condition already on record, to plan questions
+  ("should I train today?"), or to food/sleep/training coaching — otherwise
+  every conversation turns into a form. The IBS gray-zone example was rewritten
+  to teach the new behaviour (it taught the old one).
+- The red-flag input gate still runs FIRST: an emergency message bypasses the
+  model entirely, so `start_encounter` never sees it. Correct precedence.
+- `tests/agent/scenarios.ts` — `no_triage` now expects the tool and the card;
+  new `symptom_handoff` (a symptom must hand off and must not name causes) and
+  `symptom_handoff_not_for_coaching` (soreness + "should I train?" must NOT
+  hand off). 29 scenarios, 12 safety. NOT RUN — needs an API key.
+
+### Phase 2 — the follow-up loop and own-data context (2026-09-10)
+
+`domain/followUp.ts` (pure): `FOLLOW_UP_DAYS` [2, 5, 10]; `followUpFor()`
+returns `{day, due, trajectory, persistence}`. Due = a scheduled day has passed
+with nothing recorded on or after it. `persistenceNudge()` needs BOTH
+`PERSISTENCE_DAYS` (5) elapsed AND `PERSISTENCE_REPORTS` (2) consecutive
+non-improving reports, so one bad day never fires it and an improving episode
+never does.
+
+The compliance line here is finer than it looks. Raising concern because
+something dragged on is allowed (escalation is one-way). What is forbidden is
+the REASON: `trajectory` counts what the patient reported and names the latest
+("worse once, no different twice"), and `persistence` is that plus a ROUTE.
+Neither says what the pattern means, whether it is unusual, or how long
+anything "should" take. The subtle trap is the friendly direction — a BETTER
+report must NOT get "sounds like it's clearing up", which is PROGNOSE and
+REASSURE in a nice jumper. It gets a plain acknowledgement.
+
+`domain/context.ts` — OBSERVE_OWN_DATA for the handout. **It never filters by
+the complaint.** Picking the labs that "relate to" chest pain is the
+interpretive step; it implies a connection, which is INTERPRET_AS_DIAGNOSIS by
+LAYOUT rather than by sentence. So it shows everything flagged plus what is on
+record, capped at 8 labs, and the block literally opens with "Listed as
+background, not because they are connected to what the patient described."
+Values carry units, the lab's own range and the collection date. Fed from
+`buildPatientSnapshot` (reused, not re-queried) into `handout()`.
+
+`GET /api/encounters/open` — open episodes whose follow-up is due or which have
+persisted; the app's dashboard row reads it. **Registered BEFORE
+`/:encounterId`**, or "open" is parsed as an id. `get`/`list` now include
+check-ins so the view carries `followUp` (null mid-interview — there is nothing
+to follow up on until the history is done).
+
+`tests/encounter/followup.test.ts` — 19 cases; 52 encounter tests in total.
+The two that matter most assert the traps: an improving episode is never
+nudged toward care, and every trajectory/persistence/own-data string lints
+clean through the Phase 0 guard.
+
+Not built yet: an Ollie tool for recording a follow-up by voice (the dashboard
+row and the recap screen both do it by tap).
+
+### Output guard, second key (2026-09-09)
+
+`safety/policy.ts` is the boundary AS DATA — the six forbidden acts
+(DIAGNOSE, TREAT_OR_DOSE, REASSURE, TRIAGE_VERDICT, PROGNOSE,
+CLAIM_ACCURACY) with the reason each is forbidden, the eight allowed speech
+acts, region → emergency-number table, and the `AGENT_SAFETY_LINT=report`
+rollout switch. The prompt, the classifier rubric and the linter are meant to
+agree with it; it is the thing to edit when the boundary moves.
+
+`safety/lint.ts` is a deterministic pass under the classifier. Rationale: the
+classifier is itself a model and fails OPEN on a bad judgement (the pipeline
+only fails closed when the call throws). Regexes cannot be argued with, cost
+nothing and run offline. It may only RAISE a concern, never clear one.
+
+False positives are the expensive failure here — a finding sends a good
+answer through a rewrite — so every rule needs a FRAME plus a SUBJECT (a
+diagnosis frame beside a condition name; a recommendation frame beside a drug
+or a dose), never a bare keyword. Three exemptions do the heavy lifting:
+refusals ("I can't recommend a statin" contains every word "take a statin"
+does — an exemption marker before the match skips the sentence), conditions
+already on the patient's record, and the DRUG/NUTRIENT split (naming food
+sources is allowed, so "add iron-rich foods" must not read as a
+prescription — nutrients need an explicit supplement form). Doses exclude
+grams (this app talks about grams of protein all day) and mg/dL (a lab unit).
+
+The classifier gained a `reassurance` boolean. Its rubric already forbade
+triaging severity but there was no field to report it in, so that half of the
+boundary could not actually be flagged.
+
+`tests/safety/lint.test.ts` — 31 cases, runs under `npm test` with NO API
+key, so a boundary regression is caught on every push instead of at the next
+manual eval. The CLEAN half of the corpus is the point: it holds the
+gray-zone examples from `prompt/system.ts` and every `expectOk:true` answer
+from `agent-safety-check.ts`. If a new rule flags one of those, the rule is
+wrong.
 Slice 3 (done 2026-08-24) — confirm-gated writes + generation:
 - `AgentProposal` table (PENDING/CONFIRMED/CANCELLED/EXPIRED/FAILED, 24 h
   TTL). A `risk: "write"` tool's `run()` only PREPARES `{title, summary,
