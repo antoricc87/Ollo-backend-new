@@ -11,6 +11,7 @@ import { getPreference, runProactiveFor, setPreference } from "../proactive/proa
 import { speechToText } from "../../openAI/model/openai.model";
 import { z } from "zod";
 import { WatchWorkoutSummary } from "../../workouts/domain/workout.schema";
+import encounterService from "../../encounter/model/encounter.model";
 
 const MAX_MESSAGE_CHARS = 4000;
 
@@ -78,7 +79,9 @@ class AgentHandler {
       });
       if (!thread) return response.status(404).json(Util.error({}, "Thread not found"));
       // `answering`: a turn is still running on this thread (its reply is not saved yet).
-      return response.status(200).json(Util.success({ ...thread, answering: liveTurns.isAnswering(id, threadId) }, "Thread"));
+      // `checkin`: the thread's check-in, so reopening a conversation restores check-in mode.
+      const checkin = await encounterService.threadView(id, threadId).catch(() => null);
+      return response.status(200).json(Util.success({ ...thread, answering: liveTurns.isAnswering(id, threadId), checkin }, "Thread"));
     } catch (error) {
       console.error("agent getThread", error);
       return response.status(400).json(Util.error({}, "Error fetching thread"));
@@ -204,7 +207,7 @@ class AgentHandler {
         if (r.error && !r.done) return response.status(502).json(Util.error({ threadId: r.threadId }, r.error));
         return response.status(200).json(
           Util.success(
-            { threadId: r.threadId, messageId: r.done!.messageId, text: r.done!.text, cards: r.done!.cards, safety: r.safety, usage: r.done!.usage, model: r.done!.model },
+            { threadId: r.threadId, messageId: r.done!.messageId, text: r.done!.text, cards: r.done!.cards, safety: r.safety, checkin: r.checkin, usage: r.done!.usage, model: r.done!.model },
             "Reply"
           )
         );

@@ -9,10 +9,12 @@ import { ownDataBlocks } from "../domain/context";
 import { followUpFor, FollowUp, CheckInRecord } from "../domain/followUp";
 import { buildPatientSnapshot } from "../../agent/context/snapshot";
 import { resolveProtocol } from "../domain/protocols";
-import { applyAnswer, markAsked, nextStep, open, shouldHalt } from "../domain/stateMachine";
+import { applyAnswer, historyComplete, markAsked, nextStep, open, shouldHalt } from "../domain/stateMachine";
 import { bookingReason, handout, recapLines } from "../domain/summary";
 import { EncounterState, emptyState, Protocol, Slot, SlotValue, TrippedFlag } from "../domain/types";
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
+import { checkinModeFor } from "../domain/mode";
+import { CHECKIN_DISCLAIMER } from "../domain/assessment";
 
 /**
  * Persistence and orchestration for the check-in.
@@ -110,6 +112,22 @@ const view = (
     // Only once the interview is finished — mid-interview there is nothing to follow up on yet.
     followUp: done && checkIns ? followUpFor(row.createdAt, checkIns) : null,
   };
+};
+
+/**
+ * A check-in as the app draws it inside the Ollie chat (Sep 16 2026): its
+ * state, how far the history has got, and the question being asked — with its
+ * options, so the answer can be tapped instead of typed.
+ */
+export type CheckinThreadView = {
+  id: string;
+  about: string;
+  /** active = interview in progress · assessed = ended with an assessment · halted = crisis stop · closed = ended by the user. */
+  state: "active" | "assessed" | "halted" | "closed";
+  progress: { covered: number; total: number };
+  historyComplete: boolean;
+  question: { slotKey: string; prompt: string; kind: string; options: { value: string; label: string }[] | null; range: [number, number] | null } | null;
+  disclaimer: string;
 };
 
 const patientContext = async (patientId: string) => {
@@ -365,6 +383,41 @@ class EncounterService {
     await prisma.encounter.update({ where: { id }, data: { phase: "ROUTE" } });
     await logEvent(id, "assessment", assessment as any);
     return true;
+  }
+
+  /** The check-in in this chat thread, for the app's check-in mode. Null when there has never been one. */
+  async threadView(patientId: string, threadId: string | null): Promise<CheckinThreadView | null> {
+    if (!threadId) return null;
+    const row = await prisma.encounter.findFirst({ where: { patientId, threadId }, orderBy: { createdAt: "desc" } });
+    if (!row) return null;
+    const state = toState(row);
+    const protocol = resolveProtocol(state.complaintKey);
+    const active = checkinModeFor(row).active;
+    const assessed = active
+      ? null
+      : await prisma.encounterEvent.findFirst({ where: { encounterId: row.id, kind: "assessment" }, select: { id: true } });
+
+    const answered = (key: string) => {
+      const v = state.slots[key];
+      if (v === undefined || v === null) return false;
+      if (Array.isArray(v)) return v.length > 0;
+      return typeof v !== "string" || v.trim().length > 0;
+    };
+    const required = protocol.slots.filter((s) => s.required);
+    const step = active ? nextStep(state, protocol) : null;
+
+    return {
+      id: row.id,
+      about: protocol.title,
+      state: row.status === "CLOSED" ? "closed" : active ? "active" : assessed ? "assessed" : "halted",
+      progress: { covered: required.filter((s) => answered(s.key) || state.askedKeys.indexOf(s.key) >= 0).length, total: required.length },
+      historyComplete: historyComplete(state, protocol),
+      question:
+        step && step.kind === "ask"
+          ? { slotKey: step.slot.key, prompt: step.slot.prompt, kind: step.slot.kind, options: step.slot.options ?? null, range: step.slot.range ?? null }
+          : null,
+      disclaimer: CHECKIN_DISCLAIMER,
+    };
   }
 }
 

@@ -48,6 +48,18 @@ const protocolPlan = (protocol: Protocol, state: { slots: Record<string, unknown
   };
 };
 
+/**
+ * What record/assess say when nothing is running in this thread — the person
+ * tapped End, or an earlier check-in finished, but the conversation still
+ * reads like an interview. Without a clear next move the model retried the
+ * same call until the loop ran out of steps ("I got a bit lost…", Sep 16 2026).
+ */
+const NO_CHECKIN = {
+  noCheckin: true,
+  note:
+    "There is no check-in running in this conversation (it was ended, or never started). Do NOT call record_checkin or assess_checkin again this turn. If they are still describing a symptom, call start_checkin ONCE with their own words (their earliest description of it), then carry on from what they have already told you — do not re-ask it. Otherwise just reply normally.",
+};
+
 const flagView = (flags: TrippedFlag[]) => flags.map((f) => ({ level: f.level, criterion: f.criterion, source: `${f.source.org}, ${f.source.year}` }));
 
 export const startCheckin = defineTool({
@@ -97,7 +109,7 @@ export const recordCheckin = defineTool({
   risk: "read",
   async run(ctx, input) {
     const active = await encounterService.activeForThread(ctx.patientId, ctx.threadId);
-    if (!active) return { result: { error: "No check-in is open in this conversation. Call start_checkin first with their own words." } };
+    if (!active) return { result: NO_CHECKIN };
 
     const before = active.state.redFlags.length;
     // `z.infer` leaves every field optional in this project (no strictNullChecks) — zod already validated it.
@@ -169,7 +181,7 @@ export const assessCheckin = defineTool({
   risk: "read",
   async run(ctx, input) {
     const active = await encounterService.activeForThread(ctx.patientId, ctx.threadId);
-    if (!active) return { result: { error: "No check-in is open in this conversation. Call start_checkin first with their own words." } };
+    if (!active) return { result: NO_CHECKIN };
 
     const fresh = await encounterService.stateFor(ctx.patientId, active.row.id);
     if (!fresh) return { result: { error: "That check-in could not be read back." } };

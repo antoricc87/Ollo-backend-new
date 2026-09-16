@@ -14,6 +14,7 @@ import { registry } from "./tools";
 import { Card, ToolContext } from "./tools/registry";
 import { makeSubjectResolver } from "./tools/subject";
 import { checkinModeFor, CheckinMode } from "../encounter/domain/mode";
+import encounterService, { CheckinThreadView } from "../encounter/model/encounter.model";
 
 /**
  * The agent loop, as an event stream. Two entry points share it:
@@ -35,6 +36,8 @@ export type AgentEvent =
   | { type: "proposal"; proposalId: string; toolName: string; title: string; summary: string; preview: unknown; expiresAt: string }
   | { type: "text"; delta: string }
   | { type: "safety"; verdict: { outcome: SafetyOutcome; flagged: string[] } | { outcome: "red_flag"; category: string } }
+  /** The thread's check-in as the app draws it. Sent every turn, after the tools that change it; null = none. */
+  | { type: "checkin"; checkin: CheckinThreadView | null }
   | { type: "done"; threadId: string; messageId: string; text: string; cards: Card[]; usage: Usage | null; model: string | null; steps: number }
   | { type: "error"; message: string };
 
@@ -378,6 +381,8 @@ async function* runLoop(p: {
       { role: "ASSISTANT", content: text, cards, meta: { model, usage, steps, safety: verdict, snapshotChars: system.length, proactive: p.proactive ?? null } },
     ]);
     void audit(patientId, "response", { threadId, messageId: row.id, payload: { model, usage, steps, safety: verdict.reasons, proactive: p.proactive ?? null } });
+    // After the tools, since they are what start, advance and end a check-in.
+    yield { type: "checkin", checkin: await encounterService.threadView(patientId, threadId).catch(() => null) };
     yield { type: "done", threadId, messageId: row.id, text, cards, usage, model, steps };
 
     if (window.unsummarized.length >= SUMMARIZE_AFTER_ROWS) void summarizeThread(llm, threadId, window.summary, window.unsummarized);
@@ -441,7 +446,8 @@ export async function collect(gen: AsyncGenerator<AgentEvent>) {
   const error = events.find((e): e is Extract<AgentEvent, { type: "error" }> => e.type === "error");
   const safety = events.find((e): e is Extract<AgentEvent, { type: "safety" }> => e.type === "safety");
   const threadId = events.find((e): e is Extract<AgentEvent, { type: "thread" }> => e.type === "thread")?.threadId ?? null;
-  return { threadId, done: done ?? null, error: error?.message ?? null, safety: safety?.verdict ?? null, events };
+  const checkin = events.find((e): e is Extract<AgentEvent, { type: "checkin" }> => e.type === "checkin")?.checkin ?? null;
+  return { threadId, done: done ?? null, error: error?.message ?? null, safety: safety?.verdict ?? null, checkin, events };
 }
 
 export const runTurnCollect = (input: TurnInput) => collect(runTurn(input));
