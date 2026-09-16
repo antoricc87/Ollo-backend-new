@@ -224,6 +224,8 @@ async function* runLoop(p: {
   let model: string | null = null;
   let steps = 0;
   let draft = "";
+  /** Fixed copy a tool pinned for this turn (the crisis script). First one wins. */
+  let pinned: string | null = null;
   let proposedThisTurn = false;
   // A generate tool (workout, meal plan, recipe…) renders a card of its own, so a
   // reply that talks about "the card" is honest — the claim guard must not fire.
@@ -307,6 +309,7 @@ async function* runLoop(p: {
         await threadStore.append(threadId, [{ role: "TOOL", toolCallId: call.id, toolName: call.name, content, meta: { ok: out.ok, error: out.error ?? null } }]);
         messages.push({ role: "tool", toolCallId: call.id, name: call.name, content });
         yield { type: "tool_result", id: call.id, name: call.name, ok: out.ok, ...(out.error ? { error: out.error } : {}) };
+        if (out.ok && out.pinnedAnswer && !pinned) pinned = String(out.pinnedAnswer);
         for (const card of out.cards ?? []) {
           cards.push(card);
           yield { type: "card", card };
@@ -316,6 +319,8 @@ async function* runLoop(p: {
     if (!draft.trim()) {
       draft = steps >= MAX_STEPS ? "I got a bit lost pulling that together — can you ask me in a smaller piece?" : "I didn't manage to put an answer together. Could you rephrase?";
     }
+    // Fixed copy wins over whatever the model wrote — see ToolOutcome.pinnedAnswer.
+    if (pinned) draft = pinned;
 
     if (p.signal?.aborted) return;
 
@@ -325,7 +330,9 @@ async function* runLoop(p: {
     let verdict: SafetyVerdict;
     let text = draft;
     try {
-      verdict = await checkOutput(llm, p.safetyContext, draft, onRecord, { checkin });
+      verdict = pinned
+        ? { ok: true, diagnosis: false, medicationAdvice: false, reassurance: false, missedRedFlag: false, lexical: [], reasons: "fixed escalation copy — written by the domain layer, not the model" }
+        : await checkOutput(llm, p.safetyContext, draft, onRecord, { checkin });
       if (verdict.ok) verdict.outcome = "pass";
       else {
         void audit(patientId, "safety_flag", { threadId, payload: { stage: "draft", verdict, draft: draft.slice(0, 2000) } });

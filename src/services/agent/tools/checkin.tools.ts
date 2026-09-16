@@ -4,7 +4,7 @@ import { defineTool } from "./registry";
 import encounterService from "../../encounter/model/encounter.model";
 import { AssessmentRejected, buildAssessment, NEXT_STEP_KINDS } from "../../encounter/domain/assessment";
 import { resolveProtocol } from "../../encounter/domain/protocols";
-import { historyComplete, nextStep } from "../../encounter/domain/stateMachine";
+import { historyComplete, nextStep, shouldHalt } from "../../encounter/domain/stateMachine";
 import { escalationFor } from "../../encounter/domain/escalation";
 import { Protocol, SlotValue, TrippedFlag } from "../../encounter/domain/types";
 
@@ -108,6 +108,22 @@ export const recordCheckin = defineTool({
 
     const newFlags = after.state.redFlags.slice(before);
     const escalation = escalationFor(after.state.redFlags, after.region);
+
+    /**
+     * Self-harm ends the interview, and the reply is NOT the model's to write.
+     * Left to it, it reached for authority it did not have ("the NHS says…")
+     * — the crisis script cites nobody on purpose. So pin the copy.
+     */
+    if (shouldHalt(after.state.redFlags) && escalation) {
+      return {
+        result: {
+          halted: true,
+          note: "The interview is over and your reply for this turn is fixed — the crisis script was sent as written. Do not add to it, do not ask another question.",
+        },
+        cards: [{ type: "checkin_escalation", title: escalation.title, data: escalation }],
+        pinnedAnswer: [escalation.body, escalation.action].filter(Boolean).join("\n\n"),
+      };
+    }
 
     return {
       result: {

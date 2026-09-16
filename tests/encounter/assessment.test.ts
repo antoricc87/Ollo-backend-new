@@ -1,5 +1,6 @@
 import { AssessmentRejected, buildAssessment, CHECKIN_DISCLAIMER, MAX_POSSIBILITIES, warningSignsFor } from "../../src/services/encounter/domain/assessment";
 import { byKey, resolveProtocol } from "../../src/services/encounter/domain/protocols";
+import { escalationFor } from "../../src/services/encounter/domain/escalation";
 import { open } from "../../src/services/encounter/domain/stateMachine";
 import { emptyState, EncounterState, Protocol, TrippedFlag } from "../../src/services/encounter/domain/types";
 import { lintOutput } from "../../src/services/agent/safety/lint";
@@ -91,6 +92,36 @@ describe("buildAssessment — escalation is one-way", () => {
   it("with nothing tripped it takes the model's route, defaulting to a clinician", () => {
     expect(buildAssessment({ possibilities: twoGood }, state(), headache).nextStep.kind).toBe("BOOK_OLLO_DOCTOR");
     expect(buildAssessment({ possibilities: twoGood, nextStep: { kind: "OWN_DOCTOR", why: "You already have someone who knows this history." } }, state(), headache).nextStep.kind).toBe("OWN_DOCTOR");
+  });
+});
+
+/**
+ * The crisis script is the one reply the model may not write (Sep 16 2026: it
+ * told someone disclosing self-harm that "the NHS says…" — the script names no
+ * body, and putting words in a guideline's mouth about self-harm is its own
+ * kind of harm). record_checkin pins this copy; these cases pin the copy itself.
+ */
+describe("the crisis script", () => {
+  const selfHarm = (): EncounterState => ({
+    ...state(),
+    redFlags: [{ ruleId: "mood.self_harm", level: "EMERGENCY", criterion: "Thoughts of ending your life are a reason to talk to someone now.", source: { org: "internal", year: 2026 } } as TrippedFlag],
+  });
+
+  it("cites nobody and lists no criteria", () => {
+    const e = escalationFor(selfHarm().redFlags, "US");
+    expect(e).toBeTruthy();
+    expect(e!.criteria).toEqual([]);
+    expect(`${e!.title} ${e!.body} ${e!.action}`).not.toMatch(/\b(NHS|NICE|CDC|WHO|USPSTF|guideline|published)\b/i);
+  });
+
+  it("gives a person to call", () => {
+    const e = escalationFor(selfHarm().redFlags, "US")!;
+    expect(`${e.body} ${e.action}`).toMatch(/988|emergency number/);
+  });
+
+  it("lints clean, like every other code-written string", () => {
+    const e = escalationFor(selfHarm().redFlags, "US")!;
+    for (const line of [e.title, e.body, e.action]) expect({ line, acts: lintOutput(line) }).toEqual({ line, acts: [] });
   });
 });
 

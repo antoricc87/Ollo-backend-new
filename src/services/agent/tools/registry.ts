@@ -32,6 +32,15 @@ export type ToolOutcome = {
   result: unknown;
   /** Typed UI cards to render alongside the answer. */
   cards?: Card[];
+  /**
+   * Fixed copy that REPLACES the model's reply for this turn, and skips the
+   * output classifier — there is nothing to judge in a string the code wrote.
+   * For the one case where the words are not the model's to choose: the crisis
+   * script when someone discloses self-harm mid-check-in (Sep 16 2026, after a
+   * run where the model attributed the advice to the NHS, which publishes no
+   * such criterion here). Use it only for copy assembled in the domain layer.
+   */
+  pinnedAnswer?: string;
 };
 
 /** What a write tool prepares for the user to confirm. */
