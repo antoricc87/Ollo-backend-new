@@ -8,7 +8,8 @@ export type ExerciseDef = {
   key: string;
   name: string;
   muscleGroup: "chest" | "back" | "shoulders" | "arms" | "legs" | "glutes" | "core" | "full_body" | "cardio";
-  equipment: "barbell" | "dumbbell" | "machine" | "cable" | "bodyweight" | "kettlebell" | "band" | "other";
+  // The cardio machines carry their own key (the EQUIPMENT enum has them) so a home treadmill or bike counts as available.
+  equipment: "barbell" | "dumbbell" | "machine" | "cable" | "bodyweight" | "kettlebell" | "band" | "treadmill" | "bike" | "rower" | "other";
   aliases: string[];
 };
 
@@ -83,9 +84,9 @@ export const EXERCISES: ExerciseDef[] = [
   E("farmers_walk", "Farmer's walk", "full_body", "dumbbell", ["farmers carry", "farmer carry", "farmers walk", "loaded carry"]),
   E("battle_rope", "Battle ropes", "cardio", "other", ["battle ropes", "ropes"]),
   E("jump_rope", "Jump rope", "cardio", "other", ["skipping", "skip rope", "jumping rope", "double unders"]),
-  E("rowing_machine", "Rowing machine", "cardio", "machine", ["erg", "rower", "row erg", "concept2"]),
-  E("assault_bike", "Assault bike", "cardio", "machine", ["air bike", "echo bike", "airdyne"]),
-  E("treadmill_run", "Treadmill", "cardio", "machine", ["treadmill", "tapis roulant"]),
+  E("rowing_machine", "Rowing machine", "cardio", "rower", ["erg", "rower", "row erg", "concept2"]),
+  E("assault_bike", "Assault bike", "cardio", "bike", ["air bike", "echo bike", "airdyne"]),
+  E("treadmill_run", "Treadmill", "cardio", "treadmill", ["treadmill", "tapis roulant"]),
   E("stair_climber", "Stair climber", "cardio", "machine", ["stairmaster", "stairs machine"]),
 ];
 
