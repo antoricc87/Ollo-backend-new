@@ -60,6 +60,13 @@ const NO_CHECKIN = {
     "There is no check-in running in this conversation (it was ended, or never started). Do NOT call record_checkin or assess_checkin again this turn. If they are still describing a symptom, call start_checkin ONCE with their own words (their earliest description of it), then carry on from what they have already told you — do not re-ask it. Otherwise just reply normally.",
 };
 
+/** A check-in exists but End paused it (End = pause, ruling 2026-09-16). */
+const PAUSED = {
+  paused: true,
+  // Worded so it can't be paraphrased at the user: the first version said "do not record or assess" and the reply said "I can't record or assess more here".
+  note: "Nothing from this message was kept: they tapped End earlier, so the check-in is on hold. Say none of that to them — no pausing, saving, recording or assessing. Reply only with the offer: pick it back up where it stopped so you can tell them what it could be, or send what they've told you to their care team. If they say yes to picking it up, call resume_checkin.",
+};
+
 const flagView = (flags: TrippedFlag[]) => flags.map((f) => ({ level: f.level, criterion: f.criterion, source: `${f.source.org}, ${f.source.year}` }));
 
 export const startCheckin = defineTool({
@@ -109,7 +116,7 @@ export const recordCheckin = defineTool({
   risk: "read",
   async run(ctx, input) {
     const active = await encounterService.activeForThread(ctx.patientId, ctx.threadId);
-    if (!active) return { result: NO_CHECKIN };
+    if (!active) return { result: (await encounterService.pausedForThread(ctx.patientId, ctx.threadId)) ? PAUSED : NO_CHECKIN };
 
     const before = active.state.redFlags.length;
     // `z.infer` leaves every field optional in this project (no strictNullChecks) — zod already validated it.
@@ -181,7 +188,7 @@ export const assessCheckin = defineTool({
   risk: "read",
   async run(ctx, input) {
     const active = await encounterService.activeForThread(ctx.patientId, ctx.threadId);
-    if (!active) return { result: NO_CHECKIN };
+    if (!active) return { result: (await encounterService.pausedForThread(ctx.patientId, ctx.threadId)) ? PAUSED : NO_CHECKIN };
 
     const fresh = await encounterService.stateFor(ctx.patientId, active.row.id);
     if (!fresh) return { result: { error: "That check-in could not be read back." } };
@@ -204,6 +211,32 @@ export const assessCheckin = defineTool({
       if (e instanceof AssessmentRejected) return { result: { rejected: true, fix: e.message } };
       throw e;
     }
+  },
+});
+
+export const resumeCheckin = defineTool({
+  name: "resume_checkin",
+  description:
+    "Pick a PAUSED check-in in this conversation back up where it stopped — their answers are kept. Call it only when they say yes to continuing, or ask to. Returns what is covered and what to ask next.",
+  schema: z.object({}),
+  risk: "read",
+  async run(ctx) {
+    const paused = await encounterService.pausedForThread(ctx.patientId, ctx.threadId);
+    const resumed = paused ? await encounterService.resume(ctx.patientId, paused.row.id) : null;
+    if (!resumed) return { result: NO_CHECKIN };
+    const plan = protocolPlan(resumed.protocol, resumed.state);
+    return {
+      result: {
+        resumed: true,
+        about: resumed.protocol.title,
+        ...plan,
+        // Seen Sep 16 2026: answers given while paused were never recorded, so the
+        // red-flag rules never saw them and the handout lacked them — while the
+        // model skipped the questions because it remembered the words.
+        note:
+          "Picked back up. FIRST call record_checkin with every answer they already gave in this conversation that `covers` does not show as answered — especially anything said while it was paused (e.g. 'none of those' for the warning signs, when it started, how it behaves, how bad). Then, if historyComplete, call assess_checkin; otherwise ask only what is still uncovered. Never re-ask something they already told you.",
+      },
+    };
   },
 });
 

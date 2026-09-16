@@ -97,6 +97,9 @@ const RULES: Rule[] = [
   { id: "re.worry", act: "REASSURE", frame: /\b(nothing to worry about|no need to worry|don'?t worry|not worth worrying|no cause for concern|nothing alarming|nothing serious)\b/i },
   { id: "re.probably", act: "REASSURE", frame: /\b(probably (just|nothing|fine)|most likely (just|nothing|fine)|it'?s fine|you'?re fine|perfectly (normal|fine)|totally (normal|fine)|not serious|harmless)\b/i },
 
+  /* Same transcript: "Aches like this are often related to posture… or sometimes just everyday strain." A cause, minimised. */
+  { id: "re.just", act: "REASSURE", frame: /\b(just|only|simply) (everyday |normal |general |a bit of |some |muscle |muscular )?(strain|wear and tear|a (pulled|strained|tight) muscle)\b/i },
+
   /* TRIAGE_VERDICT — assigning a level of care. */
   { id: "tr.wait", act: "TRIAGE_VERDICT", frame: /\b(can wait|no rush|not urgent|no need to (see|call|go)|you don'?t need (to see|a doctor|urgent|medical)|not an emergency|doesn'?t (need|warrant) (a doctor|urgent|medical|emergency))\b/i },
   { id: "tr.window", act: "TRIAGE_VERDICT", frame: /\b(within|in) (the next )?(24|48|72) hours\b/i, near: /\b(see|call|book|visit|doctor|clinician|appointment)\b/i },
@@ -106,6 +109,8 @@ const RULES: Rule[] = [
   /* PROGNOSE — the course of an untriaged complaint. */
   { id: "pg.resolve", act: "PROGNOSE", frame: /\b(should|will|usually|typically|normally) (clear up|resolve|go away|settle|pass|improve on its own|sort itself)\b/i },
   { id: "pg.duration", act: "PROGNOSE", frame: /\b(lasts?|goes away|clears up) (in|within|after) (a few|\d+) (days?|weeks?)\b/i },
+  /* Sep 16 2026, from the End-then-keep-talking transcript: "skip deep squats… until this settles". */
+  { id: "pg.until", act: "PROGNOSE", frame: /\buntil (it|this|the pain|the ache|things?) (settles?|clears? up|goes? away|passes|calms? down|eases? off)\b/i },
   { id: "pg.settle", act: "PROGNOSE", frame: /\b(settles?|clears? up|goes? away|passes) (over|within|in) (the next |a |the )?(few |couple of )?(days?|weeks?)\b/i },
 
   /* CLAIM_ACCURACY — performance claims. */

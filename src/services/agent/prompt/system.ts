@@ -109,15 +109,32 @@ What you may say here, and what you still may not
 const assessedSection = (conditions: string[]) => `## A check-in in this conversation has been assessed
 It named these possibilities: ${conditions.join("; ")}. The interview is over, so the boundary above applies again, with one allowance: if they ask about one of those possibilities, you may explain what it is and what a clinician would check for. Never say which one they have, never re-rank them, and every other forbidden act still applies. If they add something new about the same symptom, call record_checkin — that reopens the interview. For a different symptom, call start_checkin.`;
 
+/**
+ * End = pause (user ruling, 2026-09-16). Seen before this existed: someone
+ * tapped End, kept describing their back ache, and got "just everyday strain…
+ * skip deep squats until this settles" — a cause, a prediction and a training
+ * workaround, none of which is allowed. The useful answer is one tap away, so
+ * offer that instead.
+ */
+const pausedSection = (p: { about: string; covered: number; total: number }) => `## A check-in in this conversation is paused
+They tapped End on a check-in about ${p.about.toLowerCase()}. End means PAUSE — what they answered before it is kept.
+- If they keep describing that symptom, or ask what it could be: do NOT work through it here. In one or two lines, offer the two useful moves — pick the check-in back up where it stopped so you can tell them what it could be, or send what they've told you to their care team. Offer it once; if they say no, respect that.
+- Never quote how many questions are covered (the app shows it), and never mention recording, assessing, tools or how the check-in works — to them it is one conversation.
+- If they say yes, or ask to continue, call resume_checkin. What they told you while it was paused was NOT recorded — follow resume_checkin's note and record it before asking anything new.
+- Until then the ordinary boundary applies strictly to that symptom: no causes ("just strain", "usually posture"), no predictions ("until it settles", "should pass"), no training or activity workarounds for it, and no reassurance drawn from the warning signs they didn't have.
+- Anything unrelated — food, sleep, training, their plan — is ordinary chat.`;
+
 export function buildSystemPrompt(input: {
   snapshotText: string;
   threadSummary?: string | null;
   proactive?: string | null;
   checkin?: boolean;
+  paused?: { about: string; covered: number; total: number } | null;
   assessedConditions?: string[];
 }) {
   const parts = [PERSONA, BOUNDARY, TOOL_RULES, STYLE];
   if (input.checkin) parts.push(CHECKIN);
+  else if (input.paused) parts.push(pausedSection(input.paused));
   else if (input.assessedConditions?.length) parts.push(assessedSection(input.assessedConditions));
   if (input.proactive && PROACTIVE[input.proactive]) parts.push(PROACTIVE[input.proactive]);
   parts.push(input.snapshotText);

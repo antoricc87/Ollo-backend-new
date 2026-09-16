@@ -301,9 +301,18 @@ founder-level risk decision — not a compliance claim.)
   match (no comma / but / so / though between). The classifier's
   `reassurance` rubric names the pattern explicitly. Cases in
   `tests/safety/lint.test.ts`, plus same-clause refusals that must stay clean.
-- Open (needs a product call): after End, if the person keeps describing the
-  symptom, Ollie still gives lifestyle advice about it ("skip deep squats until
-  this settles") — against the TOOL_RULES pain rule, and not caught.
+- **End = PAUSE (user ruling, Sep 16 2026).** Seen first: someone tapped End,
+  kept describing their back ache, and got "just everyday strain… skip deep
+  squats until this settles" — a cause, a prediction and a training
+  workaround. Now `POST /api/encounters/:id/pause` → status ABANDONED (the
+  paused state; answers kept, event `pause`). `domain/mode.ts` gains `paused`;
+  `runLoop` injects `pausedSection` (don't work through it here — offer once to
+  pick it back up or send it to the care team; strict boundary for that
+  symptom meanwhile). `resume_checkin` reopens it where it stopped (event
+  `resume`) and says to assess straight away if the history is covered;
+  record/assess on a paused check-in return `PAUSED` instead of `NO_CHECKIN`.
+  Guard: `re.just` ("just everyday strain") and `pg.until` ("until this
+  settles"), with the transcript sentences as test cases.
 - Crisis copy is pinned, not prompted: `ToolOutcome.pinnedAnswer` replaces the
   turn's reply and skips the classifier. `record_checkin` pins the crisis
   script when `shouldHalt` trips (the model had written "the NHS says…" — the

@@ -210,11 +210,14 @@ async function* runLoop(p: {
    */
   const mode = await checkinModeForThread(patientId, threadId);
   const checkin = mode.active;
+  // A paused check-in changes what Ollie does with that symptom (End = pause, ruling 2026-09-16).
+  const pausedView = mode.paused ? await encounterService.threadView(patientId, threadId).catch(() => null) : null;
   const system = buildSystemPrompt({
     snapshotText: renderSnapshot(snapshot),
     threadSummary: window.summary,
     proactive: p.proactive ?? null,
     checkin,
+    paused: pausedView ? { about: pausedView.about, covered: pausedView.progress.covered, total: pausedView.progress.total } : null,
     assessedConditions: mode.assessedConditions,
   });
   const messages: ChatMessage[] = [{ role: "system", content: system }, ...toChatMessages(window.messages)];

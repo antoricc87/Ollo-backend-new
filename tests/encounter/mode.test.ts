@@ -12,7 +12,7 @@ const assessment = { possibilities: [{ condition: "Tension-type headache" }, { c
 
 describe("checkinModeFor", () => {
   it("is off with no check-in", () => {
-    expect(checkinModeFor(null)).toEqual({ active: false, assessedConditions: [] });
+    expect(checkinModeFor(null)).toEqual({ active: false, paused: false, assessedConditions: [] });
   });
 
   it("is active while the history is being taken", () => {
@@ -31,7 +31,14 @@ describe("checkinModeFor", () => {
   });
 
   it("switches off after a crisis halt, with nothing to explain", () => {
-    expect(checkinModeFor({ status: "OPEN", phase: "ROUTE" }, null)).toEqual({ active: false, assessedConditions: [] });
+    expect(checkinModeFor({ status: "OPEN", phase: "ROUTE" }, null)).toEqual({ active: false, paused: false, assessedConditions: [] });
+  });
+
+  /* Ruling 2026-09-16: End = pause. Not active (no widened guard), but the thread knows it can be picked back up. */
+  it("a check-in ended with End is paused, not active", () => {
+    const mode = checkinModeFor({ status: "ABANDONED", phase: "HISTORY" });
+    expect(mode.active).toBe(false);
+    expect(mode.paused).toBe(true);
   });
 
   it("is off once closed", () => {

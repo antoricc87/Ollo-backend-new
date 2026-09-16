@@ -87,6 +87,19 @@ class EncounterHandler {
     }
   }
 
+  /** End tapped in the app: pauses the check-in (answers kept) rather than closing it. */
+  async pause(request: any, response: Response) {
+    const { id } = request.user;
+    try {
+      const result = await EncounterService.pause(id, request.params.encounterId);
+      if (!result) return response.status(404).json(Util.error({}, "Check-in not found"));
+      return response.status(200).json(Util.success({ id: result.id, status: result.status }, "Check-in paused"));
+    } catch (error) {
+      console.error("Error pausing check-in", error);
+      return response.status(400).json(Util.error({ error }, "Could not pause the check-in"));
+    }
+  }
+
   async close(request: any, response: Response) {
     const { id } = request.user;
     const { route, bookingId } = request.body ?? {};

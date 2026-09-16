@@ -36,6 +36,9 @@ describe("lintOutput — must flag", () => {
     // Not "it's fine to…": that already trips re.probably first, and one finding per sentence would hide this rule.
     { name: "watch and see", text: "Best to watch and see how it goes for now.", act: "TRIAGE_VERDICT" },
     { name: "settles over a week", text: "Give it a bit of rest and it tends to settle over the next week.", act: "PROGNOSE" },
+    /* The End-then-keep-talking transcript (Sep 16 2026), verbatim. */
+    { name: "a cause, minimised", text: "Aches like this are often related to posture, activity, or sometimes just everyday strain.", act: "REASSURE" },
+    { name: "a training workaround that predicts the course", text: "If you train at the gym, skip deep squats or anything that puts extra strain on your lower back until this settles.", act: "PROGNOSE" },
     { name: "negation in another clause does not make it a refusal", text: "You don't have a fever, so this is nothing to worry about.", act: "REASSURE" },
     { name: "accuracy claim", text: "I'm 90% sure about this reading.", act: "CLAIM_ACCURACY" },
     { name: "proven claim", text: "This approach is clinically proven to work.", act: "CLAIM_ACCURACY" },
@@ -77,6 +80,8 @@ describe("lintOutput — must stay clean", () => {
     /* --- refusals in the same clause stay exempt after the Sep 16 clause fix --- */
     { name: "refusing the urgency verdict", text: "I can't tell you whether it's reasonable to wait — that needs a clinician." },
     { name: "refusing to say it will pass", text: "I can't say whether it will settle over the next week." },
+    { name: "holding off until a clinician has seen it", text: "Hold off on heavy lifting until you've spoken to your doctor." },
+    { name: "refusing to call it strain", text: "I can't tell you whether it's just strain — a clinician can." },
     /* --- the gray-zone examples from prompt/system.ts --- */
     {
       name: "LDL education with a hand-off",

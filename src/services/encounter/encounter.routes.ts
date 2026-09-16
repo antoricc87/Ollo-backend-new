@@ -20,6 +20,7 @@ export default class Routes {
     this.app.post("/api/encounters/:encounterId/answer", verifyToken, encounterApi.answer);
     this.app.get("/api/encounters/:encounterId/handout", verifyToken, encounterApi.handout);
     this.app.post("/api/encounters/:encounterId/close", verifyToken, encounterApi.close);
+    this.app.post("/api/encounters/:encounterId/pause", verifyToken, encounterApi.pause);
     this.app.post("/api/encounters/:encounterId/checkin", verifyToken, encounterApi.checkIn);
     this.app.get("/api/encounters/:encounterId/checkins", verifyToken, encounterApi.history);
   }

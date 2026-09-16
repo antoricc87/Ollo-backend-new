@@ -28,6 +28,8 @@ const FINISHED = ["ROUTE", "CLOSED"];
 export type CheckinMode = {
   /** An interview is in progress in this thread. */
   active: boolean;
+  /** End was tapped: the check-in is paused, answers kept, and can be picked back up (ruling 2026-09-16). */
+  paused: boolean;
   /** Possibilities an earlier assessment in this thread named. Explainable, never assertable. Empty while active. */
   assessedConditions: string[];
 };
@@ -37,9 +39,11 @@ export const checkinModeFor = (
   lastAssessment: { possibilities?: { condition?: string | null }[] } | null = null
 ): CheckinMode => {
   const active = !!encounter && encounter.status === "OPEN" && FINISHED.indexOf(encounter.phase) < 0;
+  // ABANDONED is the paused state: End was tapped, answers kept.
+  const paused = !!encounter && encounter.status === "ABANDONED";
   const assessedConditions =
     !active && lastAssessment
       ? (lastAssessment.possibilities ?? []).map((p) => (p?.condition ?? "").trim()).filter(Boolean)
       : [];
-  return { active, assessedConditions };
+  return { active, paused, assessedConditions };
 };

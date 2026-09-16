@@ -122,8 +122,8 @@ const view = (
 export type CheckinThreadView = {
   id: string;
   about: string;
-  /** active = interview in progress · assessed = ended with an assessment · halted = crisis stop · closed = ended by the user. */
-  state: "active" | "assessed" | "halted" | "closed";
+  /** active = interview in progress · paused = End tapped (answers kept) · assessed = ended with an assessment · halted = crisis stop · closed = finished elsewhere. */
+  state: "active" | "paused" | "assessed" | "halted" | "closed";
   progress: { covered: number; total: number };
   historyComplete: boolean;
   question: { slotKey: string; prompt: string; kind: string; options: { value: string; label: string }[] | null; range: [number, number] | null } | null;
@@ -385,6 +385,42 @@ class EncounterService {
     return true;
   }
 
+  /**
+   * End tapped. Ruling 2026-09-16: End means PAUSE, not close — someone who
+   * ends a check-in and keeps describing the symptom should be one tap from
+   * the answer, not locked out of it. ABANDONED is the paused state: answers
+   * stay on the row, `resume` reopens it where it stopped.
+   */
+  async pause(patientId: string, id: string) {
+    const row = await prisma.encounter.findFirst({ where: { id, patientId } });
+    if (!row) return null;
+    if (row.status !== "OPEN") return row;
+    const updated = await prisma.encounter.update({ where: { id }, data: { status: "ABANDONED" } });
+    await logEvent(id, "pause");
+    return updated;
+  }
+
+  /** The paused check-in in this thread, if the latest one is paused. */
+  async pausedForThread(patientId: string, threadId: string | null) {
+    if (!threadId) return null;
+    const row = await prisma.encounter.findFirst({ where: { patientId, threadId }, orderBy: { createdAt: "desc" } });
+    if (!row || row.status !== "ABANDONED") return null;
+    const state = toState(row);
+    return { row, state, protocol: resolveProtocol(state.complaintKey) };
+  }
+
+  /** Picks a paused check-in back up where it stopped. Nothing already answered is lost. */
+  async resume(patientId: string, id: string) {
+    const row = await prisma.encounter.findFirst({ where: { id, patientId } });
+    if (!row || row.status !== "ABANDONED") return null;
+    const state = toState(row);
+    const protocol = resolveProtocol(state.complaintKey);
+    const phase = nextStep(state, protocol).phase;
+    await prisma.encounter.update({ where: { id }, data: { status: "OPEN", phase } });
+    await logEvent(id, "resume");
+    return { state: { ...state, phase }, protocol };
+  }
+
   /** The check-in in this chat thread, for the app's check-in mode. Null when there has never been one. */
   async threadView(patientId: string, threadId: string | null): Promise<CheckinThreadView | null> {
     if (!threadId) return null;
@@ -409,7 +445,7 @@ class EncounterService {
     return {
       id: row.id,
       about: protocol.title,
-      state: row.status === "CLOSED" ? "closed" : active ? "active" : assessed ? "assessed" : "halted",
+      state: row.status === "CLOSED" ? "closed" : row.status === "ABANDONED" ? "paused" : active ? "active" : assessed ? "assessed" : "halted",
       progress: { covered: required.filter((s) => answered(s.key) || state.askedKeys.indexOf(s.key) >= 0).length, total: required.length },
       historyComplete: historyComplete(state, protocol),
       question:
