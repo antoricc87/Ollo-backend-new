@@ -198,7 +198,16 @@ async function* runLoop(p: {
   }
   const tz = safeTz(snapshot.timeZone);
   const window = await threadStore.contextWindow(threadId);
-  const system = buildSystemPrompt({ snapshotText: renderSnapshot(snapshot), threadSummary: window.summary, proactive: p.proactive ?? null });
+  /**
+   * A check-in open in THIS thread widens what may be said — candidate
+   * conditions, in the shape assess_checkin enforces — and nothing else moves
+   * (ruling 2026-09-16). One lookup serves both the prompt and the guard, so
+   * the two can never disagree about which mode the turn is in.
+   */
+  const checkin = !!(await prisma.encounter
+    .findFirst({ where: { patientId, threadId, status: "OPEN" }, select: { id: true } })
+    .catch(() => null));
+  const system = buildSystemPrompt({ snapshotText: renderSnapshot(snapshot), threadSummary: window.summary, proactive: p.proactive ?? null, checkin });
   const messages: ChatMessage[] = [{ role: "system", content: system }, ...toChatMessages(window.messages)];
 
   const ctx: ToolContext = {
@@ -316,12 +325,12 @@ async function* runLoop(p: {
     let verdict: SafetyVerdict;
     let text = draft;
     try {
-      verdict = await checkOutput(llm, p.safetyContext, draft, onRecord);
+      verdict = await checkOutput(llm, p.safetyContext, draft, onRecord, { checkin });
       if (verdict.ok) verdict.outcome = "pass";
       else {
         void audit(patientId, "safety_flag", { threadId, payload: { stage: "draft", verdict, draft: draft.slice(0, 2000) } });
         const rewritten = await rewriteUnsafe(llm, draft, verdict);
-        const second = await checkOutput(llm, p.safetyContext, rewritten, onRecord);
+        const second = await checkOutput(llm, p.safetyContext, rewritten, onRecord, { checkin });
         if (second.ok) {
           text = rewritten;
           verdict = { ...verdict, outcome: "rewritten" };

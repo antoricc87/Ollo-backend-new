@@ -126,7 +126,7 @@ const patientContext = async (patientId: string) => {
 
 class EncounterService {
   /** Opens a check-in from the patient's own words. The text prescan runs before any question. */
-  async start(patientId: string, complaintText: string) {
+  async start(patientId: string, complaintText: string, opts: { threadId?: string | null } = {}) {
     const ctx = await patientContext(patientId);
     const { complaintKey, askingForDiagnosis } = await classify(getLLM(), complaintText);
     const protocol = resolveProtocol(complaintKey);
@@ -145,6 +145,9 @@ class EncounterService {
         turns: 0,
         consentVersion: CONSENT_VERSION,
         region: ctx.region,
+        // Set when the check-in runs as a conversation, so the agent loop can
+        // find it again from the thread alone (Sep 16 2026).
+        threadId: opts.threadId ?? null,
       },
     });
 
@@ -309,6 +312,59 @@ class EncounterService {
   async history(patientId: string, id: string) {
     const row = await prisma.encounter.findFirst({ where: { id, patientId }, include: { checkIns: { orderBy: { createdAt: "asc" } } } });
     return row ? row.checkIns : null;
+  }
+
+  /* ------------------------ the conversational path ------------------------ */
+
+  /** The open check-in running in this chat thread, if any. */
+  async activeForThread(patientId: string, threadId: string | null) {
+    if (!threadId) return null;
+    const row = await prisma.encounter.findFirst({ where: { patientId, threadId, status: "OPEN" }, orderBy: { createdAt: "desc" } });
+    if (!row) return null;
+    const state = toState(row);
+    return { row, state, protocol: resolveProtocol(state.complaintKey) };
+  }
+
+  /** State + protocol for one check-in, for the tools that build on the domain. */
+  async stateFor(patientId: string, id: string) {
+    const row = await prisma.encounter.findFirst({ where: { id, patientId } });
+    if (!row) return null;
+    const state = toState(row);
+    const ctx = await patientContext(patientId);
+    return { row, state, protocol: resolveProtocol(state.complaintKey), region: ctx.region };
+  }
+
+  /**
+   * Records what the conversation established, one slot at a time. Same path as
+   * the stepped flow's `answer` — sanitised, persisted, red-flagged, audited —
+   * so a history taken in chat is the same record as one taken on screens.
+   */
+  async recordAnswers(patientId: string, id: string, answers: { slotKey: string; value?: SlotValue; text?: string }[]) {
+    const unplaced: string[] = [];
+    let last: (EncounterView & { unplaced?: boolean }) | null = null;
+    for (const a of answers) {
+      const out = await this.answer(patientId, id, a.slotKey, a.value, a.text).catch((e) => {
+        // An invented slot key is the model's mistake to fix, not a 500.
+        unplaced.push(`${a.slotKey} (${e?.message ?? "could not be recorded"})`);
+        return null;
+      });
+      if (!out) continue;
+      if ((out as any).unplaced) unplaced.push(a.slotKey);
+      last = out as any;
+    }
+    return { view: last, unplaced };
+  }
+
+  /**
+   * Stores the assessment on the append-only event log. The encounter stays
+   * OPEN: the follow-up loop is what happens after an assessment, not before.
+   */
+  async saveAssessment(patientId: string, id: string, assessment: unknown) {
+    const row = await prisma.encounter.findFirst({ where: { id, patientId } });
+    if (!row) return null;
+    await prisma.encounter.update({ where: { id }, data: { phase: "ROUTE" } });
+    await logEvent(id, "assessment", assessment as any);
+    return true;
   }
 }
 

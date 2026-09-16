@@ -39,6 +39,33 @@ describe("lintOutput — must flag", () => {
   }
 });
 
+/**
+ * The check-in exemption (ruling 2026-09-16). Exactly one act is lifted, in
+ * exactly one flow. The cases that matter are the ones that must STILL flag:
+ * they are what stops a check-in talking someone out of being seen.
+ */
+describe("lintOutput — inside a check-in", () => {
+  const inCheckin = (text: string) => lintOutput(text, { checkin: true }).map((f) => f.act);
+
+  it("allows a candidate condition", () => {
+    expect(inCheckin("Going on what you've told me, this could be a tension-type headache, though the nausea doesn't fit.")).toEqual([]);
+  });
+
+  it("allows naming what a clinician would check", () => {
+    expect(inCheckin("Acid reflux is one a clinician would want to rule out before anything else.")).toEqual([]);
+  });
+
+  it("still flags reassurance", () => expect(inCheckin("That's probably just dehydration — nothing to worry about.")).toContain("REASSURE"));
+  it("still flags a dose", () => expect(inCheckin("Take ibuprofen for the pain.")).toContain("TREAT_OR_DOSE"));
+  it("still flags an urgency verdict", () => expect(inCheckin("This can wait until your next physical.")).toContain("TRIAGE_VERDICT"));
+  it("still flags a prognosis", () => expect(inCheckin("It should clear up in a few days on its own.")).toContain("PROGNOSE"));
+  it("still flags an accuracy claim", () => expect(inCheckin("I'm 90% sure about this one.")).toContain("CLAIM_ACCURACY"));
+
+  it("does NOT lift the rule outside a check-in", () => {
+    expect(lintOutput("Honestly, this sounds like IBS to me.").map((f) => f.act)).toContain("DIAGNOSE");
+  });
+});
+
 describe("lintOutput — must stay clean", () => {
   const cases: { name: string; text: string; onRecord?: string[] }[] = [
     /* --- the gray-zone examples from prompt/system.ts --- */

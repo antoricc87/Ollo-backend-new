@@ -234,6 +234,53 @@ guard can only stop a wrong answer, while the handoff produces the right one.
   `symptom_handoff_not_for_coaching` (soreness + "should I train?" must NOT
   hand off). 29 scenarios, 12 safety. NOT RUN — needs an API key.
 
+### The check-in became a CONVERSATION (Sep 16 2026) — supersedes the handoff above
+
+User ruling after seeing the stepped flow on the simulator: "like this it
+doesn't add any value… it should be the same conversation as I would have with
+ChatGPT or Claude or Doctronic", ending with likely possibilities plus "not a
+diagnosis, a clinician confirms". The posture copied is **Doctronic's**: an AI
+that says plainly it is not a doctor, names what something could be, and puts a
+real clinician next. (Checked Sep 16: Doctronic ships that in the US App Store
+with no FDA clearance; FDA's 2026 CDS guidance keeps the carve-out
+clinician-only, so this sits inside the device definition and is a deliberate,
+founder-level risk decision — not a compliance claim.)
+
+- `agent/tools/checkin.tools.ts` is now four tools: **`start_checkin`** (CREATES
+  the encounter, stamps `Encounter.threadId` = the chat thread, returns the
+  protocol's slots as a checklist), **`record_checkin`** (stores answers as the
+  conversation produces them — same `EncounterService.answer` path as the
+  stepped flow, so the record, the red-flag evaluation and the event log are
+  unchanged), **`assess_checkin`** (the ending) and **`get_checkins`** (was
+  `get_encounters`). `start_encounter` and the `checkin_offer` card are gone.
+- `domain/assessment.ts` (pure, `tests/encounter/assessment.test.ts`) is the
+  one place model-authored clinical content is allowed, and it is bounded:
+  2–4 possibilities, each needing `fits` from the patient's own answers;
+  `BANNED` rejects dose, reassurance, prognosis, urgency verdicts and
+  confidence claims with a message written FOR THE MODEL, so it rewrites
+  instead of the guard silently rewriting; warning signs come from the
+  protocol's own safety options; **a tripped red flag overrides whatever next
+  step the model asked for** (escalation stays one-way). Card
+  `checkin_assessment`; the assessment is appended to the event log.
+- The guard is widened for THIS FLOW ONLY: `lint.ts` `LintContext.checkin`
+  skips the DIAGNOSE rules (nothing else), `outputCheck.ts` takes
+  `{checkin}` and appends `CHECKIN_ALLOWANCE` to the rubric. `runLoop` decides
+  the mode with ONE lookup (`Encounter` OPEN on this `threadId`) and feeds both
+  the prompt and the guard from it, so they cannot disagree.
+- `prompt/system.ts`: "Symptoms leave the chat" became "Symptoms open a
+  check-in, here in the conversation"; a `CHECKIN` section is injected only
+  while one is open (how to take a history, what may and may not be said).
+- The handout stays code-built (`summary.ts`) — a clinician reading it must see
+  the patient's own words, not the model's guesses.
+- Evals rewritten: `no_triage` (reassurance still forbidden), `symptom_opens_
+  checkin`, `symptom_not_for_coaching`, and `checkin_reaches_assessment` (3
+  turns: opens, records, then an assessment carrying the disclaimer and none of
+  the banned phrasings). `tests/safety/lint.test.ts` gained the exemption cases.
+- Still true, still the reason this beats a general chatbot: the red-flag input
+  gate runs FIRST (an emergency never reaches the model), the rules re-run over
+  the recorded answers every turn, everything lands on the append-only log, and
+  it already knows their record, medications and labs.
+
 ### Phase 2 — the follow-up loop and own-data context (2026-09-10)
 
 `domain/followUp.ts` (pure): `FOLLOW_UP_DAYS` [2, 5, 10]; `followUpFor()`

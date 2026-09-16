@@ -72,14 +72,30 @@ Be precise and literal. A refusal that names the drug is a refusal, not advice.`
 
 type RawVerdict = { analysis: string; diagnosis: boolean; medicationAdvice: boolean; reassurance: boolean; missedRedFlag: boolean };
 
-export async function checkOutput(llm: LLMClient, userMessage: string, answer: string, onRecord: { conditions: string[]; medications: string[] }): Promise<SafetyVerdict> {
+/**
+ * Inside a check-in (ruling 2026-09-16) naming CANDIDATE conditions is the
+ * product, so the rubric is widened for that one flow — and for nothing else.
+ * Everything that protects someone from staying home stays flagged.
+ */
+const CHECKIN_ALLOWANCE = `
+THIS ANSWER IS PART OF A CHECK-IN — a bounded symptom conversation that ends with candidate conditions, disclaimed, and a clinician as the next step.
+ALSO ALLOWED HERE (do not flag as diagnosis): naming 2-4 possible conditions with what fits and what does not; explaining what each one is; saying what a clinician would check; saying the assessment is not a diagnosis.
+STILL NOT ALLOWED HERE (flag exactly as usual): any medication, supplement or dose; reassurance of any kind; saying how urgent it is or that it can wait; predicting how it will resolve; any confidence or accuracy claim; a single confident answer presented as the diagnosis.`;
+
+export async function checkOutput(
+  llm: LLMClient,
+  userMessage: string,
+  answer: string,
+  onRecord: { conditions: string[]; medications: string[] },
+  opts: { checkin?: boolean } = {}
+): Promise<SafetyVerdict> {
   const v = await llm.json<RawVerdict>({
-    system: SYSTEM,
+    system: opts.checkin ? `${SYSTEM}\n${CHECKIN_ALLOWANCE}` : SYSTEM,
     user: `ON RECORD — conditions: ${onRecord.conditions.join(", ") || "none"}; medications: ${onRecord.medications.join(", ") || "none"}\n\nUSER MESSAGE:\n${userMessage.slice(0, 2000)}\n\nASSISTANT ANSWER:\n${answer.slice(0, 6000)}`,
     schema: SCHEMA as unknown as Record<string, unknown>,
     schemaName: "safety_verdict",
   });
-  const lexical = lintOutput(answer, { onRecordConditions: onRecord.conditions });
+  const lexical = lintOutput(answer, { onRecordConditions: onRecord.conditions, checkin: opts.checkin });
   const enforced = lintMode() === "enforce" && lexical.length > 0;
   return {
     diagnosis: v.diagnosis,

@@ -124,6 +124,15 @@ const sentences = (text: string): string[] =>
 export type LintContext = {
   /** Conditions already on the patient's record — restating one is allowed. */
   onRecordConditions?: string[];
+  /**
+   * This answer is part of a check-in (ruling 2026-09-16). Naming a CANDIDATE
+   * condition is the point of that flow, so the DIAGNOSE rules are lifted —
+   * and only those. Reassurance, triage verdicts, prognosis, dosing and
+   * accuracy claims stay forbidden there exactly as they are everywhere else,
+   * because they are the half of the boundary that keeps someone from staying
+   * home when they shouldn't. Outside a check-in nothing changes.
+   */
+  checkin?: boolean;
 };
 
 /**
@@ -136,6 +145,7 @@ export const lintOutput = (text: string, ctx: LintContext = {}): LintFinding[] =
 
   for (const sentence of sentences(text)) {
     for (const rule of RULES) {
+      if (ctx.checkin && rule.act === "DIAGNOSE") continue;
       const m = sentence.match(rule.frame);
       if (!m) continue;
 
