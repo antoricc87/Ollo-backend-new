@@ -937,6 +937,24 @@ Railway after deploy).
   across ALL reports + history), `currentLabEntries` (drop-in for the old
   `labResults[0].labResults`), `labFreshness` (≤6 mo current / ≤12 aging /
   older stale — mirrored in the app's `functionalities/labs/freshness.ts`).
+  Within one report a preferred variant wins the duplicate rule (hs-CRP over CRP).
+- `src/utils/labUnits.ts` (Sep 16 2026): one display unit per biomarker.
+  `buildCurrentLabs` runs every value through `canonicalise()` — spelling
+  families collapse (Thousand/uL, x10E3/uL, 10^9/L → K/µL; IU/L → U/L;
+  µIU/mL → mIU/L) and the biomarkers that genuinely vary between labs are
+  converted with their reference range (glucose/lipids mmol/L → mg/dL,
+  creatinine µmol/L, albumin g/L, CRP mg/dL → mg/L, vitamin D nmol/L,
+  HbA1c mmol/mol, absolute counts cells/µL → K/µL, …; `CONVERSIONS` table,
+  decimals per display unit). Stored rows stay as printed; each current value
+  and history point carries `value` (number), `censored` ("<"/">" when the lab
+  printed a limit), `converted` and `printed` (the original, when anything
+  changed). Urea/BUN is NOT converted (different quantities). The app's
+  client-side fallback merge (`mergeReportsClient`) does no conversion.
+- Risk report (`labs_journey/domain/risk.ts`): per block `caveats`
+  (`oldInputs` = inputs past 12 mo, `assumed` = BP 120/80, derived TC, CRP).
+  A censored value never feeds a calculator: CRP "<X" → min(1, X/2) mg/L
+  assumed with a caveat; any other "<X" input counts as missing with the
+  printed limit in the missing list. Tests: `tests/labs/`.
 - **Extraction pipeline** `src/services/lab_extraction/` (Aug 2026, replaces
   pdf-parse → gpt-4o-mini): `pdfLayout.ts` rebuilds rows/columns from pdf.js
   text coordinates (" | " marks column gaps — fixes the glued

@@ -2,8 +2,12 @@
  * Risk & biological age — revived from the retired post-visit report
  * (Aug 28 2026). Pure functions over the merged current-labs view; each block
  * computes when its inputs exist and otherwise says what is missing, instead
- * of the old all-or-nothing throw. Units are normalised to what the
+ * of the old all-or-nothing throw. The merged view already expresses values
+ * in display units (utils/labUnits); the helpers below re-check units so a
+ * value that slipped through unconverted is still read in what the
  * calculators expect (US conventional: mg/dL, g/dL, U/L, %, fL, K/µL).
+ * A censored value ("<5") is never used as if it were the number: CRP falls
+ * back to a below-detection assumption, anything else counts as missing.
  *
  * Models: Framingham general CVD 10-year risk (D'Agostino 2008), Framingham
  * Offspring 8-year diabetes risk (Wilson 2007), PhenoAge (Levine 2018).
@@ -12,7 +16,7 @@
 import { calculateCVRisk } from "../../../utils/risks_calculation_bio_age/calculateCVRisk";
 import { calculateDiabetesRisk } from "../../../utils/risks_calculation_bio_age/calculateDiabetesRisk";
 import { calculatePhenotypicAge } from "../../../utils/risks_calculation_bio_age/calculateBioAge";
-import { CurrentBiomarker } from "../../../utils/labBiomarkers";
+import { CurrentBiomarker, labFreshness } from "../../../utils/labBiomarkers";
 
 export type Sex = "M" | "F";
 
@@ -28,18 +32,35 @@ export type RiskProfile = {
   bloodPressure: { systolic: number; diastolic: number; source: "tracker" | "profile" | "assumed"; at: string | null };
 };
 
+/**
+ * Why a computed number should be read with care: how many of its lab inputs
+ * are past the 12-month "retest" threshold, and which values the model had to
+ * assume or derive instead of measure. Both empty → the number is clean.
+ */
+export type BlockCaveats = {
+  oldInputs: { count: number; total: number; oldestAt: string } | null;
+  assumed: string[];
+};
+
 export type RiskReport = {
   age: number | null;
   sex: Sex | null;
   labsAsOf: string | null;
   bloodPressure: RiskProfile["bloodPressure"];
   cardiovascular:
-    | { tenYearPercent: number; typicalPercent: number; optimalPercent: number; band: "low" | "moderate" | "high"; drivers: string[] }
+    | {
+        tenYearPercent: number;
+        typicalPercent: number;
+        optimalPercent: number;
+        band: "low" | "moderate" | "high";
+        drivers: string[];
+        caveats: BlockCaveats;
+      }
     | null;
   cardiovascularMissing: string[];
-  diabetes: { eightYearPercent: string; drivers: string[] } | null;
+  diabetes: { eightYearPercent: string; drivers: string[]; caveats: BlockCaveats } | null;
   diabetesMissing: string[];
-  biologicalAge: { phenotypicAge: number; delta: number; drivers: string[] } | null;
+  biologicalAge: { phenotypicAge: number; delta: number; drivers: string[]; caveats: BlockCaveats } | null;
   biologicalAgeMissing: string[];
   assumptions: string[];
 };
@@ -47,7 +68,8 @@ export type RiskReport = {
 /* ------------------------------ unit helpers ------------------------------ */
 
 const num = (b?: CurrentBiomarker | null): number | null => {
-  if (!b) return null;
+  if (!b || b.censored) return null;
+  if (typeof b.value === "number" && Number.isFinite(b.value)) return b.value;
   const v = parseFloat(String(b.result).replace(/[^\d.-]/g, ""));
   return Number.isFinite(v) ? v : null;
 };
@@ -102,11 +124,39 @@ export const LAB_LABEL: Record<string, string> = {
   "alkaline phosphatase": "alkaline phosphatase",
 };
 
+/* -------------------------------- caveats --------------------------------- */
+
+/**
+ * Caveats for one block from the biomarkers that actually fed it (each is the
+ * latest value on record, so "old" means nothing newer exists) and the values
+ * that were assumed rather than measured.
+ */
+const caveatsFor = (used: (CurrentBiomarker | null)[], assumed: string[], now: Date): BlockCaveats => {
+  const present = used.filter((b): b is CurrentBiomarker => !!b);
+  const old = present.filter((b) => labFreshness(b.collectedAt, now) === "stale");
+  return {
+    oldInputs: old.length ? { count: old.length, total: present.length, oldestAt: old.map((b) => b.collectedAt).sort()[0] } : null,
+    assumed,
+  };
+};
+
+const BP_ASSUMED = "Blood pressure assumed at 120/80 — no reading on record.";
+
 /* --------------------------------- report --------------------------------- */
 
-export const buildRiskReport = (profile: RiskProfile, labs: CurrentBiomarker[]): RiskReport => {
+export const buildRiskReport = (profile: RiskProfile, labs: CurrentBiomarker[], now: Date = new Date()): RiskReport => {
   const by = new Map(labs.map((b) => [b.key, b]));
-  const get = (k: string) => by.get(k) ?? null;
+  const raw = (k: string) => by.get(k) ?? null;
+  /** A usable measurement: present and an actual number, not a printed limit. */
+  const get = (k: string) => {
+    const b = raw(k);
+    return b && !b.censored ? b : null;
+  };
+  /** Missing-list label; says so when the lab only printed a limit. */
+  const label = (k: string) => {
+    const b = raw(k);
+    return b?.censored ? `${LAB_LABEL[k]} (report only says ${b.result} ${b.units ?? ""})`.replace(/\s+\)/, ")") : LAB_LABEL[k];
+  };
   const assumptions: string[] = [];
   const labsAsOf = labs.length ? labs.map((b) => b.collectedAt).sort().slice(-1)[0] : null;
 
@@ -116,19 +166,27 @@ export const buildRiskReport = (profile: RiskProfile, labs: CurrentBiomarker[]):
   /* ---- cardiovascular ---- */
   const tclB = get("tcl");
   const hdlB = get("hdl");
-  const ldl = mgdl(get("ldl"), "chol");
-  const tg = mgdl(get("triglycerides"), "tg");
+  const ldlB = get("ldl");
+  const tgB = get("triglycerides");
+  const ldl = mgdl(ldlB, "chol");
+  const tg = mgdl(tgB, "tg");
   const hdl = mgdl(hdlB, "chol");
   let tcl = mgdl(tclB, "chol");
+  let tclUsed: (CurrentBiomarker | null)[] = [tclB];
+  const cvAssumed: string[] = [];
   if (tcl === null && ldl !== null && hdl !== null && tg !== null) {
     tcl = ldl + hdl + tg / 5; // Friedewald, reversed
-    assumptions.push("Total cholesterol estimated from LDL, HDL and triglycerides.");
+    tclUsed = [ldlB, tgB];
+    const note = "Total cholesterol estimated from LDL, HDL and triglycerides.";
+    assumptions.push(note);
+    cvAssumed.push(note);
   }
+  if (profile.bloodPressure.source === "assumed") cvAssumed.push(BP_ASSUMED);
   const cvMissing: string[] = [];
   if (profile.age === null) cvMissing.push("birth date");
   if (profile.sex === null) cvMissing.push("sex");
-  if (tcl === null) cvMissing.push(LAB_LABEL.tcl);
-  if (hdl === null) cvMissing.push(LAB_LABEL.hdl);
+  if (tcl === null) cvMissing.push(label("tcl"));
+  if (hdl === null) cvMissing.push(label("hdl"));
   let cardiovascular: RiskReport["cardiovascular"] = null;
   if (cvMissing.length === 0 && profile.age !== null && profile.sex !== null && tcl !== null && hdl !== null) {
     try {
@@ -156,6 +214,7 @@ export const buildRiskReport = (profile: RiskProfile, labs: CurrentBiomarker[]):
         optimalPercent: Math.round(r.optimalCVRisk * 1000) / 10,
         band: pct < 10 ? "low" : pct < 20 ? "moderate" : "high",
         drivers,
+        caveats: caveatsFor([...tclUsed, hdlB], cvAssumed, now),
       };
     } catch (e) {
       cvMissing.push("valid inputs");
@@ -163,14 +222,15 @@ export const buildRiskReport = (profile: RiskProfile, labs: CurrentBiomarker[]):
   }
 
   /* ---- diabetes ---- */
-  const glucose = mgdl(get("glucose"), "glucose");
+  const glucoseB = get("glucose");
+  const glucose = mgdl(glucoseB, "glucose");
   const dMissing: string[] = [];
   if (profile.age === null) dMissing.push("birth date");
   if (profile.sex === null) dMissing.push("sex");
   if (profile.heightCm === null || profile.weightKg === null) dMissing.push("height and weight");
-  if (hdl === null) dMissing.push(LAB_LABEL.hdl);
-  if (tg === null) dMissing.push(LAB_LABEL.triglycerides);
-  if (glucose === null) dMissing.push(LAB_LABEL.glucose);
+  if (hdl === null) dMissing.push(label("hdl"));
+  if (tg === null) dMissing.push(label("triglycerides"));
+  if (glucose === null) dMissing.push(label("glucose"));
   let diabetes: RiskReport["diabetes"] = null;
   if (
     dMissing.length === 0 &&
@@ -182,8 +242,13 @@ export const buildRiskReport = (profile: RiskProfile, labs: CurrentBiomarker[]):
     tg !== null &&
     glucose !== null
   ) {
+    const dCaveats = caveatsFor([hdlB, tgB, glucoseB], profile.bloodPressure.source === "assumed" ? [BP_ASSUMED] : [], now);
     if (profile.diabetic) {
-      diabetes = { eightYearPercent: "—", drivers: ["Diabetes is already on your record; this score is for people without it."] };
+      diabetes = {
+        eightYearPercent: "—",
+        drivers: ["Diabetes is already on your record; this score is for people without it."],
+        caveats: dCaveats,
+      };
     } else {
       const eightYearPercent = calculateDiabetesRisk({
         age: profile.age,
@@ -209,34 +274,56 @@ export const buildRiskReport = (profile: RiskProfile, labs: CurrentBiomarker[]):
       if (profile.parentalDiabetes) drivers.push("A parent with diabetes adds to it.");
       if (profile.bloodPressure.systolic > 130 || profile.bloodPressure.diastolic > 85) drivers.push("Blood pressure above 130/85 adds to it.");
       if (!drivers.length) drivers.push("None of the usual drivers are present.");
-      diabetes = { eightYearPercent, drivers };
+      diabetes = { eightYearPercent, drivers, caveats: dCaveats };
     }
   }
 
   /* ---- biological age (PhenoAge) ---- */
+  const bioB = {
+    albumin: get("albumin"),
+    creatinine: get("creatinine"),
+    glucose: glucoseB,
+    crp: get("crp"),
+    rdw: get("rdw"),
+    wbc: get("wbc"),
+    mcv: get("mcv"),
+    lymphocytes: get("lymphocytes"),
+    alp: get("alkaline phosphatase"),
+  };
   const bio = {
-    albumin: albuminGdl(get("albumin")),
-    creatinine: creatinineMgdl(get("creatinine")),
+    albumin: albuminGdl(bioB.albumin),
+    creatinine: creatinineMgdl(bioB.creatinine),
     glucose,
-    crp: crpMgL(get("crp")),
-    rdw: num(get("rdw")),
-    wbc: wbcK(get("wbc")),
-    mcv: num(get("mcv")),
-    lymphocytes: num(get("lymphocytes")),
-    alp: num(get("alkaline phosphatase")),
+    crp: crpMgL(bioB.crp),
+    rdw: num(bioB.rdw),
+    wbc: wbcK(bioB.wbc),
+    mcv: num(bioB.mcv),
+    lymphocytes: num(bioB.lymphocytes),
+    alp: num(bioB.alp),
   };
   const bMissing: string[] = [];
   if (profile.age === null) bMissing.push("birth date");
   (["albumin", "creatinine", "glucose", "rdw", "wbc", "mcv", "lymphocytes"] as const).forEach((k) => {
-    if (bio[k] === null) bMissing.push(LAB_LABEL[k]);
+    if (bio[k] === null) bMissing.push(label(k));
   });
-  if (bio.alp === null) bMissing.push(LAB_LABEL["alkaline phosphatase"]);
+  if (bio.alp === null) bMissing.push(label("alkaline phosphatase"));
   let biologicalAge: RiskReport["biologicalAge"] = null;
   if (bMissing.length === 0 && profile.age !== null) {
     let crp = bio.crp;
+    const bAssumed: string[] = [];
     if (crp === null) {
-      crp = 1;
-      assumptions.push("CRP not measured — 1 mg/L assumed for biological age.");
+      const censoredCrp = raw("crp");
+      const limit = censoredCrp?.censored === "<" ? crpMgL({ ...censoredCrp, censored: null }) : null;
+      if (limit !== null && limit > 0) {
+        // The lab only says "below X": use half the limit, capped at the usual default.
+        crp = Math.min(1, Math.round((limit / 2) * 100) / 100);
+        assumptions.push(`CRP reported as below ${limit} mg/L — ${crp} mg/L assumed for biological age.`);
+        bAssumed.push(`CRP reported as below ${limit} mg/L — ${crp} mg/L assumed.`);
+      } else {
+        crp = 1;
+        assumptions.push("CRP not measured — 1 mg/L assumed for biological age.");
+        bAssumed.push("CRP not measured — 1 mg/L assumed.");
+      }
     }
     const phenotypicAge = calculatePhenotypicAge({
       age: profile.age,
@@ -258,7 +345,16 @@ export const buildRiskReport = (profile: RiskProfile, labs: CurrentBiomarker[]):
     if (bio.rdw! > 14.5) drivers.push("RDW above 14.5% ages it.");
     if (bio.wbc! > 8) drivers.push("White cells above 8 K/µL age it.");
     if (!drivers.length) drivers.push(delta < 0 ? "Every input sits on the young side of its range." : "No single value stands out; the sum is close to your age.");
-    biologicalAge = { phenotypicAge: Math.round(phenotypicAge * 10) / 10, delta: Math.round(delta * 10) / 10, drivers };
+    biologicalAge = {
+      phenotypicAge: Math.round(phenotypicAge * 10) / 10,
+      delta: Math.round(delta * 10) / 10,
+      drivers,
+      caveats: caveatsFor(
+        [bioB.albumin, bioB.creatinine, bioB.glucose, bioB.rdw, bioB.wbc, bioB.mcv, bioB.lymphocytes, bioB.alp, bio.crp === null ? null : bioB.crp],
+        bAssumed,
+        now
+      ),
+    };
   }
 
   return {

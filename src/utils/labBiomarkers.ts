@@ -6,8 +6,11 @@
  * reads `labResults[0]` only sees the newest upload. These helpers build the
  * merged view instead: for every biomarker (normalised across the naming
  * variants the extractor produces) the most recent value, dated by the
- * report's collection date, plus its history.
+ * report's collection date, plus its history. Values are expressed in the
+ * biomarker's display unit (utils/labUnits) with the printed original kept
+ * alongside, so reports in mg/dL and mmol/L line up.
  */
+import { canonicalise, Printed } from "./labUnits";
 
 export type LabEntryLike = {
   id: string;
@@ -29,21 +32,39 @@ export type LabReportLike = {
   labResults: LabEntryLike[];
 };
 
-export type LabHistoryPoint = {
+/** Value fields shared by the current value and each history point — see utils/labUnits. */
+export type CanonicalValue = {
+  result: string; // in the display unit ("<" / ">" prefix kept when the lab printed a limit)
+  units: string | null; // display unit
+  referenceRange: string; // in the display unit
+  value: number | null; // numeric result, null for "NEGATIVE" etc.
+  censored: "<" | ">" | null; // the lab printed a detection limit, not a value
+  converted: boolean; // the number was converted between unit systems
+  printed: Printed | null; // what the report printed, when anything was changed
+};
+
+export type LabHistoryPoint = CanonicalValue & {
   reportId: string;
   collectedAt: string; // ISO
-  result: string;
-  units: string | null;
-  referenceRange: string;
   isOutOfRange: boolean;
 };
 
-export type CurrentBiomarker = LabEntryLike & {
-  key: string; // canonical biomarker key
-  reportId: string;
-  collectedAt: string; // ISO — the date of the report the value comes from
-  history: LabHistoryPoint[]; // newest first, includes the current value
+export type CurrentBiomarker = LabEntryLike &
+  CanonicalValue & {
+    key: string; // canonical biomarker key
+    reportId: string;
+    collectedAt: string; // ISO — the date of the report the value comes from
+    history: LabHistoryPoint[]; // newest first, includes the current value
+  };
+
+/**
+ * When one report lists a biomarker twice under different names, the variant
+ * to keep: high-sensitivity CRP over standard CRP (same protein, finer assay).
+ */
+const PREFERRED_VARIANT: Record<string, RegExp> = {
+  crp: /\bhs\b|hs-?crp|high[\s-]?sens|ultra[\s-]?sens/i,
 };
+const variantRank = (key: string, testType: string) => (PREFERRED_VARIANT[key]?.test(testType) ? 1 : 0);
 
 /* ----------------------------- Canonical keys ------------------------------ */
 
@@ -189,22 +210,25 @@ export const sortReportsNewestFirst = <T extends LabReportLike>(reports: T[]): T
   });
 
 /**
- * Latest value per biomarker across all reports, with history.
- * Result is ordered: flagged first, then by category/name — callers regroup as needed.
+ * Latest value per biomarker across all reports, with history, every value in
+ * the biomarker's display unit. Result order is insertion order — callers
+ * regroup as needed.
  */
 export const buildCurrentLabs = (reports: LabReportLike[]): CurrentBiomarker[] => {
   const byKey = new Map<string, CurrentBiomarker>();
   for (const report of sortReportsNewestFirst(reports ?? [])) {
     const collectedAt = reportDate(report).toISOString();
-    for (const entry of report.labResults ?? []) {
-      if (!entry || !entry.testType) continue;
-      const key = canonicalBiomarkerKey(entry.testType, entry.category);
+    const keyed = (report.labResults ?? [])
+      .filter((entry) => entry && entry.testType)
+      .map((entry) => ({ entry, key: canonicalBiomarkerKey(entry.testType, entry.category) }));
+    // Preferred variants first so the same-report duplicate rule keeps them.
+    keyed.sort((a, b) => variantRank(b.key, b.entry.testType) - variantRank(a.key, a.entry.testType));
+    for (const { entry, key } of keyed) {
+      const canon = canonicalise(key, entry.result, entry.units, entry.referenceRange);
       const point: LabHistoryPoint = {
         reportId: report.id,
         collectedAt,
-        result: entry.result,
-        units: entry.units ?? null,
-        referenceRange: entry.referenceRange,
+        ...canon,
         isOutOfRange: !!entry.isOutOfRange,
       };
       const existing = byKey.get(key);
@@ -213,7 +237,7 @@ export const buildCurrentLabs = (reports: LabReportLike[]): CurrentBiomarker[] =
         if (existing.reportId === report.id) continue;
         existing.history.push(point);
       } else {
-        byKey.set(key, { ...entry, key, reportId: report.id, collectedAt, history: [point] });
+        byKey.set(key, { ...entry, ...canon, key, reportId: report.id, collectedAt, history: [point] });
       }
     }
   }
@@ -225,4 +249,4 @@ export const buildCurrentLabs = (reports: LabReportLike[]): CurrentBiomarker[] =
  * latest-per-biomarker entries, shaped like LabResult rows plus collectedAt.
  */
 export const currentLabEntries = (reports: LabReportLike[] | null | undefined) =>
-  buildCurrentLabs(reports ?? []).map(({ history, key, ...entry }) => entry);
+  buildCurrentLabs(reports ?? []).map(({ history, key, value, censored, converted, printed, ...entry }) => entry);
