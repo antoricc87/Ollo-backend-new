@@ -264,9 +264,23 @@ founder-level risk decision — not a compliance claim.)
   `checkin_assessment`; the assessment is appended to the event log.
 - The guard is widened for THIS FLOW ONLY: `lint.ts` `LintContext.checkin`
   skips the DIAGNOSE rules (nothing else), `outputCheck.ts` takes
-  `{checkin}` and appends `CHECKIN_ALLOWANCE` to the rubric. `runLoop` decides
-  the mode with ONE lookup (`Encounter` OPEN on this `threadId`) and feeds both
-  the prompt and the guard from it, so they cannot disagree.
+  `{checkin, assessedConditions}` and appends `CHECKIN_ALLOWANCE` to the
+  rubric. `runLoop` decides the mode with ONE lookup and feeds both the prompt
+  and the guard from it, so they cannot disagree.
+- **The mode lives only as long as the interview** (`domain/mode.ts`, fixed
+  Sep 16 2026). It first keyed on the encounter being OPEN — but an encounter
+  stays OPEN after its assessment (the follow-up loop needs it) and after a
+  crisis halt, so every later message in the thread kept the widened guard.
+  Now: ACTIVE = OPEN and phase not ROUTE/CLOSED; ASSESSED = over, and the
+  assessment's possibilities are passed like on-record conditions, so they can
+  be EXPLAINED afterwards but never asserted (prompt `assessedSection`, rubric
+  `assessedAllowance`); OFF otherwise. A new `record_checkin` after an
+  assessment moves the phase back and reopens the mode; a crisis halt cannot.
+  `tests/encounter/mode.test.ts`.
+- Crisis copy is pinned, not prompted: `ToolOutcome.pinnedAnswer` replaces the
+  turn's reply and skips the classifier. `record_checkin` pins the crisis
+  script when `shouldHalt` trips (the model had written "the NHS says…" — the
+  script cites nobody — and a prompt rule against it did not hold).
 - `prompt/system.ts`: "Symptoms leave the chat" became "Symptoms open a
   check-in, here in the conversation"; a `CHECKIN` section is injected only
   while one is open (how to take a history, what may and may not be said).

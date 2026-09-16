@@ -13,6 +13,7 @@ import { regionFromTimeZone } from "./safety/policy";
 import { registry } from "./tools";
 import { Card, ToolContext } from "./tools/registry";
 import { makeSubjectResolver } from "./tools/subject";
+import { checkinModeFor, CheckinMode } from "../encounter/domain/mode";
 
 /**
  * The agent loop, as an event stream. Two entry points share it:
@@ -199,15 +200,20 @@ async function* runLoop(p: {
   const tz = safeTz(snapshot.timeZone);
   const window = await threadStore.contextWindow(threadId);
   /**
-   * A check-in open in THIS thread widens what may be said — candidate
-   * conditions, in the shape assess_checkin enforces — and nothing else moves
-   * (ruling 2026-09-16). One lookup serves both the prompt and the guard, so
-   * the two can never disagree about which mode the turn is in.
+   * A check-in in THIS thread widens what may be said — candidate conditions,
+   * in the shape assess_checkin enforces — but only while the interview is in
+   * progress (encounter/domain/mode.ts). One lookup serves both the prompt and
+   * the guard, so the two can never disagree about which mode the turn is in.
    */
-  const checkin = !!(await prisma.encounter
-    .findFirst({ where: { patientId, threadId, status: "OPEN" }, select: { id: true } })
-    .catch(() => null));
-  const system = buildSystemPrompt({ snapshotText: renderSnapshot(snapshot), threadSummary: window.summary, proactive: p.proactive ?? null, checkin });
+  const mode = await checkinModeForThread(patientId, threadId);
+  const checkin = mode.active;
+  const system = buildSystemPrompt({
+    snapshotText: renderSnapshot(snapshot),
+    threadSummary: window.summary,
+    proactive: p.proactive ?? null,
+    checkin,
+    assessedConditions: mode.assessedConditions,
+  });
   const messages: ChatMessage[] = [{ role: "system", content: system }, ...toChatMessages(window.messages)];
 
   const ctx: ToolContext = {
@@ -332,12 +338,12 @@ async function* runLoop(p: {
     try {
       verdict = pinned
         ? { ok: true, diagnosis: false, medicationAdvice: false, reassurance: false, missedRedFlag: false, lexical: [], reasons: "fixed escalation copy — written by the domain layer, not the model" }
-        : await checkOutput(llm, p.safetyContext, draft, onRecord, { checkin });
+        : await checkOutput(llm, p.safetyContext, draft, onRecord, { checkin, assessedConditions: mode.assessedConditions });
       if (verdict.ok) verdict.outcome = "pass";
       else {
         void audit(patientId, "safety_flag", { threadId, payload: { stage: "draft", verdict, draft: draft.slice(0, 2000) } });
         const rewritten = await rewriteUnsafe(llm, draft, verdict);
-        const second = await checkOutput(llm, p.safetyContext, rewritten, onRecord, { checkin });
+        const second = await checkOutput(llm, p.safetyContext, rewritten, onRecord, { checkin, assessedConditions: mode.assessedConditions });
         if (second.ok) {
           text = rewritten;
           verdict = { ...verdict, outcome: "rewritten" };
@@ -380,6 +386,33 @@ async function* runLoop(p: {
     console.error("agent loop failed", e);
     void audit(patientId, "error", { threadId, payload: { error: e?.message ?? String(e), steps } });
     yield { type: "error", message: e?.message?.includes("API key") ? "The assistant is not configured (missing API key)" : "Something went wrong answering that" };
+  }
+}
+
+/**
+ * The check-in mode for this thread: its latest encounter, plus the latest
+ * assessment only when the interview is over. A lookup failure means OFF —
+ * the ordinary boundary is the safe default.
+ */
+async function checkinModeForThread(patientId: string, threadId: string): Promise<CheckinMode> {
+  try {
+    const enc = await prisma.encounter.findFirst({
+      where: { patientId, threadId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, status: true, phase: true },
+    });
+    if (!enc) return checkinModeFor(null);
+    const mode = checkinModeFor(enc);
+    if (mode.active) return mode;
+    const assessed = await prisma.encounterEvent.findFirst({
+      where: { encounterId: enc.id, kind: "assessment" },
+      orderBy: { seq: "desc" },
+      select: { payload: true },
+    });
+    return checkinModeFor(enc, (assessed?.payload as any) ?? null);
+  } catch (e) {
+    console.error("check-in mode lookup failed", e);
+    return checkinModeFor(null);
   }
 }
 

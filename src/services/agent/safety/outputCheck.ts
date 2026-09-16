@@ -82,20 +82,33 @@ THIS ANSWER IS PART OF A CHECK-IN — a bounded symptom conversation that ends w
 ALSO ALLOWED HERE (do not flag as diagnosis): naming 2-4 possible conditions with what fits and what does not; explaining what each one is; saying what a clinician would check; saying the assessment is not a diagnosis.
 STILL NOT ALLOWED HERE (flag exactly as usual): any medication, supplement or dose; reassurance of any kind; saying how urgent it is or that it can wait; predicting how it will resolve; any confidence or accuracy claim; a single confident answer presented as the diagnosis.`;
 
+/** After an assessment the interview is over: explaining what it named is fine, asserting it is not. */
+const assessedAllowance = (conditions: string[]) => `
+EARLIER IN THIS CONVERSATION A CHECK-IN ASSESSMENT NAMED THESE POSSIBILITIES: ${conditions.join("; ")}.
+ALSO ALLOWED NOW (do not flag as diagnosis): explaining what one of those conditions is and what a clinician would check for.
+STILL FLAG AS DIAGNOSIS: saying or implying the user HAS one of them, re-ranking them as if settled, or naming any OTHER condition as theirs.`;
+
 export async function checkOutput(
   llm: LLMClient,
   userMessage: string,
   answer: string,
   onRecord: { conditions: string[]; medications: string[] },
-  opts: { checkin?: boolean } = {}
+  opts: { checkin?: boolean; assessedConditions?: string[] } = {}
 ): Promise<SafetyVerdict> {
+  const assessed = opts.assessedConditions ?? [];
+  const system = opts.checkin
+    ? `${SYSTEM}\n${CHECKIN_ALLOWANCE}`
+    : assessed.length
+    ? `${SYSTEM}\n${assessedAllowance(assessed)}`
+    : SYSTEM;
   const v = await llm.json<RawVerdict>({
-    system: opts.checkin ? `${SYSTEM}\n${CHECKIN_ALLOWANCE}` : SYSTEM,
+    system,
     user: `ON RECORD — conditions: ${onRecord.conditions.join(", ") || "none"}; medications: ${onRecord.medications.join(", ") || "none"}\n\nUSER MESSAGE:\n${userMessage.slice(0, 2000)}\n\nASSISTANT ANSWER:\n${answer.slice(0, 6000)}`,
     schema: SCHEMA as unknown as Record<string, unknown>,
     schemaName: "safety_verdict",
   });
-  const lexical = lintOutput(answer, { onRecordConditions: onRecord.conditions, checkin: opts.checkin });
+  // The assessment's own possibilities may be discussed afterwards, the way a recorded condition may be restated.
+  const lexical = lintOutput(answer, { onRecordConditions: [...onRecord.conditions, ...assessed], checkin: opts.checkin });
   const enforced = lintMode() === "enforce" && lexical.length > 0;
   return {
     diagnosis: v.diagnosis,

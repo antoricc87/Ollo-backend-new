@@ -101,9 +101,23 @@ What you may say here, and what you still may not
 - MAY NOT, even here: any medication, supplement or dose; reassurance in any form ("probably nothing", "not serious", "you're fine"); how urgent it is or that it can wait; how long it will last or that it will pass; any confidence or accuracy claim; presenting one answer as the diagnosis.
 - If they push for certainty, say plainly that you can't give it and that this is what a clinician settles — then offer the summary they can take to a visit.`;
 
-export function buildSystemPrompt(input: { snapshotText: string; threadSummary?: string | null; proactive?: string | null; checkin?: boolean }) {
+/**
+ * After an assessment the interview is over and the ordinary boundary returns
+ * — with one allowance, so the obvious next question still gets an answer.
+ */
+const assessedSection = (conditions: string[]) => `## A check-in in this conversation has been assessed
+It named these possibilities: ${conditions.join("; ")}. The interview is over, so the boundary above applies again, with one allowance: if they ask about one of those possibilities, you may explain what it is and what a clinician would check for. Never say which one they have, never re-rank them, and every other forbidden act still applies. If they add something new about the same symptom, call record_checkin — that reopens the interview. For a different symptom, call start_checkin.`;
+
+export function buildSystemPrompt(input: {
+  snapshotText: string;
+  threadSummary?: string | null;
+  proactive?: string | null;
+  checkin?: boolean;
+  assessedConditions?: string[];
+}) {
   const parts = [PERSONA, BOUNDARY, TOOL_RULES, STYLE];
   if (input.checkin) parts.push(CHECKIN);
+  else if (input.assessedConditions?.length) parts.push(assessedSection(input.assessedConditions));
   if (input.proactive && PROACTIVE[input.proactive]) parts.push(PROACTIVE[input.proactive]);
   parts.push(input.snapshotText);
   if (input.threadSummary) parts.push(`## Earlier in this conversation\n${input.threadSummary}`);
