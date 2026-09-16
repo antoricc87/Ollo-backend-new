@@ -277,6 +277,33 @@ founder-level risk decision — not a compliance claim.)
   `assessedAllowance`); OFF otherwise. A new `record_checkin` after an
   assessment moves the phase back and reopens the mode; a crisis halt cannot.
   `tests/encounter/mode.test.ts`.
+- **Check-in mode in the app** (Sep 16 2026, user ruling: a mode inside the
+  Ollie chat, not its own screen): `EncounterService.threadView(patientId,
+  threadId)` → `CheckinThreadView {state active|assessed|halted|closed,
+  progress, historyComplete, question{slotKey, kind, options, range},
+  disclaimer}`. `runLoop` emits it as a `checkin` event every turn (after the
+  tools, which are what change it); `stream:false` replies and `GET
+  /threads/:id` carry `checkin` too, so reopening a thread restores the mode.
+  The prompt tells the model the options are on screen as chips, so it asks in
+  one sentence instead of listing them.
+- `record_checkin` / `assess_checkin` with nothing running (the user tapped
+  End, or the encounter is gone) return `NO_CHECKIN`: don't call again, start
+  once if they are still describing a symptom, else reply normally. Before it,
+  the model called record_checkin 8 times in one turn and hit MAX_STEPS.
+- **Guard gap closed (Sep 16 2026).** After a check-in was ended, a reply said
+  "Since you don't have any of the warning signs, it's reasonable to watch and
+  see if it settles over the next week" — absence of a red flag turned into
+  waiting, the exact Rule 2 failure — and passed. Two causes in `lint.ts`: no
+  rule for watch/wait-and-see or "settles over the next week" (new
+  `tr.watchwait`, `pg.settle`), and refusal exemption applied to ANY earlier
+  negation, so the "don't" in the first clause exempted the verdict in the
+  second. `exemptBefore()` now exempts only when the negation governs the
+  match (no comma / but / so / though between). The classifier's
+  `reassurance` rubric names the pattern explicitly. Cases in
+  `tests/safety/lint.test.ts`, plus same-clause refusals that must stay clean.
+- Open (needs a product call): after End, if the person keeps describing the
+  symptom, Ollie still gives lifestyle advice about it ("skip deep squats until
+  this settles") — against the TOOL_RULES pain rule, and not caught.
 - Crisis copy is pinned, not prompted: `ToolOutcome.pinnedAnswer` replaces the
   turn's reply and skips the classifier. `record_checkin` pins the crisis
   script when `shouldHalt` trips (the model had written "the NHS says…" — the

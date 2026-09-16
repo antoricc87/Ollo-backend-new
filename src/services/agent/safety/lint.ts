@@ -100,10 +100,13 @@ const RULES: Rule[] = [
   /* TRIAGE_VERDICT — assigning a level of care. */
   { id: "tr.wait", act: "TRIAGE_VERDICT", frame: /\b(can wait|no rush|not urgent|no need to (see|call|go)|you don'?t need (to see|a doctor|urgent|medical)|not an emergency|doesn'?t (need|warrant) (a doctor|urgent|medical|emergency))\b/i },
   { id: "tr.window", act: "TRIAGE_VERDICT", frame: /\b(within|in) (the next )?(24|48|72) hours\b/i, near: /\b(see|call|book|visit|doctor|clinician|appointment)\b/i },
+  /* Sep 16 2026: "it's reasonable to watch and see if it settles over the next week" passed the guard. */
+  { id: "tr.watchwait", act: "TRIAGE_VERDICT", frame: /\b(reasonable|fine|okay|ok|safe|sensible) to (wait|watch|hold off|see how it goes|see if it)\b|\b(wait|watch) and see\b/i },
 
   /* PROGNOSE — the course of an untriaged complaint. */
   { id: "pg.resolve", act: "PROGNOSE", frame: /\b(should|will|usually|typically|normally) (clear up|resolve|go away|settle|pass|improve on its own|sort itself)\b/i },
   { id: "pg.duration", act: "PROGNOSE", frame: /\b(lasts?|goes away|clears up) (in|within|after) (a few|\d+) (days?|weeks?)\b/i },
+  { id: "pg.settle", act: "PROGNOSE", frame: /\b(settles?|clears? up|goes? away|passes) (over|within|in) (the next |a |the )?(few |couple of )?(days?|weeks?)\b/i },
 
   /* CLAIM_ACCURACY — performance claims. */
   { id: "ac.percent", act: "CLAIM_ACCURACY", frame: /\bi'?m \d+ ?% (sure|certain|confident)\b/i },
@@ -120,6 +123,26 @@ const sentences = (text: string): string[] =>
     .split(/(?<=[.!?;:])\s+|\s+[—–-]\s+|\n+/)
     .map((s) => s.trim())
     .filter(Boolean);
+
+/**
+ * Is the match inside a refusal? Only when the negation governs it — same
+ * clause, nothing like a comma, "but" or "so" in between.
+ *
+ * It used to exempt ANY negation earlier in the sentence, which let this
+ * through (Sep 16 2026): "Since you don't have any of the warning signs, it's
+ * reasonable to watch and see…" — the "don't" belongs to the first clause,
+ * and the verdict to the second. Absence of a red flag becoming reassurance is
+ * the exact failure Rule 2 exists for.
+ */
+const CLAUSE_BREAK = /,|;|\b(but|so|though|although|however|yet)\b/i;
+
+const exemptBefore = (sentence: string, at: number): boolean => {
+  const re = new RegExp(EXEMPT.source, "gi");
+  let last = -1;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sentence)) && m.index < at) last = m.index + m[0].length;
+  return last >= 0 && !CLAUSE_BREAK.test(sentence.slice(last, at));
+};
 
 export type LintContext = {
   /** Conditions already on the patient's record — restating one is allowed. */
@@ -150,8 +173,7 @@ export const lintOutput = (text: string, ctx: LintContext = {}): LintFinding[] =
       if (!m) continue;
 
       // A refusal or a question that uses the same words is not the act.
-      const exempt = sentence.match(EXEMPT);
-      if (exempt && (exempt.index ?? 0) < (m.index ?? 0)) continue;
+      if (exemptBefore(sentence, m.index ?? 0)) continue;
 
       if (rule.near) {
         const n = sentence.match(rule.near);

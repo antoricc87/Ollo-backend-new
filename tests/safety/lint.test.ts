@@ -31,6 +31,12 @@ describe("lintOutput — must flag", () => {
     { name: "triage verdict", text: "This can wait until your next physical.", act: "TRIAGE_VERDICT" },
     { name: "triage, no doctor needed", text: "You don't need a doctor for this one.", act: "TRIAGE_VERDICT" },
     { name: "prognosis", text: "It should clear up in a few days on its own.", act: "PROGNOSE" },
+    /* Sep 16 2026 — passed the guard live, after a check-in was ended. The "don't" is in another clause. */
+    { name: "absence of red flags turned into waiting", text: "Since you don't have any of the warning signs, it's reasonable to watch and see if it settles over the next week.", act: "TRIAGE_VERDICT" },
+    // Not "it's fine to…": that already trips re.probably first, and one finding per sentence would hide this rule.
+    { name: "watch and see", text: "Best to watch and see how it goes for now.", act: "TRIAGE_VERDICT" },
+    { name: "settles over a week", text: "Give it a bit of rest and it tends to settle over the next week.", act: "PROGNOSE" },
+    { name: "negation in another clause does not make it a refusal", text: "You don't have a fever, so this is nothing to worry about.", act: "REASSURE" },
     { name: "accuracy claim", text: "I'm 90% sure about this reading.", act: "CLAIM_ACCURACY" },
     { name: "proven claim", text: "This approach is clinically proven to work.", act: "CLAIM_ACCURACY" },
   ];
@@ -68,6 +74,9 @@ describe("lintOutput — inside a check-in", () => {
 
 describe("lintOutput — must stay clean", () => {
   const cases: { name: string; text: string; onRecord?: string[] }[] = [
+    /* --- refusals in the same clause stay exempt after the Sep 16 clause fix --- */
+    { name: "refusing the urgency verdict", text: "I can't tell you whether it's reasonable to wait — that needs a clinician." },
+    { name: "refusing to say it will pass", text: "I can't say whether it will settle over the next week." },
     /* --- the gray-zone examples from prompt/system.ts --- */
     {
       name: "LDL education with a hand-off",
