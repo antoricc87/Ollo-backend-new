@@ -145,8 +145,9 @@ class WorkoutPlanService {
 
   /**
    * Put one designed workout on a day. Inside the active week it replaces that
-   * day's planned session (if any); with no active week it opens a one-day
-   * plan so the app has a header to show.
+   * day's planned session (if any); with no active week (or a day outside it)
+   * it opens the ISO week that day belongs to — Monday to Sunday — so the app
+   * shows a whole week with this session on its day, never a one-day plan.
    */
   async putOnDay(patientId: string, input: PlannedSessionInput) {
     const active = await findActive(patientId);
@@ -159,7 +160,9 @@ class WorkoutPlanService {
         return { plan: await this.view(patientId, active), replaced: !!current };
       }
     }
-    const plan = await this.create(patientId, { title: input.title, days: 1, startDate: input.plannedFor, source: "ollie", sessions: [{ ...input, day: 1 }] });
+    const monday = moment.utc(input.plannedFor, DAY).startOf("isoWeek").format(DAY);
+    const day = Math.round((Date.parse(`${input.plannedFor}T00:00:00Z`) - Date.parse(`${monday}T00:00:00Z`)) / 86_400_000) + 1;
+    const plan = await this.create(patientId, { title: "This week", days: 7, startDate: monday, source: "ollie", sessions: [{ ...input, day }] });
     return { plan, replaced: false };
   }
 
