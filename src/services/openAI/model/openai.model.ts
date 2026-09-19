@@ -110,17 +110,39 @@ const DIRECT_AUDIO_EXTENSIONS = new Set(["m4a", "mp3", "mp4", "wav", "webm", "og
 
 const DATA_URL_PREFIX = /^data:audio\/([\w.+-]+);base64,/;
 
-const transcribeFile = async (filePath: string) => {
+const transcribeFile = async (filePath: string, prompt?: string) => {
   const transcription = await openai.audio.transcriptions.create({
     file: fs.createReadStream(filePath),
     model: TRANSCRIBE_MODEL,
-    // No `prompt` hint: on near-silent clips the model echoes the hint back
-    // as the transcript (seen 2026-08-26). Silence is rejected by the caller.
+    // A prompt is context, not instructions: the model continues it as if it
+    // were earlier speech, which biases spelling toward the words it names.
+    // On near-silent clips it can echo the prompt back (seen 2026-08-26) —
+    // `echoesPrompt` below rejects that.
+    ...(prompt ? { prompt } : {}),
   });
   return (transcription.text ?? "").trim();
 };
 
-export const speechToText = async (base64Audio: string) => {
+const PROMPT_LEAD = "Talking to Ollie, my health coach";
+
+const words = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+
+/**
+ * True when the "transcript" is the prompt read back: a run of its words
+ * (silence echo) or its opening line. A real sentence that merely uses the
+ * hinted words ("Greek yogurt and oatmeal") passes.
+ */
+const echoesPrompt = (text: string, prompt: string) => {
+  const said = words(text).join(" ");
+  const hinted = words(prompt).join(" ");
+  return (said.split(" ").length >= 3 && hinted.includes(said)) || said.includes(words(PROMPT_LEAD).join(" "));
+};
+
+/** Words the person is likely to say, as a prompt the model reads as prior speech. */
+export const transcriptionPrompt = (hints: string[]) =>
+  hints.length ? `${PROMPT_LEAD}, about food, workouts, sleep and labs: ${hints.join(", ")}.` : undefined;
+
+export const speechToText = async (base64Audio: string, opts: { prompt?: string } = {}) => {
   const tempId = randomUUID();
   const mime = DATA_URL_PREFIX.exec(base64Audio)?.[1]?.toLowerCase();
   const ext = mime === "mpeg" ? "mp3" : mime === "x-m4a" ? "m4a" : (mime ?? "m4a");
@@ -139,7 +161,7 @@ export const speechToText = async (base64Audio: string) => {
       // The app records AAC in an .m4a container, which the endpoint decodes
       // itself — send it untouched (the old ffmpeg → mp3 hop was lossy).
       if (!direct) throw new Error(`unsupported container: ${ext}`);
-      text = await transcribeFile(tempRawPath);
+      text = await transcribeFile(tempRawPath, opts.prompt);
     } catch (error: unknown) {
       // Unknown or corrupt container: re-mux to mp3 with ffmpeg and retry once.
       const message = error instanceof Error ? error.message : String(error);
@@ -151,10 +173,11 @@ export const speechToText = async (base64Audio: string) => {
           .on("end", resolve)
           .save(tempConvertedPath);
       });
-      text = await transcribeFile(tempConvertedPath);
+      text = await transcribeFile(tempConvertedPath, opts.prompt);
     }
     // No Latin letters or digits at all = nothing intelligible was said.
     if (!/[A-Za-z0-9À-ÿ]/.test(text)) throw new Error("Nothing intelligible in the recording");
+    if (opts.prompt && echoesPrompt(text, opts.prompt)) throw new Error("Nothing intelligible in the recording");
     return text;
   } catch (error: unknown) {
     console.error("Error transcribing the audio", error);

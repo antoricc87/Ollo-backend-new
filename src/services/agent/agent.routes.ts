@@ -24,6 +24,7 @@ export default class Routes {
     this.app.post("/api/agent/snapshot", verifyToken, agentApi.snapshot);
     this.app.post("/api/agent/chat", verifyToken, agentApi.chat);
     this.app.post("/api/agent/chat/cancel", verifyToken, agentApi.cancelTurn);
+    this.app.post("/api/agent/transcribe", verifyToken, agentApi.transcribe);
     this.app.get("/api/agent/tools", verifyToken, agentApi.tools);
 
     this.app.get("/api/agent/proposals", verifyToken, agentApi.listProposals);

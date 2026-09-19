@@ -8,7 +8,7 @@ import { liveTurns } from "../liveTurns";
 import { registry } from "../tools";
 import proposalStore from "../memory/proposals.store";
 import { getPreference, runProactiveFor, setPreference } from "../proactive/proactive.service";
-import { speechToText } from "../../openAI/model/openai.model";
+import { speechToText, transcriptionPrompt } from "../../openAI/model/openai.model";
 import { z } from "zod";
 import { WatchWorkoutSummary } from "../../workouts/domain/workout.schema";
 import encounterService from "../../encounter/model/encounter.model";
@@ -360,6 +360,27 @@ class AgentHandler {
     } catch (error) {
       console.error("agent runProactive", error);
       return response.status(400).json(Util.error({}, "Error running check"));
+    }
+  }
+
+  /* ----------------------------- transcribe ---------------------------- */
+  /**
+   * Speech → text only, no turn. The app records while it shows on-device
+   * live text, then swaps in this (more accurate) transcript when the person
+   * taps stop. `hints` = words they are likely to say (spelling bias only).
+   */
+  async transcribe(request: any, response: Response) {
+    const audio = typeof request.body?.audio === "string" ? request.body.audio : "";
+    if (!audio) return response.status(400).json(Util.error({}, "audio is required"));
+    const hints = Array.isArray(request.body?.hints)
+      ? request.body.hints.filter((h: unknown): h is string => typeof h === "string" && !!h.trim()).map((h: string) => h.trim().slice(0, 40)).slice(0, 60)
+      : [];
+    try {
+      const text = await speechToText(audio, { prompt: transcriptionPrompt(hints) });
+      return response.status(200).json(Util.success({ text }, "Transcript"));
+    } catch (error) {
+      console.error("agent transcribe", error);
+      return response.status(400).json(Util.error({}, "Could not understand the recording"));
     }
   }
 

@@ -476,6 +476,10 @@ nutrition + exercise only (the prompt says so). If the app ever posts a
 weekly HealthKit summary, feed it in via the snapshot `client` block.
 Slice 5 (mobile, 2026-08-25) — see the mobile CLAUDE.md "Ollie" section.
 `POST /api/agent/chat` accepts `isAudio:true` (base64 → `speechToText`).
+`POST /api/agent/transcribe` `{audio, hints?}` → `{text}` (Sep 19 2026): speech
+to text only, no turn — the app's dictation second pass. `hints` become a
+`gpt-4o-transcribe` prompt (`transcriptionPrompt`); `speechToText` rejects a
+transcript that just reads the prompt back (silence echo).
 
 Eval suite (2026-08-25) — `npm run eval:agent` (`scripts/agent-eval.ts`):
 - `tests/agent/fixture.ts` creates a self-contained patient
