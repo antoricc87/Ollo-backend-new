@@ -15,6 +15,62 @@ import { dayKey, safeTz } from "../../agent/memory/dates";
 export const MEAL_TYPES = ["BREAKFAST", "LUNCH", "DINNER", "SNACK"] as const;
 export type MealTypeName = (typeof MEAL_TYPES)[number];
 
+/* ------------------------------- coverage ------------------------------- */
+
+/**
+ * A plan can cover only some slots ("just dinners"). It is then judged
+ * against that slot's share of the day, never the whole-day target, and says
+ * so in one factual line. Shares match suggest_meal's SLOT_SHARE.
+ */
+export const SLOT_SHARE: Record<MealTypeName, number> = { BREAKFAST: 0.25, LUNCH: 0.35, DINNER: 0.35, SNACK: 0.1 };
+const SLOT_PLURAL: Record<MealTypeName, string> = { BREAKFAST: "breakfasts", LUNCH: "lunches", DINNER: "dinners", SNACK: "snacks" };
+
+type Range = [number | null | undefined, number | null | undefined];
+export type Coverage = {
+  slots: MealTypeName[];
+  /** Share of the day's targets the covered slots are sized to (0–1). */
+  share: number;
+  /** "Dinners only" */
+  label: string;
+  /** Whole-day calorie range the share was taken from, when there is one. */
+  dayCalories: Range | null;
+  /** The card / screen / Ollie line — option (c), Sep 21 2026. */
+  line: string;
+};
+
+/**
+ * Normalise requested slots: known, deduped, in day order. Breakfast + lunch
+ * + dinner (with or without a snack) is a whole day → [] (full-day plan).
+ */
+export const normalizeSlots = (raw: unknown): MealTypeName[] => {
+  const want = new Set((Array.isArray(raw) ? raw : []).map((x) => String(x ?? "").toUpperCase()));
+  const slots = MEAL_TYPES.filter((t) => want.has(t));
+  const main = ["BREAKFAST", "LUNCH", "DINNER"].every((t) => want.has(t));
+  return main ? [] : slots;
+};
+
+const listText = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
+/** Coverage of a partial plan, or null for a whole-day plan. `dayTargets` = the unscaled daily targets. */
+export const coverageOf = (slots: MealTypeName[], dayCalories: Range | null): Coverage | null => {
+  if (!slots.length) return null;
+  const share = Math.min(1, slots.reduce((a, t) => a + SLOT_SHARE[t], 0));
+  const names = listText(slots.map((t) => SLOT_PLURAL[t]));
+  const label = `${names.charAt(0).toUpperCase()}${names.slice(1)} only`;
+  const pct = Math.round(share * 100);
+  const [min, max] = dayCalories ?? [null, null];
+  const r = (n: number) => Math.round(n / 10) * 10;
+  const kcal =
+    min != null && max != null ? ` (about ${r(min * share)}–${r(max * share)} of your ${min}–${max} kcal)` : min != null || max != null ? ` (about ${r((min ?? max)! * share)} of ${(min ?? max)} kcal)` : "";
+  return { slots, share, label, dayCalories: dayCalories ?? null, line: `${label} — sized to about ${pct}% of your daily targets${kcal}. The rest of the day is up to you.` };
+};
+
+/** Scale a whole-day range to the covered share. Open ends stay open. */
+export const scaleRange = ([min, max]: Range, share: number): [number | null, number | null] => [
+  min != null ? Math.round(min * share) : null,
+  max != null ? Math.round(max * share) : null,
+];
+
 export type MealPlanMealInput = {
   mealType: MealTypeName;
   name: string;
@@ -31,6 +87,8 @@ export type MealPlanInput = {
   title: string;
   notes?: string | null;
   startDate?: string | null; // YYYY-MM-DD; default today in the patient's tz
+  /** Covered slots; [] = the whole day. */
+  slots: MealTypeName[];
   days: { day: number; meals: MealPlanMealInput[] }[];
   targets?: unknown;
   fit?: unknown;
@@ -80,10 +138,12 @@ export const normalizeMealPlanInput = (raw: any): MealPlanInput => {
     };
   });
   const startDate = typeof raw?.startDate === "string" && DAY_RE.test(raw.startDate) ? raw.startDate : null;
+  const slots = normalizeSlots(raw?.slots);
   return {
     title,
     notes: clean(raw?.notes, 600) || null,
     startDate,
+    slots,
     days: out,
     targets: raw?.targets ?? null,
     fit: raw?.fit ?? null,
@@ -128,6 +188,10 @@ export type MealPlanView = {
   startDate: string;
   endDate: string;
   days: number;
+  /** Covered slots; [] = the whole day. */
+  slots: MealTypeName[];
+  /** Non-null for a partial plan: what share of the day it is sized to, and the line to show. */
+  coverage: Coverage | null;
   status: string;
   targets: unknown;
   fit: unknown;
@@ -186,6 +250,8 @@ class MealPlanService {
       startDate: plan.startDate,
       endDate,
       days: plan.days,
+      slots: (plan.slots ?? []) as MealTypeName[],
+      coverage: ((plan.fit as any)?.coverage as Coverage | undefined) ?? coverageOf((plan.slots ?? []) as MealTypeName[], null),
       status: plan.status,
       targets: plan.targets,
       fit: plan.fit,
@@ -211,6 +277,7 @@ class MealPlanService {
           notes: input.notes ?? null,
           startDate,
           days: input.days.length,
+          slots: input.slots ?? [],
           targets: (input.targets ?? undefined) as any,
           fit: (input.fit ?? undefined) as any,
           source: input.source ?? "ollie",
@@ -284,6 +351,7 @@ class MealPlanService {
       startDate: plan.startDate,
       endDate,
       days: plan.days,
+      slots: (plan.slots ?? []) as MealTypeName[],
       todayIndex: idx >= 1 && idx <= plan.days ? idx : null,
       ended: idx > plan.days,
       notStarted: idx < 1,

@@ -7,7 +7,7 @@
  */
 import "dotenv/config";
 import prisma from "../src/utility/prismaClient";
-import MealPlanService, { looksLike, normalizeMealPlanInput } from "../src/services/meal_plan/model/meal_plan.model";
+import MealPlanService, { coverageOf, looksLike, normalizeMealPlanInput, normalizeSlots } from "../src/services/meal_plan/model/meal_plan.model";
 import { buildPatientSnapshot, renderSnapshot } from "../src/services/agent/context/snapshot";
 import { planInputFromCard } from "../src/services/agent/tools/mealplan.tools";
 
@@ -23,6 +23,7 @@ const ok = (cond: unknown, what: string) => {
   const pid = patient.id;
   const previous = await prisma.mealPlan.findFirst({ where: { patientId: pid, status: "ACTIVE" }, select: { id: true } });
   let createdId: string | null = null;
+  let partialId: string | null = null;
   try {
     // Shape = what generate_meal_plan puts in its card
     const card = {
@@ -78,8 +79,34 @@ const ok = (cond: unknown, what: string) => {
     ok(done?.status === "COMPLETED" && (await MealPlanService.getActive(pid)) === null, "COMPLETED → no active plan");
     const nothing = await MealPlanService.forSnapshot(pid, v.today);
     ok(nothing === null, "snapshot shows none once completed");
+
+    /* ---------------- partial plan: "just dinners" (Sep 21 2026) ---------------- */
+    ok(normalizeSlots(["dinner", "DINNER"]).join() === "DINNER", "slots: deduped + upper-cased");
+    ok(normalizeSlots(["DINNER", "BREAKFAST", "LUNCH", "SNACK"]).length === 0, "slots: breakfast + lunch + dinner = whole day ([])");
+    ok(normalizeSlots(["DINNER", "LUNCH"]).join() === "LUNCH,DINNER", "slots: kept in day order");
+    const cov = coverageOf(["DINNER"], [1500, 1700]);
+    console.log("      coverage line:", cov?.line);
+    ok(cov?.label === "Dinners only" && cov.share === 0.35 && /530–600 of your 1500–1700 kcal/.test(cov.line) && /rest of the day is up to you/.test(cov.line), "coverage: dinners = 35%, line names the kcal share");
+    ok(coverageOf(["LUNCH", "DINNER"], null)?.label === "Lunches and dinners only", "coverage: two-slot label");
+
+    const dinnersCard = {
+      title: "Weeknight dinners",
+      slots: ["DINNER"],
+      targets: { calories: [525, 595] },
+      fit: { ok: true, issues: [], coverage: cov },
+      days: [1, 2, 3].map((day) => ({ day, meals: [{ mealType: "DINNER", name: `Dinner ${day}`, ingredients: ["150 g chicken breast"], calories: 560, protein_g: 45, carbs_g: 40, fat_g: 18, prepMinutes: 25 }] })),
+    };
+    const pv = await MealPlanService.create(pid, planInputFromCard(dinnersCard));
+    partialId = pv.id;
+    ok(pv.slots.join() === "DINNER" && pv.daysOut.every((d) => d.meals.length === 1), "partial plan saved with slots [DINNER], one meal a day");
+    ok(pv.coverage?.label === "Dinners only" && /530–600/.test(pv.coverage.line), "view carries the saved coverage line");
+    const ptext = renderSnapshot((await buildPatientSnapshot(pid))!);
+    const pline = ptext.split("\n").find((l) => l.startsWith("meal plan:")) ?? "";
+    console.log("      " + pline);
+    ok(/covers dinner only/.test(pline) && /suggest_meal/.test(pline), "snapshot says the plan covers dinner only");
   } finally {
     if (createdId) await prisma.mealPlan.delete({ where: { id: createdId } }).catch(() => null);
+    if (partialId) await prisma.mealPlan.delete({ where: { id: partialId } }).catch(() => null);
     if (previous) await prisma.mealPlan.update({ where: { id: previous.id }, data: { status: "ACTIVE" } }).catch(() => null);
     await prisma.$disconnect();
   }

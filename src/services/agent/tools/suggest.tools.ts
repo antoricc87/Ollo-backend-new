@@ -1,12 +1,12 @@
 import { z } from "zod";
-import moment from "moment-timezone";
 import prisma from "../../../utility/prismaClient";
 import { getLLM } from "../llm/openai.client";
 import { analyzeMeal } from "../../meal_analysis/mealAnalysis.service";
 import { MEAL_TYPES } from "../../meal_analysis/mealAnalysis.schema";
 import { defineTool, subjectField } from "./registry";
-import { nutritionContext, type MacroRange } from "./generation.tools";
-import MealPlanService from "../../meal_plan/model/meal_plan.model";
+import { nutritionContext } from "./generation.tools";
+import MealPlanService, { SLOT_SHARE } from "../../meal_plan/model/meal_plan.model";
+import { mealBudget, slotFor } from "./budget";
 
 /**
  * suggest_meal — ONE meal for the next slot, sized to what is left of today's
@@ -19,19 +19,6 @@ import MealPlanService from "../../meal_plan/model/meal_plan.model";
 const r0 = (n: number) => Math.round(n);
 const r1 = (n: number) => Math.round(n * 10) / 10;
 const sum = (xs: number[]) => xs.reduce((a, b) => a + (Number(b) || 0), 0);
-const mid = ([min, max]: MacroRange) => (min != null && max != null ? (min + max) / 2 : max ?? min ?? null);
-
-const slotFor = (tz: string): (typeof MEAL_TYPES)[number] => {
-  const h = moment().tz(tz).hour();
-  if (h < 10) return "BREAKFAST";
-  if (h < 14) return "LUNCH";
-  if (h < 17) return "SNACK";
-  return "DINNER";
-};
-
-/** How much of the day's budget this slot should take when nothing else guides it. */
-const SLOT_SHARE: Record<string, number> = { BREAKFAST: 0.25, LUNCH: 0.35, DINNER: 0.35, SNACK: 0.1 };
-const SLOT_ORDER = ["BREAKFAST", "LUNCH", "SNACK", "DINNER"];
 
 export const suggestMeal = defineTool({
   name: "suggest_meal",
@@ -59,26 +46,15 @@ export const suggestMeal = defineTool({
       if (!slot) return { result: { error: `Day ${input.planDay} of the plan has no ${input.mealType.toLowerCase()} slot.` } };
       planSlot = { planId: plan.id, mealId: slot.id, day: day.day, date: day.date, mealType: slot.mealType, replaces: slot.name, calories: slot.calories, proteins: slot.proteins };
     }
-    const [context, todayFood, favorites, memories] = await Promise.all([
+    const [context, favorites, memories] = await Promise.all([
       nutritionContext(ctx.patientId, subject.id),
-      prisma.dailyFood.findMany({ where: { userId: subject.id, date: { startsWith: ctx.today } }, include: { foodEntries: { select: { mealType: true, description: true, calories: true, proteins: true, carbohydrates: true, fats: true } } } }),
       prisma.favMeal.findMany({ where: { userId: subject.id }, orderBy: { createdAt: "desc" }, take: 15, select: { mealType: true, description: true, calories: true, proteins: true } }),
       prisma.agentMemory.findMany({ where: { patientId: ctx.patientId, active: true, category: { in: ["PREFERENCE", "CONSTRAINT"] } }, take: 20, select: { content: true } }),
     ]);
 
     /* ------------------------------ budget ------------------------------ */
-    const eaten = todayFood.flatMap((d) => d.foodEntries);
-    const eatenKcal = r0(sum(eaten.map((e) => e.calories)));
-    const eatenProtein = r1(sum(eaten.map((e) => e.proteins)));
     const t = context.dailyTargets;
-    const dayKcal = t ? mid(t.calories) : null;
-    const dayProtein = t ? mid(t.protein_g) : null;
-    const kcalLeft = dayKcal != null ? r0(dayKcal - eatenKcal) : null;
-    const proteinLeft = dayProtein != null ? r1(dayProtein - eatenProtein) : null;
-    // Slots still to come after this one (by order) share the remainder.
-    const slotsAfter = SLOT_ORDER.slice(SLOT_ORDER.indexOf(mealType) + 1).filter((s) => !eaten.some((e) => e.mealType === s));
-    const shareAfter = sum(slotsAfter.map((s) => SLOT_SHARE[s]));
-    const share = SLOT_SHARE[mealType] / (SLOT_SHARE[mealType] + shareAfter || 1);
+    const { eatenKcal, eatenProtein, dayKcal, kcalLeft, proteinLeft, slotsOpen: slotsAfter, share } = await mealBudget(subject.id, ctx.today, mealType, t, slotFor(ctx.timeZone));
     const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
     const isSnack = mealType === "SNACK";
     // A plan swap is sized like the meal it replaces, so the day's totals still hold.

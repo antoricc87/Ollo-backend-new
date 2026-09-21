@@ -11,6 +11,7 @@ import { bookAppointment, logMeal, logVital, messageCareTeam } from "./write.too
 import { buildGroceryList, generateMealPlan, generateRecipe } from "./generation.tools";
 import { getWorkouts, logWorkout } from "./workout.tools";
 import { suggestMeal } from "./suggest.tools";
+import { portionCheck } from "./portion.tools";
 import { getMealPlan, saveMealPlan } from "./mealplan.tools";
 import { generateWorkout, generateWorkoutPlan, moveWorkout, saveWorkoutPlan, updateTrainingProfile } from "./workoutplan.tools";
 import { assessCheckin, getCheckins, recordCheckin, resumeCheckin, startCheckin } from "./checkin.tools";
@@ -43,6 +44,7 @@ export const registry = new ToolRegistry().register(
   recallMemory,
   forgetMemory,
   suggestMeal,
+  portionCheck,
   generateMealPlan,
   getMealPlan,
   saveMealPlan,

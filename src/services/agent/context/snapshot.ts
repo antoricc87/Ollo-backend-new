@@ -92,6 +92,8 @@ export type PatientSnapshot = {
     startDate: string;
     endDate: string;
     days: number;
+    /** Covered slots; [] = the whole day. */
+    slots: string[];
     todayIndex: number | null;
     ended: boolean;
     notStarted: boolean;
@@ -573,8 +575,10 @@ export function renderSnapshot(s: PatientSnapshot): string {
   if (s.mealPlan) {
     const mp = s.mealPlan;
     const meals = (xs: typeof mp.today) => xs.map((m) => `${m.mealType.toLowerCase()} — ${m.name} (${m.calories} kcal, P${fmt(m.proteins)})`).join("; ");
+    // A partial plan speaks for its slots only; the rest of the day is open.
+    const covers = mp.slots.length ? ` · covers ${mp.slots.map((t) => t.toLowerCase()).join(" + ")} only (other meals are open — suggest_meal)` : "";
     if (mp.todayIndex) {
-      L.push(`meal plan: "${mp.title}" · day ${mp.todayIndex} of ${mp.days} (${mp.startDate}→${mp.endDate}); get_meal_plan for other days`);
+      L.push(`meal plan: "${mp.title}"${covers} · day ${mp.todayIndex} of ${mp.days} (${mp.startDate}→${mp.endDate}); get_meal_plan for other days`);
       L.push(`  today's planned meals: ${meals(mp.today) || "none"}`);
       if (mp.tomorrow.length) L.push(`  tomorrow: ${meals(mp.tomorrow)}`);
     } else if (mp.notStarted) L.push(`meal plan: "${mp.title}" saved, starts ${mp.startDate} (${mp.days} days)`);

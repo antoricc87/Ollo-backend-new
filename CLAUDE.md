@@ -598,6 +598,59 @@ adherence box (no adherence score — the Health Score judges outcomes).
   self-cleaning — passes 2026-08-30); eval scenario `meal_plan_save`
   (generate → save proposal). Fixture cleanup deletes `mealPlan` rows.
 
+### Partial plans — "just dinners" (Sep 21 2026)
+
+Before: `mealsPerDay` min 2 made Ollie refuse "a plan just for dinners", and
+even with 1 allowed, every check assumed a whole day. Now `generate_meal_plan`
+takes `slots` (e.g. `["DINNER"]`); `MealPlan.slots MealType[]` (additive,
+`[]` = whole day; breakfast + lunch + dinner normalises to `[]`).
+`meal_plan.model.ts` owns the one definition: `SLOT_SHARE` (same as
+suggest_meal: B .25 · L .35 · D .35 · S .10), `normalizeSlots`, `coverageOf`
+→ `{slots, share, label "Dinners only", line}` and `scaleRange`. A partial
+plan is sized AND judged against the covered share (`planTargets`; card and
+saved `targets` are that share, `fit.coverage` keeps the line), the JSON
+schema's mealType enum is restricted to the slots, and `checkMealPlan` also
+flags a day whose slots differ. User ruling (option c): show the share as one
+factual line — "Dinners only — sized to about 35% of your daily targets
+(about 630–700 of your 1800–2000 kcal). The rest of the day is up to you." —
+on the card, the plan page and in Ollie's reply. Snapshot says `covers dinner
+only (other meals are open — suggest_meal)` and the prompt answers
+what-to-eat from the plan only for a covered slot. Smoke + eval
+`meal_plan_dinners_only`.
+
+### portion_check — "I'm having X, how much?" (Sep 21 2026)
+
+`agent/tools/portion.tools.ts` (risk `generate`, card `portion_check`): the
+food is chosen, the question is the amount. `food` = their words verbatim
+(amounts included) → `analyzeMeal` → `meal_analysis/portionCheck.ts`
+`planPortion(ings, aimKcal, minKcal)` (pure, tested): **on_hand** when every
+item with calories was stated (portionSource user/brand) → a spoken fraction
+of what they have (`snapFraction`: quarter…all), never more than all of it;
+**assumed** otherwise → the whole plate scales by one factor, floor `minKcal`
+(300 main / 100 snack — NOT the dial's light stop, which refused a sensible
+510 kcal pasta on real data), cap the dial's hearty; a stated item shrinks
+with the plate but never grows past what they have. `portionLine` is the one
+factual sentence (where the day lands, or what's left for the meals still
+open). Never swaps the dish, no alternatives; Log-it hand-off via `logText`.
+The meal type falls back to a meal word in `food` (the model dropped "for
+dinner" once) before the clock.
+- `agent/tools/budget.ts` `mealBudget(subject, today, mealType, targets,
+  nowSlot)` is shared with suggest_meal: the remainder of today's mid target is
+  split by SLOT_SHARE between this meal and every OTHER meal still open
+  (`openSlots`: not logged, not behind the clock). It used to count only slots
+  AFTER this one, so "dinner" asked at 7 am got the whole day (suggest_meal hid
+  it with its 300–900 clamp). Tests `tests/agent/budget.test.ts`.
+- `src/utils/allergens.ts` `findAllergen/allergiesIn`: allergies are stored as
+  the app's CATEGORIES (Shellfish, Tree nuts, Dairy, Gluten, Wheat, Eggs,
+  Fish, Peanuts, Soy); a plain word match missed nearly all of them ("Shellfish"
+  never matched "shrimp"). Category → foods (FALCPA + sesame) with look-alike
+  exclusions (coconut milk, eggplant, butternut, gluten-free pasta…). Used by
+  portion_check (allergy leads the card and the reply) AND `checkMealPlan`
+  (the meal-plan generator's allergy guard). suggest_meal still relies on the
+  prompt only. Tests `tests/utils/allergens.test.ts`.
+- Evals `portion_check_their_dish`, `portion_check_on_hand`, safety
+  `portion_check_allergy_first`; `suggest_meal_tonight` must not call it.
+
 ## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`
 
 "How much of it" as ONE coarse choice per meal (light | normal | hearty | lots)

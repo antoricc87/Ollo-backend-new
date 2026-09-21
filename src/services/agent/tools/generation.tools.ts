@@ -4,6 +4,8 @@ import { getLLM } from "../llm/openai.client";
 import { randomUUID } from "crypto";
 import { defineTool, subjectField } from "./registry";
 import { planInputFromCard, registerDraft } from "./mealplan.tools";
+import { findAllergen } from "../../../utils/allergens";
+import { coverageOf, MEAL_TYPES, normalizeSlots, scaleRange, SLOT_SHARE, type MealTypeName } from "../../meal_plan/model/meal_plan.model";
 
 /**
  * Generation tools. These are the one place a tool calls the model — as a
@@ -62,13 +64,6 @@ const inRange = (value: number, [min, max]: MacroRange) => {
 };
 const rangeText = ([min, max]: MacroRange, unit: string) => (min != null && max != null ? `${min}–${max}${unit}` : min != null ? `≥${min}${unit}` : max != null ? `≤${max}${unit}` : "?");
 
-/** Case-insensitive word match of an allergen/dislike token in an ingredient line. */
-const mentions = (line: string, token: string) => {
-  const t = token.trim().toLowerCase();
-  if (t.length < 3) return false;
-  return new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(line);
-};
-
 type PlanMeal = { mealType: string; name: string; ingredients: string[]; calories: number; protein_g: number; carbs_g: number; fat_g: number };
 type PlanDay = { day: number; meals: PlanMeal[]; totals: { calories: number; protein_g: number; carbs_g: number; fat_g: number } };
 
@@ -77,9 +72,16 @@ type PlanDay = { day: number; meals: PlanMeal[]; totals: { calories: number; pro
  * not trusted) and list what misses the targets or names an allergen. Days
  * are mutated in place so the card carries the real sums.
  */
-export const checkMealPlan = (days: PlanDay[], targets: DailyTargets | null, allergens: string[]) => {
+export const checkMealPlan = (days: PlanDay[], targets: DailyTargets | null, allergens: string[], slots: MealTypeName[] = []) => {
   const issues: string[] = [];
+  // A partial plan is judged against the covered share ("dinner target"), never the whole day.
+  const vs = slots.length ? `${slots.map((t) => t.toLowerCase()).join(" + ")} target` : "target";
   for (const d of days) {
+    if (slots.length) {
+      const got = d.meals.map((m) => m.mealType).sort().join(",");
+      const want = [...slots].sort().join(",");
+      if (got !== want) issues.push(`Day ${d.day}: should be exactly one ${slots.map((t) => t.toLowerCase()).join(" and one ")} (got ${d.meals.map((m) => m.mealType.toLowerCase()).join(", ") || "nothing"})`);
+    }
     const sum = (k: keyof Omit<PlanMeal, "mealType" | "name" | "ingredients">) => round(d.meals.reduce((a, m) => a + (Number(m[k]) || 0), 0), k === "calories" ? 0 : 1);
     d.totals = { calories: sum("calories"), protein_g: sum("protein_g"), carbs_g: sum("carbs_g"), fat_g: sum("fat_g") };
     if (targets) {
@@ -89,21 +91,34 @@ export const checkMealPlan = (days: PlanDay[], targets: DailyTargets | null, all
         ["carbs_g", " g carbs", d.totals.carbs_g],
         ["fat_g", " g fat", d.totals.fat_g],
       ];
-      for (const [key, unit, value] of checks) if (!inRange(value, targets[key])) issues.push(`Day ${d.day}: ${value}${unit} vs target ${rangeText(targets[key], unit)}`);
+      for (const [key, unit, value] of checks) if (!inRange(value, targets[key])) issues.push(`Day ${d.day}: ${value}${unit} vs ${vs} ${rangeText(targets[key], unit)}`);
     }
     for (const m of d.meals)
-      for (const a of allergens) if (m.ingredients.some((line) => mentions(line, a)) || mentions(m.name, a)) issues.push(`Day ${d.day} ${m.mealType.toLowerCase()} "${m.name}" contains ${a} (allergy)`);
+      for (const a of allergens) {
+        // Allergies are stored as categories ("Shellfish") — findAllergen knows the foods in them.
+        const hit = [m.name, ...m.ingredients].map((line) => findAllergen(line, a)).find(Boolean);
+        if (hit) issues.push(`Day ${d.day} ${m.mealType.toLowerCase()} "${m.name}" contains ${hit} — ${a} (allergy)`);
+      }
   }
   return issues;
 };
 
 /** Concrete per-meal anchors so the model doesn't under-feed: mid-target split across the meals. */
-const perMealGuide = (targets: DailyTargets | null, mealsPerDay: number) => {
+const perMealGuide = (targets: DailyTargets | null, mealsPerDay: number, slots: MealTypeName[] = []) => {
   if (!targets) return null;
   const midOf = ([min, max]: MacroRange) => (min != null && max != null ? (min + max) / 2 : max ?? min ?? null);
   const kcal = midOf(targets.calories);
   const protein = midOf(targets.protein_g);
   if (kcal == null) return null;
+  if (slots.length) {
+    // `targets` here are already the covered share; split it across the covered slots by their weight.
+    const total = slots.reduce((a, t) => a + SLOT_SHARE[t], 0);
+    const r = (n: number) => Math.round(n);
+    return {
+      coveredTotal: { calories: r(kcal), protein_g: protein != null ? r(protein) : null },
+      perSlot: Object.fromEntries(slots.map((t) => [t, { calories: r((kcal * SLOT_SHARE[t]) / total), protein_g: protein != null ? r((protein * SLOT_SHARE[t]) / total) : null }])),
+    };
+  }
   // snacks take ~10% each; the rest is split across main meals
   const snacks = Math.max(0, mealsPerDay - 3);
   const mainShare = (1 - 0.1 * snacks) / Math.min(3, mealsPerDay);
@@ -152,11 +167,17 @@ const MEAL_SCHEMA = {
 export const generateMealPlan = defineTool({
   name: "generate_meal_plan",
   description:
-    "Create a day-by-day meal plan (1–7 days) that fits the user's plan targets, watch-outs, allergies and preferences, plus any request (cuisine, budget, time, what's in the fridge). Returns a card; nothing is saved. For a family member pass subjectId.",
+    "Create a day-by-day meal plan (1–7 days) that fits the user's plan targets, watch-outs, allergies and preferences, plus any request (cuisine, budget, time, what's in the fridge). A plan can cover only some meals — 'just dinners', 'lunches and dinners' → pass slots; it is then sized to that share of the day. Returns a card; nothing is saved. For a family member pass subjectId.",
   schema: z.object({
     days: z.number().int().min(1).max(7).default(3),
-    request: z.string().max(600).optional().describe("The user's wishes verbatim: cuisine, time, budget, ingredients on hand, meals per day…"),
-    mealsPerDay: z.number().int().min(2).max(5).default(4),
+    request: z.string().max(600).optional().describe("The user's wishes verbatim: cuisine, time, budget, ingredients on hand…"),
+    slots: z
+      .array(z.enum(MEAL_TYPES))
+      .min(1)
+      .max(4)
+      .optional()
+      .describe("Only these meals, one each per day — ['DINNER'] for 'just dinners', ['LUNCH','DINNER'] for 'lunches and dinners'. Omit for a whole day."),
+    mealsPerDay: z.number().int().min(2).max(5).default(4).describe("Whole-day plans only (ignored when slots is set)."),
     subjectId: subjectField,
   }),
   risk: "generate",
@@ -164,19 +185,34 @@ export const generateMealPlan = defineTool({
     const subject = await ctx.resolveSubject(input.subjectId);
     const context = await nutritionContext(ctx.patientId, subject.id);
     const memories = await prisma.agentMemory.findMany({ where: { patientId: ctx.patientId, active: true, category: { in: ["PREFERENCE", "CONSTRAINT"] } }, take: 20, select: { content: true } });
+    // Partial plan ("just dinners"): judge and size against the covered share of the day.
+    const slots = normalizeSlots(input.slots);
+    const coverage = coverageOf(slots, context.dailyTargets ? (context.dailyTargets.calories as [number | null, number | null]) : null);
+    const dayTargets = context.dailyTargets;
+    const planTargets: DailyTargets | null =
+      coverage && dayTargets
+        ? { calories: scaleRange(dayTargets.calories, coverage.share), protein_g: scaleRange(dayTargets.protein_g, coverage.share), carbs_g: scaleRange(dayTargets.carbs_g, coverage.share), fat_g: scaleRange(dayTargets.fat_g, coverage.share) }
+        : dayTargets;
+    const mealsPerDay = slots.length || input.mealsPerDay;
+    const slotEnum = slots.length ? slots : ["BREAKFAST", "LUNCH", "DINNER", "SNACK"];
     type Plan = { title: string; days: PlanDay[]; notes: string };
     const generate = (revision?: { previous: Plan; issues: string[] }) => getLLM().json<Plan>({
       system: `You are a registered-dietitian-style meal planner. Produce realistic, repeatable meals with explicit portions in grams. Every day's totals MUST land inside the daily calorie and macro ranges when given — use perMealGuide as the size of each meal (a weight-loss day is still ~1,500 kcal, not 800) and put a real protein portion (120–180 g meat/fish, 200 g Greek yogurt, 3 eggs, 150 g tofu…) in every main meal. Count calories per meal honestly from the portions (protein 4 kcal/g, carbs 4, fat 9). Respect watch-outs (keep flagged nutrients low), allergies (never include, in any form), intolerances, dislikes and stated preferences. Vary meals across days. No supplements, no medical claims.${
+        coverage
+          ? ` This plan covers ONLY ${slots.map((t) => t.toLowerCase()).join(" and ")}: each day has exactly one meal per covered slot and nothing else. The targets you are given are already that share of the day — size each meal with perMealGuide.perSlot as a normal ${slots.map((t) => t.toLowerCase()).join(" / ")}, never as a whole day's food.`
+          : ""
+      }${
         revision ? " You are REVISING a plan that missed its targets: fix every listed issue by changing portions or swapping meals, keep everything that was fine. Meal names stay plain dish names — never annotate them with 'larger portion' or similar." : ""
       }`,
       user: JSON.stringify({
         days: input.days,
-        mealsPerDay: input.mealsPerDay,
-        perMealGuide: perMealGuide(context.dailyTargets, input.mealsPerDay),
+        mealsPerDay,
+        ...(coverage ? { covers: slots } : {}),
+        perMealGuide: perMealGuide(planTargets, mealsPerDay, slots),
         request: input.request ?? null,
-        context,
+        context: { ...context, dailyTargets: planTargets, ...(coverage ? { wholeDayTargets: dayTargets, coveredShare: coverage.share } : {}) },
         remembered: memories.map((m) => m.content),
-        ...(revision ? { previousPlan: revision.previous, issues: revision.issues, stillNeeded: deficits(revision.previous.days, context.dailyTargets) } : {}),
+        ...(revision ? { previousPlan: revision.previous, issues: revision.issues, stillNeeded: deficits(revision.previous.days, planTargets) } : {}),
       }),
       schema: {
         type: "object",
@@ -188,7 +224,7 @@ export const generateMealPlan = defineTool({
               type: "object",
               properties: {
                 day: { type: "integer" },
-                meals: { type: "array", items: { ...MEAL_SCHEMA, properties: { ...MEAL_SCHEMA.properties, mealType: { type: "string", enum: ["BREAKFAST", "LUNCH", "DINNER", "SNACK"] } }, required: [...MEAL_SCHEMA.required, "mealType"] } },
+                meals: { type: "array", items: { ...MEAL_SCHEMA, properties: { ...MEAL_SCHEMA.properties, mealType: { type: "string", enum: slotEnum } }, required: [...MEAL_SCHEMA.required, "mealType"] } },
                 totals: { type: "object", properties: { calories: { type: "integer" }, protein_g: { type: "number" }, carbs_g: { type: "number" }, fat_g: { type: "number" } }, required: ["calories", "protein_g", "carbs_g", "fat_g"], additionalProperties: false },
               },
               required: ["day", "meals", "totals"],
@@ -205,11 +241,11 @@ export const generateMealPlan = defineTool({
     });
     const MAX_REVISIONS = 2;
     let plan = await generate();
-    let issues = checkMealPlan(plan.days, context.dailyTargets, context.foodAllergies);
+    let issues = checkMealPlan(plan.days, planTargets, context.foodAllergies, slots);
     let revised = false;
     for (let i = 0; i < MAX_REVISIONS && issues.length; i++) {
       const revision = await generate({ previous: plan, issues });
-      const revisedIssues = checkMealPlan(revision.days, context.dailyTargets, context.foodAllergies);
+      const revisedIssues = checkMealPlan(revision.days, planTargets, context.foodAllergies, slots);
       // Keep whichever attempt is closer; an allergen hit is never "closer".
       const allergen = (xs: string[]) => xs.some((x) => /\(allergy\)/.test(x));
       if (revisedIssues.length <= issues.length && !(allergen(revisedIssues) && !allergen(issues))) {
@@ -219,9 +255,9 @@ export const generateMealPlan = defineTool({
       }
     }
     for (const d of plan.days) for (const m of d.meals) m.name = cleanName(m.name);
-    const fit = { ok: issues.length === 0, issues, targetsFrom: context.targetsFrom, revised };
+    const fit = { ok: issues.length === 0, issues, targetsFrom: context.targetsFrom, revised, coverage };
     const draftId = randomUUID();
-    const result = { subject: subject.name, subjectId: subject.isSelf ? null : subject.id, draftId, ...plan, targets: context.dailyTargets, fit };
+    const result = { subject: subject.name, subjectId: subject.isSelf ? null : subject.id, draftId, ...plan, slots, coverage, targets: planTargets, fit };
     // Nothing is persisted; the draft is parked so save_meal_plan (or the card's Save) can pick it up.
     try {
       registerDraft(draftId, planInputFromCard(result), result);
@@ -234,7 +270,8 @@ export const generateMealPlan = defineTool({
         title: plan.title,
         days: plan.days.map((d) => ({ day: d.day, totals: d.totals, meals: d.meals.map((m) => ({ meal: `${m.mealType.toLowerCase()}: ${m.name} (${m.calories} kcal)`, ingredients: m.ingredients })) })),
         notes: plan.notes,
-        targets: context.dailyTargets,
+        targets: planTargets,
+        ...(coverage ? { covers: { slots, line: coverage.line, note: "Say in one line which meals it covers and that the rest of the day is up to them — use `line`; don't present these totals as a full day." } } : {}),
         cardActions: "The card has per-meal 'Log' and 'Recipe' buttons, a 'Shopping list' button and a 'Save this week' button. Nothing is saved yet: if the user asks to save/keep/use it, call save_meal_plan with this draftId. For a shopping-list request, call build_grocery_list with every ingredient line above.",
         fit: issues.length ? { ok: false, issues, note: "Tell the user plainly which days miss the targets and by how much; offer to adjust. Do not say it fits." } : { ok: true },
       },

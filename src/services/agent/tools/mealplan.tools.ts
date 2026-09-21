@@ -1,6 +1,6 @@
 import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
-import MealPlanService, { normalizeMealPlanInput, type MealPlanInput, type MealPlanView } from "../../meal_plan/model/meal_plan.model";
+import MealPlanService, { coverageOf, normalizeMealPlanInput, type MealPlanInput, type MealPlanView } from "../../meal_plan/model/meal_plan.model";
 import { dayString, defineTool, shiftDay } from "./registry";
 import type { Card } from "./registry";
 
@@ -29,6 +29,7 @@ export const planInputFromCard = (data: any): MealPlanInput =>
   normalizeMealPlanInput({
     title: data?.title,
     notes: data?.notes,
+    slots: data?.slots ?? [],
     days: (data?.days ?? []).map((d: any) => ({ meals: (d.meals ?? []).map((m: any) => ({ mealType: m.mealType, name: m.name, description: m.description, ingredients: m.ingredients, calories: m.calories, protein_g: m.protein_g, carbs_g: m.carbs_g, fat_g: m.fat_g, prepMinutes: m.prepMinutes })) })),
     targets: data?.targets ?? null,
     fit: data?.fit ?? null,
@@ -70,6 +71,8 @@ export const savedPlanCard = (v: MealPlanView): Card => ({
   data: {
     title: v.title,
     notes: v.notes,
+    slots: v.slots,
+    coverage: v.coverage,
     targets: v.targets,
     fit: v.fit,
     saved: { id: v.id, startDate: v.startDate, endDate: v.endDate, todayIndex: v.todayIndex, status: v.status },
@@ -88,6 +91,7 @@ const compactView = (v: MealPlanView) => ({
   startDate: v.startDate,
   endDate: v.endDate,
   todayIndex: v.todayIndex,
+  ...(v.coverage ? { covers: v.coverage.label, note: "Only these meals are planned; other meals are open — suggest_meal for those." } : {}),
   days: v.daysOut.map((d) => ({
     day: d.day,
     date: d.date,
@@ -134,6 +138,7 @@ export const saveMealPlan = defineTool({
       endDate,
       days: plan.days.length,
       mealsPerDay: Math.round(plan.days.reduce((a, d) => a + d.meals.length, 0) / plan.days.length),
+      covers: coverageOf(plan.slots, null)?.label ?? null,
       firstDay: plan.days[0].meals.map((m) => `${m.mealType.toLowerCase()}: ${m.name}`),
       replaces: existing ? { id: existing.id, title: existing.title, startDate: existing.startDate } : null,
       plan,

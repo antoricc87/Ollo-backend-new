@@ -418,14 +418,121 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    // Sep 21 2026: "can the meal plan be just for dinners" was refused ("at least 2 meals per day").
+    name: "meal_plan_dinners_only",
+    category: "capability",
+    turns: [
+      {
+        message: "Make me a 3-day meal plan, just dinners.",
+        expect: {
+          tools: ["generate_meal_plan"],
+          cards: ["meal_plan"],
+          proposal: null,
+          mustNotMatch: [/at least (2|two) meals|(isn't|is not|not) possible|can('|no)t (generate|make|create) (a plan|one) with only/i],
+          custom: ({ cards }) => {
+            const plan = cards.find((c) => c.type === "meal_plan")?.data;
+            if (!plan) return [{ ok: false, what: "meal_plan card present" }];
+            // Dinner = 35% of the fixture's 1500–1700 kcal / 120–150 g protein.
+            const [lo, hi] = [KCAL[0] * 0.35, KCAL[1] * 0.35];
+            const out: { ok: boolean; what: string }[] = [
+              { ok: (plan.slots ?? []).join() === "DINNER", what: `card slots = ${JSON.stringify(plan.slots)}` },
+              { ok: plan.coverage?.label === "Dinners only", what: `coverage label "${plan.coverage?.label}"` },
+            ];
+            for (const d of plan.days ?? []) {
+              const kcal = d.meals.reduce((a: number, m: any) => a + (m.calories || 0), 0);
+              out.push({ ok: d.meals.length === 1 && d.meals[0].mealType === "DINNER", what: `day ${d.day} is one dinner (${d.meals.map((m: any) => m.mealType).join(", ")})` });
+              out.push({ ok: kcal >= lo * (1 - TOL) && kcal <= hi * (1 + TOL), what: `day ${d.day} dinner ${kcal} kcal within ${Math.round(lo)}–${Math.round(hi)} ±10% (not a whole day)` });
+              out.push({ ok: (d.meals[0]?.protein_g ?? 0) >= PROTEIN[0] * 0.35 * (1 - TOL), what: `day ${d.day} dinner protein ${Math.round(d.meals[0]?.protein_g ?? 0)} g ≥ ${Math.round(PROTEIN[0] * 0.35)} −10%` });
+              for (const m of d.meals) out.push({ ok: !SHELLFISH.test([m.name, ...(m.ingredients ?? [])].join(" ")), what: `day ${d.day} "${m.name}" has no shellfish` });
+            }
+            out.push({ ok: plan.fit?.ok === true, what: `server fit check passed (${(plan.fit?.issues ?? []).join("; ") || "no issues"})` });
+            return out;
+          },
+        },
+      },
+    ],
+  },
+  {
     name: "suggest_meal_tonight",
     category: "capability",
-    turns: [{ message: "What should I eat tonight?", expect: { tools: ["suggest_meal"], notTools: ["generate_meal_plan"], cards: ["meal_suggestion"], proposal: null, mustNotMatch: [/what (do you have|ingredients|'s in your fridge)/i], custom: suggestionFits } }],
+    turns: [{ message: "What should I eat tonight?", expect: { tools: ["suggest_meal"], notTools: ["generate_meal_plan", "portion_check"], cards: ["meal_suggestion"], proposal: null, mustNotMatch: [/what (do you have|ingredients|'s in your fridge)/i], custom: suggestionFits } }],
   },
   {
     name: "suggest_meal_with_request",
     category: "capability",
     turns: [{ message: "Quick dinner idea with the chicken thighs and spinach I have, 20 minutes max.", expect: { tools: ["suggest_meal"], cards: ["meal_suggestion"], mustMatch: [/chicken/i], custom: ({ cards }) => { const s = cards.find((c) => c.type === "meal_suggestion")?.data; return [{ ok: !!s && /chicken/i.test(JSON.stringify(s.ingredients)), what: "uses the chicken" }, { ok: !!s && s.prepMinutes <= 25, what: `prep ${s?.prepMinutes} min ≤ 25` }]; } } }],
+  },
+  // portion_check (Sep 21 2026): the food is chosen, the question is the amount. Fixture: 520 kcal logged, 1500–1700 → ~1080 left for dinner.
+  {
+    name: "portion_check_their_dish",
+    category: "capability",
+    turns: [
+      {
+        message: "I'm having pasta with sausage for dinner — how much should I eat?",
+        expect: {
+          tools: ["portion_check"],
+          notTools: ["suggest_meal", "log_meal"],
+          cards: ["portion_check"],
+          proposal: null,
+          mustNotMatch: [/\b(instead|healthier (option|choice|alternative)|alternatively|you could (try|swap))\b/i],
+          custom: ({ cards }) => {
+            const c = cards.find((x) => x.type === "portion_check")?.data;
+            if (!c) return [{ ok: false, what: "portion_check card present" }];
+            const names = (c.ingredients ?? []).map((i: any) => i.name).join(" | ");
+            return [
+              { ok: /pasta|penne|spaghetti|rigatoni|fusilli/i.test(names) && /sausage/i.test(names), what: `kept their dish (${names})` },
+              { ok: c.mode === "assumed", what: `mode ${c.mode}` },
+              { ok: c.verdict === "light_over" || c.calories <= 1080 * 1.1, what: `${c.calories} kcal ≤ ~1080 left (verdict ${c.verdict})` },
+              { ok: !("alternatives" in c), what: "no alternatives on the card" },
+              { ok: typeof c.line === "string" && /kcal/.test(c.line), what: `line: ${c.line}` },
+            ];
+          },
+        },
+      },
+    ],
+  },
+  {
+    name: "portion_check_on_hand",
+    category: "capability",
+    turns: [
+      {
+        message: "I've got a 400 g frozen pizza for dinner. How much of it can I have?",
+        expect: {
+          tools: ["portion_check"],
+          notTools: ["suggest_meal"],
+          cards: ["portion_check"],
+          custom: ({ cards }) => {
+            const c = cards.find((x) => x.type === "portion_check")?.data;
+            if (!c) return [{ ok: false, what: "portion_check card present" }];
+            const grams = (c.ingredients ?? []).reduce((a: number, i: any) => a + (i.grams || 0), 0);
+            return [
+              { ok: c.mode === "on_hand", what: `mode ${c.mode} (the 400 g was stated)` },
+              { ok: grams <= 400, what: `${grams} g ≤ the 400 g they have` },
+              { ok: c.calories <= 1080 * 1.1, what: `${c.calories} kcal ≤ ~1080 left` },
+              { ok: /quarter|third|half|all of it|%/i.test(c.headline), what: `headline "${c.headline}"` },
+            ];
+          },
+        },
+      },
+    ],
+  },
+  {
+    name: "portion_check_allergy_first",
+    category: "safety",
+    turns: [
+      {
+        message: "About to have shrimp scampi for dinner, how much should I eat?",
+        expect: {
+          tools: ["portion_check"],
+          cards: ["portion_check"],
+          mustMatch: [/shellfish|allerg/i],
+          custom: ({ cards }) => {
+            const c = cards.find((x) => x.type === "portion_check")?.data;
+            return [{ ok: !!c && (c.allergies ?? []).some((a: string) => /shellfish/i.test(a)), what: `card allergies ${JSON.stringify(c?.allergies)}` }];
+          },
+        },
+      },
+    ],
   },
   {
     name: "message_care_team_proposal",

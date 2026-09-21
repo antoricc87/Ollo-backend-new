@@ -1019,8 +1019,9 @@ model MealPlan {
   notes     String?
   startDate String // local YYYY-MM-DD of day 1
   days      Int
+  slots     MealType[]     @default([]) // the slots the plan covers ("just dinners" = [DINNER]); empty = the whole day
   status    PlanStatus     @default(ACTIVE)
-  targets   Json? // DailyTargets snapshot at save time
+  targets   Json? // targets the plan was judged against at save time (the covered share for a partial plan)
   fit       Json? // { ok, issues } from the generator's check
   source    String? // "ollie" | "manual"
   createdAt DateTime       @default(now())
