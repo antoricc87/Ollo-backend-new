@@ -368,6 +368,8 @@ class AgentHandler {
    * Speech → text only, no turn. The app records while it shows on-device
    * live text, then swaps in this (more accurate) transcript when the person
    * taps stop. `hints` = words they are likely to say (spelling bias only).
+   * A long voice note arrives in segments cut at pauses; `previous` = the
+   * text of the segments before, so this one is transcribed in context.
    */
   async transcribe(request: any, response: Response) {
     const audio = typeof request.body?.audio === "string" ? request.body.audio : "";
@@ -375,8 +377,11 @@ class AgentHandler {
     const hints = Array.isArray(request.body?.hints)
       ? request.body.hints.filter((h: unknown): h is string => typeof h === "string" && !!h.trim()).map((h: string) => h.trim().slice(0, 40)).slice(0, 60)
       : [];
+    const previous = typeof request.body?.previous === "string" ? request.body.previous.slice(-2000) : "";
     try {
-      const text = await speechToText(audio, { prompt: transcriptionPrompt(hints) });
+      // Segments can end on a short phrase ("thanks"), so accept ~0.5 s clips;
+      // the app only sends segments it heard speech in.
+      const text = await speechToText(audio, { prompt: transcriptionPrompt(hints, previous), minBytes: 4000 });
       return response.status(200).json(Util.success({ text }, "Transcript"));
     } catch (error) {
       console.error("agent transcribe", error);

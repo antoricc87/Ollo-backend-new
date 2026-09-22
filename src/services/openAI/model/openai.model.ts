@@ -102,8 +102,15 @@ export const getCaloriesFromAudio = async (
 /** ~0.8 s of AAC at the app's HIGH_QUALITY preset. */
 const MIN_AUDIO_BYTES = 8000;
 
-/** OpenAI's full-size transcription model (mini was ~2 WER points worse). */
-const TRANSCRIBE_MODEL = "gpt-4o-transcribe";
+/**
+ * whisper-1, not gpt-4o-transcribe (Sep 22 2026). On real voice notes the
+ * gpt-4o models are LLMs that sometimes stop after the first sentence (2 of 3
+ * runs on a 13 s clip with pauses, 3 of 3 with a prompt) and once ANSWERED the
+ * request instead of transcribing it (288 words of Italian coaching). whisper-1
+ * was complete on every run and as accurate. It reads only the last 224 prompt
+ * tokens, so the earlier-text tail sits last in the prompt.
+ */
+const TRANSCRIBE_MODEL = "whisper-1";
 
 /** Containers the transcription endpoint decodes natively — no re-encode. */
 const DIRECT_AUDIO_EXTENSIONS = new Set(["m4a", "mp3", "mp4", "wav", "webm", "ogg", "oga", "flac", "mpeg", "mpga"]);
@@ -130,19 +137,30 @@ const words = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
 /**
  * True when the "transcript" is the prompt read back: a run of its words
  * (silence echo) or its opening line. A real sentence that merely uses the
- * hinted words ("Greek yogurt and oatmeal") passes.
+ * hinted words ("Greek yogurt and oatmeal") passes. Against the earlier
+ * transcript only long runs count — people do repeat themselves.
  */
-const echoesPrompt = (text: string, prompt: string) => {
-  const said = words(text).join(" ");
-  const hinted = words(prompt).join(" ");
-  return (said.split(" ").length >= 3 && hinted.includes(said)) || said.includes(words(PROMPT_LEAD).join(" "));
+const echoesPrompt = (text: string, prompt: { hints?: string; previous?: string }) => {
+  const said = words(text);
+  const run = said.join(" ");
+  if (prompt.hints && ((said.length >= 3 && words(prompt.hints).join(" ").includes(run)) || run.includes(words(PROMPT_LEAD).join(" ")))) return true;
+  return !!prompt.previous && said.length >= 10 && words(prompt.previous).join(" ").includes(run);
 };
 
-/** Words the person is likely to say, as a prompt the model reads as prior speech. */
-export const transcriptionPrompt = (hints: string[]) =>
-  hints.length ? `${PROMPT_LEAD}, about food, workouts, sleep and labs: ${hints.join(", ")}.` : undefined;
+/**
+ * The transcription prompt: likely words (spelling bias) and, for a segment of
+ * a longer voice note, the text so far — the model continues it as context.
+ */
+export const transcriptionPrompt = (hints: string[], previous = "") => {
+  const parts = {
+    hints: hints.length ? `${PROMPT_LEAD}, about food, workouts, sleep and labs: ${hints.join(", ")}.` : undefined,
+    previous: previous.trim() ? previous.trim().slice(-400) : undefined,
+  };
+  const text = [parts.hints, parts.previous].filter(Boolean).join("\n");
+  return text ? { ...parts, text } : undefined;
+};
 
-export const speechToText = async (base64Audio: string, opts: { prompt?: string } = {}) => {
+export const speechToText = async (base64Audio: string, opts: { prompt?: ReturnType<typeof transcriptionPrompt>; minBytes?: number } = {}) => {
   const tempId = randomUUID();
   const mime = DATA_URL_PREFIX.exec(base64Audio)?.[1]?.toLowerCase();
   const ext = mime === "mpeg" ? "mp3" : mime === "x-m4a" ? "m4a" : (mime ?? "m4a");
@@ -153,7 +171,7 @@ export const speechToText = async (base64Audio: string, opts: { prompt?: string 
     const audioBuffer = Buffer.from(base64Audio.replace(DATA_URL_PREFIX, ""), "base64");
     // A tap-tap on the mic yields a few KB of silence; the transcription model
     // then hallucinates a greeting in a random language. Refuse it up front.
-    if (audioBuffer.length < MIN_AUDIO_BYTES) throw new Error("Recording too short");
+    if (audioBuffer.length < (opts.minBytes ?? MIN_AUDIO_BYTES)) throw new Error("Recording too short");
     await writeFile(tempRawPath, audioBuffer);
 
     let text: string;
@@ -161,7 +179,7 @@ export const speechToText = async (base64Audio: string, opts: { prompt?: string 
       // The app records AAC in an .m4a container, which the endpoint decodes
       // itself — send it untouched (the old ffmpeg → mp3 hop was lossy).
       if (!direct) throw new Error(`unsupported container: ${ext}`);
-      text = await transcribeFile(tempRawPath, opts.prompt);
+      text = await transcribeFile(tempRawPath, opts.prompt?.text);
     } catch (error: unknown) {
       // Unknown or corrupt container: re-mux to mp3 with ffmpeg and retry once.
       const message = error instanceof Error ? error.message : String(error);
@@ -173,7 +191,7 @@ export const speechToText = async (base64Audio: string, opts: { prompt?: string 
           .on("end", resolve)
           .save(tempConvertedPath);
       });
-      text = await transcribeFile(tempConvertedPath, opts.prompt);
+      text = await transcribeFile(tempConvertedPath, opts.prompt?.text);
     }
     // No Latin letters or digits at all = nothing intelligible was said.
     if (!/[A-Za-z0-9À-ÿ]/.test(text)) throw new Error("Nothing intelligible in the recording");
