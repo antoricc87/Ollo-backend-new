@@ -333,12 +333,13 @@ export type WeekAsk = {
   request?: string | null;
 };
 
-type WeekOut = { title: string; notes: string; sessions: { day: number; title: string; activityKey: string; focus: (typeof FOCUS)[number]; durationMin: number; muscleGroups: string[]; why: string }[] };
+type WeekOut = { title: string; notes: string; keepDay: number; sessions: { day: number; title: string; activityKey: string; focus: (typeof FOCUS)[number]; durationMin: number; muscleGroups: string[]; why: string }[] };
 
 const WEEK_SYSTEM = `You are a coach laying out ONE training week for a specific person: which days train, what each day is for. Rules:
 - Exactly sessionsPerWeek sessions across the days (day 1 = startDate). Use preferredDays when given (the dayNames list maps day → weekday); otherwise spread sessions with rest between hard days.
 - A sensible split for the count and experience: 2 → full body ×2; 3 → full body ×3 or push/pull/legs; 4 → upper/lower ×2; 5–6 → push/pull/legs + conditioning. Mix in conditioning/mobility/endurance when the focus or the plan asks for it (a weight-loss plan likes one conditioning day).
 - Never put the same heavy muscle groups on consecutive days. Respect recent sessions (day 1 may follow a hard day already done).
+- Session titles are SHORT and in sentence case ("Full body strength", "Lower back recovery"), never Title Case; put the emphasis in muscleGroups, not in brackets after the title.
 - Respect limitations, equipment and place. why = one line per session, second person.
 - Output ONLY the schema.`;
 
@@ -347,6 +348,7 @@ const WEEK_OUT = {
   properties: {
     title: { type: "string", description: "e.g. 'Upper / lower week', 'Three full-body sessions'" },
     notes: { type: "string", description: "2 short lines about the week: what it builds, what to do if a day is missed" },
+    keepDay: { type: "integer", description: "The one day to keep if they can only do one — the card tags it" },
     sessions: {
       type: "array",
       items: {
@@ -365,11 +367,11 @@ const WEEK_OUT = {
       },
     },
   },
-  required: ["title", "notes", "sessions"],
+  required: ["title", "notes", "keepDay", "sessions"],
   additionalProperties: false,
 } as const;
 
-export type DesignedWeek = { title: string; notes: string; sessions: (DesignedSession & { day: number })[]; fit: { ok: boolean; issues: string[] }; model: string; latencyMs: number };
+export type DesignedWeek = { title: string; notes: string; keepDay: number | null; sessions: (DesignedSession & { day: number })[]; fit: { ok: boolean; issues: string[] }; model: string; latencyMs: number };
 
 export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model?: string } = {}): Promise<DesignedWeek> => {
   const llm = getLLM();
@@ -433,5 +435,5 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
       return { ...d, day: s.day };
     })
   );
-  return { title: skeleton.title.slice(0, 120), notes: skeleton.notes, sessions: designed, fit: { ok: issues.length === 0 && designed.every((d) => d.fit.ok), issues: [...issues, ...designed.flatMap((d) => d.fit.issues.map((i) => `day ${d.day}: ${i}`))] }, model, latencyMs: Date.now() - t0 };
+  return { title: skeleton.title.slice(0, 120), notes: skeleton.notes, keepDay: sessions.some((x) => x.day === skeleton.keepDay) ? skeleton.keepDay : null, sessions: designed, fit: { ok: issues.length === 0 && designed.every((d) => d.fit.ok), issues: [...issues, ...designed.flatMap((d) => d.fit.issues.map((i) => `day ${d.day}: ${i}`))] }, model, latencyMs: Date.now() - t0 };
 };

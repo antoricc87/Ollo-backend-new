@@ -255,6 +255,8 @@ export const generateWorkoutPlan = defineTool({
       draftId,
       title: week.title,
       notes: week.notes,
+      // The day to keep if only one happens — the card tags it "Priority".
+      priorityDay: week.keepDay,
       startDate,
       days: input.days,
       brief: { sessionsPerWeek, sessionMinutes: durationMin, focus: input.focus ?? null, place, request: input.request ?? null },
