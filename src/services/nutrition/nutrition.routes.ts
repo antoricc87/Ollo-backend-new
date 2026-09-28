@@ -22,6 +22,12 @@ export default class Routes {
       verifyToken,
       nutritionApi.fetchFavMeals
     );
+    // Saved-meals screen: identity from the token only; ids are checked against it.
+    this.app.get("/api/nutrition/favorites", verifyToken, nutritionApi.listFavorites);
+    this.app.post("/api/nutrition/favorites", verifyToken, nutritionApi.saveFavoriteFromEntry);
+    this.app.put("/api/nutrition/favorites/:favoriteId", verifyToken, nutritionApi.updateFavorite);
+    this.app.delete("/api/nutrition/favorites/:favoriteId", verifyToken, nutritionApi.removeFavorite);
+    this.app.post("/api/nutrition/favorites/:favoriteId/log", verifyToken, nutritionApi.logFavorite);
     this.app.post(
       "/api/nutrition/generateOptimalValues",
       verifyToken,

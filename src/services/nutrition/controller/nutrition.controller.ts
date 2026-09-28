@@ -2,6 +2,7 @@ import { ObjectId } from "../../../utils/idValidation";
 import Util from "../../../utils/response";
 import e, { Request, Response } from "express";
 import NutritionService from "../model/nutrition.model";
+import FavoritesService, { FavoriteError } from "../model/favorites.service";
 import { getPatientById } from "../../patient/model/patient.model";
 class NutritionHandler {
   //generate portions
@@ -189,7 +190,7 @@ class NutritionHandler {
   }
 
   //delete fav meal
-  async deleteFavMeal(request: Request, response: Response) {
+  async deleteFavMeal(request: any, response: Response) {
     const { favMealId } = request.body;
     if (!favMealId || !ObjectId.isValid(favMealId))
       return response
@@ -201,6 +202,9 @@ class NutritionHandler {
           )
         );
     try {
+      // Only the caller's own favourite — the id alone used to be enough to delete anyone's.
+      const mine = await NutritionService.getFavMeals({ where: { id: favMealId, userId: request.user.id }, select: { id: true } });
+      if (!mine?.length) return response.status(404).json(Util.error({}, "Fav meal not found"));
       const deletedFavMeal = await NutritionService.deleteFavMeal(favMealId);
       if (deletedFavMeal)
         return response
@@ -330,6 +334,36 @@ class NutritionHandler {
   //   }
   // }
 
+  /* ---- saved-meals screen (Sep 18 2026) — FavoritesService, caller-scoped ---- */
+
+  private async favorites(response: Response, run: () => Promise<unknown>, message: string) {
+    try {
+      return response.status(200).json(Util.success(await run(), message));
+    } catch (error: unknown) {
+      if (error instanceof FavoriteError) return response.status(error.status).json(Util.error({}, error.message));
+      console.error(message, error);
+      return response.status(500).json(Util.error({}, "Something went wrong with your saved meals"));
+    }
+  }
+
+  listFavorites = (request: any, response: Response) =>
+    this.favorites(response, () => FavoritesService.list(request.user.id), "Saved meals");
+
+  saveFavoriteFromEntry = (request: any, response: Response) =>
+    this.favorites(response, () => FavoritesService.saveEntry(request.user.id, request.body?.entryId), "Meal saved");
+
+  updateFavorite = (request: any, response: Response) =>
+    this.favorites(response, () => FavoritesService.update(request.user.id, request.params.favoriteId, { name: request.body?.name, slot: request.body?.slot }), "Saved meal updated");
+
+  removeFavorite = (request: any, response: Response) =>
+    this.favorites(response, () => FavoritesService.remove(request.user.id, request.params.favoriteId), "Saved meal removed");
+
+  logFavorite = (request: any, response: Response) =>
+    this.favorites(
+      response,
+      () => FavoritesService.log(request.user.id, request.params.favoriteId, { date: request.body?.date, mealType: request.body?.mealType, portion: request.body?.portion, timeZone: request.body?.timeZone }),
+      "Saved meal logged"
+    );
 }
 
 export default new NutritionHandler();

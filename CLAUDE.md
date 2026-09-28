@@ -758,6 +758,35 @@ breakfast makes the weekly trend jitter.
 - Smoke: `scripts/favmeal-smoke.ts [email]` — 18/18 on 2026-08-31, self-cleaning
   (deletes food entries through `CaloriesService.deleteFoodEntry`, never raw).
 
+## Saved meals in Ollie (Sep 18 2026) — `meal_analysis/mealFavorite.ts`, `agent/tools/favorite.tools.ts`
+
+"My usual breakfast, but no banana and a spoon of honey" logs the stored
+`FavMealIngredient` rows verbatim (no model call, same numbers every time); only
+`add` is analysed. Snapshot `savedMeals` (≤25, useCount desc, stripped from the
+seam) gives the agent the closed list with ids + ingredient names;
+`log_meal.favorites[] {favoriteId, date?, mealType?, portion?, remove?, add?}`
+expands them into the SAME preview/commit path (rows carry `favorite {id, name,
+changes}`, so markDuplicates / catch-up fills treat them like described meals),
+and commit bumps `useCount`/`lastUsedAt`. `remove` matches exact name, else one
+unambiguous partial; misses come back as `savedMealNotes`, never guessed.
+Inside a saved meal a `user` portion reads as `personalized_default`, so the
+dial scales it ("a bigger one"); `brand` stays fixed. `save_favorite` (write:
+from entryIds, or mealType + date of what was logged, or a description as last
+resort; same name → replaces, a `slot` moves from the meal that held it) and
+`delete_favorite` (write; logged meals stay). The app has no favourites screen —
+chat only. Tests `tests/mealFavorite.test.ts`; live smoke
+`scripts/agent-favorite-smoke.ts` (eval fixture, self-cleaning — passes 2026-09-18).
+Saved-meals SCREEN routes (Sep 18 2026, `nutrition/model/favorites.service.ts`,
+caller-scoped — another account's id is a 404): `GET /api/nutrition/favorites`
+(adds `portionScalable`), `PUT /api/nutrition/favorites/:id {name?, slot?|null}`
+(name clash 409; a slot moves off the meal that held it), `DELETE
+/api/nutrition/favorites/:id`, `POST /api/nutrition/favorites/:id/log {mealType?,
+portion?, date?, timeZone?}` (same `favoriteMeal` expansion as log_meal, no
+model call, `recall` when 2+ days late, bumps useCount). The old `POST
+/nutrition/deleteFavMeal` now checks ownership too (it deleted anyone's
+favourite by id). Smokes: `scripts/favorites-screen-smoke.ts` (service, no LLM)
+and `scripts/favorites-http-smoke.ts` (needs the server on :5000) — both pass.
+
 ## Workouts (Aug 26 2026) — `src/services/workouts/`
 
 One physical training session = one `WorkoutSession` row (+ `WorkoutExercise`

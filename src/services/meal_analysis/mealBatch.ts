@@ -11,6 +11,7 @@ import { AnalyzedMeal, MEAL_TYPES, PORTION_STOPS, PortionStop } from "./mealAnal
 import { applyPortionStop, DEFAULT_PORTION_STOP, ensurePortionBase, gramsAtEveryStop, isMealPortionScalable, isPortionStop, rescaleTo } from "./mealPortion";
 import { dayLabel, resolveMealDate } from "./mealDate";
 import type { PatientContext } from "./mealAnalysis.types";
+import type { FavoriteTag } from "./mealFavorite";
 
 /**
  * Batch meal logging: one narration ("yesterday I had…, Tuesday dinner was…")
@@ -38,6 +39,8 @@ export type BatchMeal = AnalyzedMeal & {
   duplicateOf: string | null;
   /** "usual_day" = copied onto a catch-up day from the person's normal day. Anything else is decided at commit (see entrySource). */
   source?: MealSource | null;
+  /** Logged from a saved meal (see mealFavorite.ts) — which one, and what was different this time. */
+  favorite?: FavoriteTag | null;
 };
 
 /**
@@ -262,6 +265,8 @@ export const mealRow = (m: BatchMeal, index: number) => ({
   duplicateOf: m.duplicateOf,
   /** Filled from the person's usual day rather than described. */
   usual: m.source === "usual_day",
+  /** Logged from a saved meal: its name and this time's differences ("no juice, + banana"). */
+  favorite: m.favorite ?? null,
   portion: m.portion ?? DEFAULT_PORTION_STOP,
   /** False when every item's amount came from the user or a brand — the dial would do nothing. */
   portionScalable: isMealPortionScalable(m.ingredients as any),

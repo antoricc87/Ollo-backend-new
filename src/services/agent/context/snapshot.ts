@@ -10,6 +10,7 @@ import { buildCurrentLabs, labFreshness, LabFreshness } from "../../../utils/lab
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
 import memoryStore from "../memory/memory.store";
 import MealPlanService from "../../meal_plan/model/meal_plan.model";
+import { favoriteLine } from "../../meal_analysis/mealFavorite";
 import {
   dayKey,
   daysBetween,
@@ -120,6 +121,8 @@ export type PatientSnapshot = {
   training: string | null;
   /** Last day before today with any food logged, and how many days ago — drives the catch-up offer. */
   food_gap: { lastLoggedDay: string | null; daysSince: number | null };
+  /** Saved meals (FavMeal), most used first, one rendered line each — log_meal's `favorites` needs their ids. */
+  savedMeals: string[];
   today_log: {
     calories: number | null;
     protein_g: number | null;
@@ -206,6 +209,8 @@ const uniq = (xs: (string | null | undefined)[]) =>
 const SESSION_MIN_MINUTES = 10;
 const MAX_FLAGGED_LABS = 10;
 const MAX_MEMORIES = 20;
+/** ~40 tokens each; beyond this the list costs more than it saves. */
+const MAX_SAVED_MEALS = 25;
 
 export async function buildPatientSnapshot(
   patientId: string,
@@ -301,6 +306,19 @@ export async function buildPatientSnapshot(
     orderBy: { date: "desc" },
     select: { date: true },
   });
+  const savedMeals = (
+    await prisma.favMeal
+      .findMany({
+        where: { userId: patientId },
+        orderBy: [{ useCount: "desc" }, { createdAt: "asc" }],
+        take: MAX_SAVED_MEALS,
+        select: { id: true, description: true, mealType: true, slot: true, calories: true, aliases: true, ingredients: { select: { name: true }, orderBy: { sortOrder: "asc" } } },
+      })
+      .catch((e) => {
+        console.error("snapshot: saved meals", e);
+        return [];
+      })
+  ).map((f) => favoriteLine(f) + (f.aliases.length ? ` (also: ${f.aliases.join(", ")})` : ""));
   const lastLoggedDay = lastFood ? lastFood.date.slice(0, 10) : null;
   const food_gap: PatientSnapshot["food_gap"] = {
     lastLoggedDay,
@@ -480,6 +498,7 @@ export async function buildPatientSnapshot(
     workoutPlan,
     training,
     food_gap,
+    savedMeals,
     today_log,
     week: weekOut,
     vitals,
@@ -611,6 +630,10 @@ export function renderSnapshot(s: PatientSnapshot): string {
   const g = s.food_gap;
   if (g?.lastLoggedDay && g.daysSince !== null && g.daysSince >= 3)
     L.push(`food log: nothing logged before today since ${g.lastLoggedDay} (${g.daysSince} days) — a catch-up is get_logging_gaps then log_meal with fill`);
+  if (s.savedMeals?.length) {
+    L.push(`saved meals (log by id via log_meal favorites; a "usual <meal>" answers to "my usual <meal>"):`);
+    for (const line of s.savedMeals) L.push(`  - ${line}`);
+  } else L.push("saved meals: none yet (save_favorite saves a logged meal by name)");
 
   const w = s.week;
   L.push(

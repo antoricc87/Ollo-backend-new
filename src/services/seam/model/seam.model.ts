@@ -85,7 +85,7 @@ export class SeamPatientService {
   static async snapshot(patientId: string) {
     const s = await buildPatientSnapshot(patientId);
     if (!s) return null;
-    const { memories: _m, subAccounts: _s, client: _c, mealPlan: _mp, ...rest } = s;
+    const { memories: _m, subAccounts: _s, client: _c, mealPlan: _mp, savedMeals: _sm, ...rest } = s;
     return rest;
   }
 

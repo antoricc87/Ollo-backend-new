@@ -20,6 +20,9 @@ import {
   type UsualDay,
 } from "../../meal_analysis/mealBatch";
 import { PORTION_STOPS } from "../../meal_analysis/mealAnalysis.schema";
+import { analyzeMeal } from "../../meal_analysis/mealAnalysis.service";
+import { favoriteMeal, FavoriteRefSchema, type FavoriteRef, type StoredFavorite } from "../../meal_analysis/mealFavorite";
+import { FAV_MEAL_INCLUDE } from "../../nutrition/model/favMealIngredients";
 import CaloriesService from "../../calories_tracker/model/calories.model";
 import WeightService from "../../weight_tracker/model/weight.model";
 import BFPService from "../../bodyFatPercentage/model/bfp.model";
@@ -104,17 +107,53 @@ const LogMealSchema = z
       })
       .optional()
       .describe("Catch-up only: put the usual day on every empty meal slot from→to (at most 21 days; never today — today is logged as it happens). Meals in `description` and meals already logged keep their slots."),
+    favorites: z
+      .array(FavoriteRefSchema)
+      .max(10)
+      .optional()
+      .describe("Saved meals the user named ('my usual breakfast', a saved meal's name) — one entry each, with what was different this time. Leave those meals OUT of `description`."),
     subjectId: subjectField,
   })
-  .refine((v) => (v.description?.trim().length ?? 0) >= 3 || !!v.fill, { message: "describe what was eaten, or pass fill" });
+  .refine((v) => (v.description?.trim().length ?? 0) >= 3 || !!v.fill || !!v.favorites?.length, { message: "describe what was eaten, pass favorites, or pass fill" });
 
 type LogMealInput = z.infer<typeof LogMealSchema>;
+
+/**
+ * Saved meals the agent named, expanded from their stored rows. Only an `add`
+ * ("plus a banana") costs a model call. Unknown ids and removals that name no
+ * ingredient come back as notes — never guessed.
+ */
+async function expandFavorites(refs: FavoriteRef[], subjectId: string, today: string) {
+  if (!refs.length) return { meals: [] as BatchMeal[], notes: [] as string[] };
+  const ids = [...new Set(refs.map((r) => r.favoriteId))];
+  const stored = await prisma.favMeal.findMany({ where: { id: { in: ids }, userId: subjectId }, include: FAV_MEAL_INCLUDE });
+  const byId = new Map(stored.map((f) => [f.id, f as unknown as StoredFavorite]));
+  const notes: string[] = [];
+  const meals: BatchMeal[] = [];
+  await Promise.all(
+    refs.map(async (ref) => {
+      const fav = byId.get(ref.favoriteId);
+      if (!fav) return void notes.push(`No saved meal with id ${ref.favoriteId} — use an id from the snapshot's saved meals (or get_favorites).`);
+      if (!fav.ingredients?.length) return void notes.push(`"${fav.description}" has no ingredients saved — describe it instead.`);
+      if (ref.date && ref.date > today) return void notes.push(`"${fav.description}": ${ref.date} is in the future.`);
+      const mealType = ref.mealType ?? fav.slot ?? fav.mealType;
+      const added = ref.add
+        ? (await analyzeMeal({ text: ref.add, mealTypeHint: mealType, todayLocal: today }, { patientId: subjectId })).meals.flatMap((m) => m.ingredients ?? [])
+        : [];
+      if (ref.add && !added.length) notes.push(`Couldn't identify any food in "${ref.add}" — ask what they added.`);
+      const { meal, unmatched } = favoriteMeal(fav, ref, today, added);
+      if (unmatched.length) notes.push(`"${fav.description}" has no ${unmatched.map((u) => `"${u}"`).join(", ")} to leave out — its ingredients: ${fav.ingredients.map((i: any) => i.name).join(", ")}.`);
+      meals.push(meal);
+    })
+  );
+  return { meals, notes };
+}
 
 /** Analyse, date, de-duplicate and fill — shared by run and the no-preview commit path. */
 async function prepareMeals(ctx: ToolContext, input: LogMealInput, subjectId: string) {
   const text = input.description?.trim() ?? "";
   const fillDays = input.fill ? fillDates(input.fill.from, input.fill.to, ctx.today) : [];
-  const [analysis, usual] = await Promise.all([
+  const [analysis, usual, saved] = await Promise.all([
     text.length >= 3
       ? analyzeNarration(text, { patientId: subjectId, today: ctx.today, timeZone: ctx.timeZone, mealTypeHint: input.mealType, dateOverride: input.date })
       : Promise.resolve({ meals: [] as BatchMeal[], heldBack: [], model: "", segments: 0 }),
@@ -124,18 +163,20 @@ async function prepareMeals(ctx: ToolContext, input: LogMealInput, subjectId: st
           { patientId: subjectId, today: ctx.today }
         )
       : Promise.resolve([] as UsualDay[]),
+    expandFavorites(input.favorites ?? [], subjectId, ctx.today),
   ]);
-  const existing = await existingMealsByDay(subjectId, [...new Set([...analysis.meals.map((m) => m.date), ...fillDays])]);
-  const described = markDuplicates(analysis.meals, existing);
+  const named = [...analysis.meals, ...saved.meals];
+  const existing = await existingMealsByDay(subjectId, [...new Set([...named.map((m) => m.date), ...fillDays])]);
+  const described = markDuplicates(named, existing);
   const fills = planFills(usual, fillDays, existing, described);
   const meals = [...described, ...fills].sort((a, b) => (a.date === b.date ? MEAL_ORDER[a.mealType] - MEAL_ORDER[b.mealType] : a.date < b.date ? -1 : 1));
-  return { analysis, usual, fillDays, fills, existing, meals, model: analysis.model || "" };
+  return { analysis, usual, fillDays, fills, existing, meals, favoriteNotes: saved.notes, model: analysis.model || (saved.meals.length ? "saved-meal" : "") };
 }
 
 export const logMeal = defineTool({
   name: "log_meal",
   description:
-    "Log food the user ate (their own or a family member's) — a single meal, several days ('yesterday I had…, Tuesday dinner was…'), or a catch-up over days they never logged. Pass the user's words verbatim in ONE call: foods, portions, brand names and every day/time reference. For a catch-up, `fill` puts their normal day on every empty slot in the window, so they only describe the days that were different. The tool analyses everything into dated meals with calories and macros and returns a PREVIEW the user confirms in the app (ticking meals or whole days on/off, editing portions) before anything is saved. Meals whose day it cannot pin down come back as heldBack: ask the user which day and call the tool again for those with `date` set. Do not call it for hypothetical meals or meal ideas.",
+    "Log food the user ate (their own or a family member's) — a single meal, several days ('yesterday I had…, Tuesday dinner was…'), or a catch-up over days they never logged. Pass the user's words verbatim in ONE call: foods, portions, brand names and every day/time reference. For a catch-up, `fill` puts their normal day on every empty slot in the window, so they only describe the days that were different. The tool analyses everything into dated meals with calories and macros and returns a PREVIEW the user confirms in the app (ticking meals or whole days on/off, editing portions) before anything is saved. Meals whose day it cannot pin down come back as heldBack: ask the user which day and call the tool again for those with `date` set. When they name a SAVED meal (snapshot 'saved meals': its name, an alias, or 'my usual <meal>' for one saved as usual), pass it in `favorites` instead of describing it — its stored numbers are logged as-is, with `remove` / `add` / `portion` for what was different this time; anything else they ate goes in `description` in the same call. Do not call it for hypothetical meals or meal ideas.",
   schema: LogMealSchema,
   risk: "write",
   applyPreviewEdits: applyMealEdits,
@@ -143,10 +184,11 @@ export const logMeal = defineTool({
     const subject = await ctx.resolveSubject(input.subjectId);
     if (input.date && input.date > ctx.today) return { result: { error: "That day is in the future — meals can only be logged for today or earlier." } };
     if (input.fill && input.fill.from > input.fill.to) return { result: { error: "fill.from is after fill.to." } };
-    const { analysis, usual, fillDays, fills, existing, meals, model } = await prepareMeals(ctx, input, subject.id);
+    const { analysis, usual, fillDays, fills, existing, meals, favoriteNotes, model } = await prepareMeals(ctx, input, subject.id);
     if (!meals.length && !analysis.heldBack.length) {
       if (input.fill && usual.some((u) => u.meals.length) && fillDays.length)
         return { result: { proposed: false, note: "Every meal slot in that window is already logged or described — nothing to fill." } };
+      if (favoriteNotes.length) return { result: { error: favoriteNotes.join(" ") } };
       return { result: { error: "I couldn't identify any food in that description — could you describe the meal again with the main items?" } };
     }
 
@@ -195,6 +237,7 @@ export const logMeal = defineTool({
         ...(duplicates ? { note: `${duplicates} meal(s) look already logged for that slot and are unticked by default — mention it briefly; the user can tick them back.` } : {}),
         ...(analysis.heldBack.length ? { heldBack: analysis.heldBack, heldBackNote: "Not in the card: I couldn't tell which day. Ask the user, then call log_meal again with `date` and the description given." } : {}),
         ...(Object.keys(missing).length ? { missingSlots: missing, missingNote: "Slots with nothing logged or proposed. Ask about at most one, only if it seems useful; never invent meals." } : {}),
+        ...(favoriteNotes.length ? { savedMealNotes: favoriteNotes } : {}),
       },
       proposal: { title, summary, preview },
     };
@@ -242,6 +285,13 @@ export const logMeal = defineTool({
         if (Array.isArray(saved)) rows.push(...saved);
       }
       days.push({ date, meals: rows.map((e: any) => ({ id: e.id, description: e.description, mealType: e.mealType, calories: e.calories, ingredients: e.ingredients?.length ?? 0 })) });
+    }
+    // Most-used saved meals come first in the snapshot.
+    const favIds = toSave.map((m) => m.favorite?.id).filter((id): id is string => !!id);
+    for (const id of new Set(favIds)) {
+      await prisma.favMeal
+        .updateMany({ where: { id, userId: subjectId }, data: { useCount: { increment: favIds.filter((x) => x === id).length }, lastUsedAt: new Date() } })
+        .catch((e) => console.error("log_meal: favourite use count", e));
     }
     const logged = days.flatMap((d) => d.meals.map((m) => ({ ...m, date: d.date })));
     const result = { logged, days, date: days.length === 1 ? days[0].date : undefined, totalCalories: logged.reduce((a, m) => a + (m.calories ?? 0), 0) };

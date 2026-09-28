@@ -164,22 +164,24 @@ export const getLoggingGaps = defineTool({
 
 export const getFavorites = defineTool({
   name: "get_favorites",
-  description: "The user's saved favorite meals (name, meal type, calories, macros). Use before suggesting meals or when the user mentions 'my usual' / 'my favorite'.",
+  description: "The user's saved meals (name, usual slot, calories, macros, ingredients) — the snapshot already lists them; call this for macros or when the list there is cut short. Log one with log_meal's favorites.",
   schema: z.object({ subjectId: subjectField }),
   risk: "read",
   async run(ctx, input) {
     const subject = await ctx.resolveSubject(input.subjectId);
     const favs = await prisma.favMeal.findMany({
       where: { userId: subject.id },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ useCount: "desc" }, { createdAt: "desc" }],
       take: 40,
-      select: { id: true, mealType: true, description: true, quantity: true, calories: true, proteins: true, carbohydrates: true, fats: true },
+      select: { id: true, mealType: true, slot: true, aliases: true, description: true, calories: true, proteins: true, carbohydrates: true, fats: true, ingredients: { select: { name: true }, orderBy: { sortOrder: "asc" } } },
     });
     const result = favs.map((f) => ({
       id: f.id,
+      name: f.description,
       mealType: f.mealType,
-      description: f.description,
-      quantity: f.quantity,
+      usualFor: f.slot,
+      aliases: f.aliases,
+      ingredients: f.ingredients.map((i) => i.name),
       calories: f.calories,
       protein_g: r1(f.proteins),
       carbs_g: r1(f.carbohydrates),

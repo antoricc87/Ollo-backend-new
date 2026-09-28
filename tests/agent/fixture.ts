@@ -145,6 +145,7 @@ export async function destroyFixture() {
   await prisma.workoutPlan.deleteMany({ where: { patientId: uid } });
   await prisma.trainingProfile.deleteMany({ where: { patientId: uid } });
   await prisma.foodEntry.deleteMany({ where: { dailyFood: { userId: uid } } });
+  await prisma.favMeal.deleteMany({ where: { userId: uid } }); // no FK to Patient; ingredient rows cascade
   await prisma.dailyFood.deleteMany({ where: { userId: uid } });
   await prisma.weeklyFood.deleteMany({ where: { userId: uid } }).catch(() => null);
   await prisma.foodTracker.deleteMany({ where: { userId: uid } });
