@@ -9,20 +9,28 @@ import { isoWeekRange, safeTz } from "../memory/dates";
 /**
  * Proactive runs: the same agent, opened by a job instead of a message.
  *   weekly_review  Monday morning — judge last week vs the plan, propose tweaks
- *   daily_checkin  user-chosen local hour — today vs targets, one action
+ *   signal         a detector cleared its bar (services/signals) — explain it
  *   watch_out      event-driven — a new lab report / flagged reading
  *   plan_week      Sunday evening — lay out next week's training (a draft card)
+ *
+ * `daily_checkin` was retired on 2026-09-25 (ruling): it ran on the clock, so
+ * it had to say something every day whether or not anything had happened.
+ * Signals replace it. `AgentPreference.dailyCheckinHour` / `lastDailyCheckinAt`
+ * are left on the table on purpose — dropping columns on Railway is a
+ * destructive migration for no gain.
  * Each run creates (or reuses) a PROACTIVE thread and pushes a notification
  * that deep-links to it. Eligibility is decided here, not in the worker.
  */
 
-export const DEFAULT_CHECKIN_HOUR = 18;
 export const WEEKLY_REVIEW_HOUR = 8; // local, Monday
+/** Local hour the signal scan runs — morning, after the night's data has synced. */
+export const SIGNAL_SCAN_HOUR = 9;
 export const PLAN_WEEK_HOUR = 18; // local, Sunday
 const INACTIVE_AFTER_DAYS = 14;
 
 export type Preference = {
   proactiveEnabled: boolean;
+  /** Retired with `daily_checkin` (2026-09-25); the column stays, unread. */
   dailyCheckinHour: number | null;
   weeklyReviewEnabled: boolean;
   watchOutsEnabled: boolean;
@@ -34,7 +42,7 @@ export type Preference = {
 
 export const DEFAULT_PREFERENCE: Preference = {
   proactiveEnabled: true,
-  dailyCheckinHour: DEFAULT_CHECKIN_HOUR,
+  dailyCheckinHour: null,
   weeklyReviewEnabled: true,
   watchOutsEnabled: true,
   planWeekEnabled: true,
@@ -46,7 +54,7 @@ export const DEFAULT_PREFERENCE: Preference = {
 export const getPreference = async (patientId: string): Promise<Preference> =>
   (await prisma.agentPreference.findUnique({ where: { patientId } })) ?? DEFAULT_PREFERENCE;
 
-export const setPreference = (patientId: string, patch: Partial<Pick<Preference, "proactiveEnabled" | "dailyCheckinHour" | "weeklyReviewEnabled" | "watchOutsEnabled" | "planWeekEnabled">>) =>
+export const setPreference = (patientId: string, patch: Partial<Pick<Preference, "proactiveEnabled" | "weeklyReviewEnabled" | "watchOutsEnabled" | "planWeekEnabled">>) =>
   prisma.agentPreference.upsert({ where: { patientId }, create: { patientId, ...patch }, update: patch });
 
 /** Logged anything in the last N days? Keeps jobs from nagging dormant accounts. */
@@ -72,8 +80,13 @@ const planWeekInstruction = (tz: string) => {
   return `[Sunday planning for the week starting ${nextMonday}. First call get_workouts with status=all from=${thisWeek.start} to=${thisWeek.end} to see what was planned and done this week. Then call generate_workout_plan with startDate=${nextMonday}, days=7 (sessionsPerWeek from the plan target; keep what worked, adjust what was missed). Present the split in a few lines and say the card has Save. Do NOT call save_workout_plan.]`;
 };
 
-const dailyInstruction = (tz: string) =>
-  `[Daily check-in at ${moment().tz(tz).format("HH:mm")} local. Use the snapshot; call get_meals only if you need meal detail.]`;
+/**
+ * A signal's instruction carries the detector's finding verbatim. The agent is
+ * explaining a result, not looking for one — so the numbers are handed to it
+ * rather than left to a tool call that might return something else.
+ */
+export const signalInstruction = (finding: { detectorKey: string; label: string; severity: number; evidence: unknown; baseline: unknown }) =>
+  `[A signal fired: ${finding.detectorKey} — ${finding.label}. Evidence: ${JSON.stringify(finding.evidence)}. Their usual/target: ${JSON.stringify(finding.baseline)}. Explain THIS and nothing else. Do not call tools to look for other findings.]`;
 
 export const watchOutInstruction = (reason: string) => `[Event: ${reason}. Use get_labs with flaggedOnly=true (or get_vitals) to see the exact values before writing.]`;
 
@@ -81,21 +94,23 @@ export const watchOutInstruction = (reason: string) => `[Event: ${reason}. Use g
 
 const TITLES: Record<ProactiveKind, string> = {
   weekly_review: "Your weekly review",
-  daily_checkin: "Daily check-in",
+  signal: "Something changed",
   watch_out: "Something new in your data",
   plan_week: "Next week's training",
 };
 
-export async function runProactiveFor(patientId: string, kind: ProactiveKind, opts: { reason?: string; notify?: boolean; threadId?: string | null } = {}) {
+export async function runProactiveFor(patientId: string, kind: ProactiveKind, opts: { reason?: string; notify?: boolean; threadId?: string | null; instruction?: string; title?: string } = {}) {
   const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { timeZone: true, firstName: true } });
   if (!patient) return { skipped: "no patient" as const };
   const tz = safeTz(patient.timeZone);
+  // A signal brings its own instruction (the detector's finding); the scheduled
+  // kinds write theirs from the calendar.
   const instruction =
-    kind === "weekly_review" ? weeklyInstruction(tz) : kind === "daily_checkin" ? dailyInstruction(tz) : kind === "plan_week" ? planWeekInstruction(tz) : watchOutInstruction(opts.reason ?? "new data");
-  const title = kind === "weekly_review" ? `Weekly review · ${isoWeekRange(tz, moment().tz(tz).subtract(1, "week")).start}` : TITLES[kind];
+    opts.instruction ?? (kind === "weekly_review" ? weeklyInstruction(tz) : kind === "plan_week" ? planWeekInstruction(tz) : watchOutInstruction(opts.reason ?? "new data"));
+  const title = opts.title ?? (kind === "weekly_review" ? `Weekly review · ${isoWeekRange(tz, moment().tz(tz).subtract(1, "week")).start}` : TITLES[kind]);
 
   const r = await runProactiveCollect({ patientId, kind, title, instruction, threadId: opts.threadId ?? null });
-  const stamp = kind === "weekly_review" ? { lastWeeklyReviewAt: new Date() } : kind === "daily_checkin" ? { lastDailyCheckinAt: new Date() } : kind === "plan_week" ? { lastPlanWeekAt: new Date() } : {};
+  const stamp = kind === "weekly_review" ? { lastWeeklyReviewAt: new Date() } : kind === "plan_week" ? { lastPlanWeekAt: new Date() } : {};
   if (Object.keys(stamp).length)
     await prisma.agentPreference.upsert({ where: { patientId }, create: { patientId, ...stamp }, update: stamp });
   if (!r.done) {
@@ -129,7 +144,7 @@ export async function runProactiveFor(patientId: string, kind: ProactiveKind, op
  * Patients whose LOCAL clock is at the given hour right now and who are due.
  * Called once per UTC hour by the worker; cheap enough to scan all patients.
  */
-export type ScheduledKind = "weekly_review" | "daily_checkin" | "plan_week";
+export type ScheduledKind = "weekly_review" | "plan_week";
 
 export async function duePatients(kind: ScheduledKind, now = new Date()) {
   const patients = await prisma.patient.findMany({
@@ -150,9 +165,6 @@ export async function duePatients(kind: ScheduledKind, now = new Date()) {
       if (!pref.planWeekEnabled || local.isoWeekday() !== 7 || local.hour() !== PLAN_WEEK_HOUR) continue;
       if (!p.workoutPlans.length && !p.trainingProfile && !p.healthPlans.length) continue;
       if (pref.lastPlanWeekAt && moment(pref.lastPlanWeekAt).isAfter(local.clone().startOf("isoWeek"))) continue;
-    } else {
-      if (pref.dailyCheckinHour === null || local.hour() !== pref.dailyCheckinHour) continue;
-      if (pref.lastDailyCheckinAt && moment(pref.lastDailyCheckinAt).tz(safeTz(p.timeZone)).isSame(local, "day")) continue;
     }
     if (!(await recentlyActive(p.id))) continue;
     due.push(p.id);

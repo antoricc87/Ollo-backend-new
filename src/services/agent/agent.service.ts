@@ -52,7 +52,13 @@ export type TurnInput = {
   signal?: AbortSignal;
 };
 
-export type ProactiveKind = "weekly_review" | "daily_checkin" | "watch_out" | "plan_week";
+/**
+ * `daily_checkin` was retired on 2026-09-25 (ruling): a clock-driven run has to
+ * produce something every day whether or not anything happened, which is what
+ * made the notes feel like boring reports. Signals replace it — they fire only
+ * when a detector clears its bar.
+ */
+export type ProactiveKind = "weekly_review" | "signal" | "watch_out" | "plan_week";
 
 export type ProactiveInput = {
   patientId: string;

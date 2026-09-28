@@ -325,18 +325,14 @@ class AgentHandler {
     }
   }
 
-  /** Body: any of `{ proactiveEnabled, dailyCheckinHour (0-23 | null), weeklyReviewEnabled, watchOutsEnabled }`. */
+  /** Body: any of `{ proactiveEnabled, weeklyReviewEnabled, watchOutsEnabled, planWeekEnabled }`.
+   *  `dailyCheckinHour` is gone with the daily check-in (2026-09-25) — the
+   *  column is still there but nothing reads it, so it is not writable either. */
   async updatePreferences(request: any, response: Response) {
     const { id } = request.user;
     const b = request.body ?? {};
     const patch: any = {};
     for (const k of ["proactiveEnabled", "weeklyReviewEnabled", "watchOutsEnabled", "planWeekEnabled"]) if (typeof b[k] === "boolean") patch[k] = b[k];
-    if (b.dailyCheckinHour === null) patch.dailyCheckinHour = null;
-    else if (b.dailyCheckinHour !== undefined) {
-      const h = Number(b.dailyCheckinHour);
-      if (!Number.isInteger(h) || h < 0 || h > 23) return response.status(400).json(Util.error({}, "dailyCheckinHour must be 0-23 or null"));
-      patch.dailyCheckinHour = h;
-    }
     if (!Object.keys(patch).length) return response.status(400).json(Util.error({}, "nothing to update"));
     try {
       return response.status(200).json(Util.success(await setPreference(id, patch), "Preferences updated"));
@@ -350,8 +346,8 @@ class AgentHandler {
   async runProactive(request: any, response: Response) {
     const { id } = request.user;
     const { kind } = request.params;
-    if (!["weekly_review", "daily_checkin", "watch_out"].includes(kind))
-      return response.status(400).json(Util.error({}, "kind must be weekly_review | daily_checkin | watch_out"));
+    if (!["weekly_review", "watch_out", "plan_week"].includes(kind))
+      return response.status(400).json(Util.error({}, "kind must be weekly_review | watch_out | plan_week"));
     const reason = typeof request.body?.reason === "string" ? request.body.reason.slice(0, 200) : undefined;
     try {
       const r = await runProactiveFor(id, kind, { reason, notify: request.body?.notify === true });

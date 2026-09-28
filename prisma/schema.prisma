@@ -166,6 +166,8 @@ model Patient {
   agentPreference      AgentPreference?
   labJourneys          LabJourney[]          @relation("PatientLabJourneys")
   encounters           Encounter[]           @relation("PatientEncounters")
+  findings             Finding[]             @relation("PatientFindings")
+  nightlyVitals        NightlyVitals[]       @relation("PatientNightlyVitals")
 }
 
 model DexcomToken {
@@ -1529,4 +1531,102 @@ model EncounterCheckIn {
   createdAt   DateTime       @default(now())
 
   @@index([encounterId])
+}
+
+/// One night of sleep-window vitals, as the phone rolled them up from
+/// HealthKit. NOT raw samples: one row per night, keyed by the local night
+/// the sleep ended on. This is what lets the server re-derive a patient's
+/// "usual" and run the signal detectors, and it is the series a clinician
+/// sees underneath a Finding. Written only by the phone (idempotent upsert on
+/// [patientId, date]) — a night may be re-sent with better data as HealthKit
+/// backfills.
+model NightlyVitals {
+  id              String   @id @default(uuid())
+  patientId       String
+  patient         Patient  @relation("PatientNightlyVitals", fields: [patientId], references: [id], onDelete: Cascade)
+  /// Local night key, YYYY-MM-DD (the day the sleep ENDED on).
+  date            String
+  asleepMinutes   Int?
+  hrvMs           Float?
+  sleepingHr      Float?
+  restingHr       Float?
+  respiratoryRate Float?
+  wristTempC      Float?
+  /// Where the numbers came from, for provenance on a clinician surface.
+  source          String   @default("healthkit")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([patientId, date])
+  @@index([patientId, date])
+}
+
+enum FindingStatus {
+  OPEN
+  ONGOING
+  RESOLVED
+}
+
+/// Whether the finding is something to watch or something that went right.
+/// Positive findings are held to a higher bar and a smaller share of the
+/// weekly budget (ruling 2026-09-24).
+enum FindingDirection {
+  CONCERN
+  POSITIVE
+}
+
+/// One EPISODE of one detector firing — not one notification. A run of low-HRV
+/// nights is a single row that opens, is seen again each day it persists, and
+/// resolves when the detector goes quiet; the same detector firing again next
+/// month is a new row. That is what turns a notification log into a timeline a
+/// clinician can read.
+///
+/// Findings are part of the record (ruling 2026-09-24): retained, not deletable
+/// by the patient. Nothing here is a diagnosis — a detector says "unusual for
+/// THIS person against their own baseline", which is not the same claim as a
+/// lab value outside a clinical reference range. `evidence` and `baseline` are
+/// what makes that judgeable after the fact: the numbers that tripped it, and
+/// the yardstick as it stood THAT DAY (a rolling "usual" drifts, so a finding
+/// from March is not comparable to one from September without it).
+model Finding {
+  id              String           @id @default(uuid())
+  patientId       String
+  patient         Patient          @relation("PatientFindings", fields: [patientId], references: [id], onDelete: Cascade)
+  /// Detector identity, e.g. "recovery.dip" | "training.stopped" — the key the
+  /// cooldown and the dedup are keyed on. Never a diagnosis label.
+  detectorKey     String
+  /// Bumped when a detector's rule changes, so old rows stay interpretable.
+  detectorVersion Int
+  status          FindingStatus    @default(OPEN)
+  direction       FindingDirection @default(CONCERN)
+  /// Current severity on the shared scale (roughly sigma from the patient's
+  /// own baseline, or fraction off a plan target) — comparable ACROSS
+  /// detectors, which is what lets one weekly budget rank them against
+  /// each other instead of tuning ten thresholds.
+  severity        Float
+  /// Worst severity reached during the episode.
+  peakSeverity    Float
+  /// The numbers that tripped it: shape owned by the detector.
+  evidence        Json
+  /// The baseline/target judged against, as it stood when the episode opened.
+  baseline        Json?
+  firstDetectedAt DateTime
+  lastSeenAt      DateTime
+  /// Set when the detector has been quiet for its resolve window. Resolution is
+  /// derived from the data only — Ollie never asks (ruling 2026-09-24).
+  resolvedAt      DateTime?
+  /// When this episode was pushed, if it ever won the budget. Null = detected
+  /// and on the record, but never worth interrupting anyone for.
+  notifiedAt      DateTime?
+  /// The PROACTIVE thread the note was written into, when it was notified.
+  threadId        String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  /// The open episode per detector — the uniqueness the dedup relies on — is
+  /// enforced in code (`findings.store.ts`), not here: Postgres cannot express
+  /// "at most one row with status != RESOLVED".
+  @@index([patientId, status])
+  @@index([patientId, detectorKey, firstDetectedAt])
+  @@index([patientId, notifiedAt])
 }
