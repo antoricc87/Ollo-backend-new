@@ -19,7 +19,9 @@ import {
   type MealPreview,
   type UsualDay,
 } from "../../meal_analysis/mealBatch";
-import { PORTION_STOPS } from "../../meal_analysis/mealAnalysis.schema";
+import { PORTION_STOPS, type AnalyzedIngredient } from "../../meal_analysis/mealAnalysis.schema";
+import { glycemicLoad } from "../../meal_analysis/mealAnalysis.rules";
+import { DEFAULT_PORTION_STOP } from "../../meal_analysis/mealPortion";
 import { analyzeMeal } from "../../meal_analysis/mealAnalysis.service";
 import { favoriteMeal, FavoriteRefSchema, type FavoriteRef, type StoredFavorite } from "../../meal_analysis/mealFavorite";
 import { FAV_MEAL_INCLUDE } from "../../nutrition/model/favMealIngredients";
@@ -298,6 +300,41 @@ export const logMeal = defineTool({
     return { result, cards: [{ type: "meal_logged", title: "Logged", data: result }] };
   },
 });
+
+/**
+ * A log_meal proposal built from ingredients a card has ALREADY grounded
+ * (suggest_meal, portion_check): the card's "Log it" confirms exactly these
+ * numbers with one tap — no second analysis, no second card. Returned as the
+ * tool's `prepared` (see ToolOutcome.prepared); `description` is kept on the
+ * input so an edited-input commit can still re-analyse.
+ */
+export const preparedMealLog = (
+  ctx: ToolContext,
+  subject: { id: string; name: string; isSelf: boolean },
+  meal: { name: string; mealType: (typeof MEAL_TYPES)[number]; ingredients: AnalyzedIngredient[]; description: string }
+) => {
+  const ingredients = meal.ingredients.filter((i) => i.grams > 0).map((i) => ({ ...i, nutrients: { ...i.nutrients } }));
+  if (!ingredients.length) return undefined;
+  const batch: BatchMeal = {
+    mealName: meal.name,
+    mealType: meal.mealType,
+    mealDate: ctx.today,
+    ingredients,
+    glycemicLoad: glycemicLoad(ingredients),
+    date: ctx.today,
+    datePhrase: "today",
+    included: true,
+    portion: DEFAULT_PORTION_STOP,
+    duplicateOf: null,
+  };
+  const preview = buildMealPreview([batch], { today: ctx.today, timeZone: ctx.timeZone, subject: subject.name, subjectId: subject.id, model: "card", heldBack: [] });
+  const slot = meal.mealType.toLowerCase();
+  return {
+    toolName: "log_meal",
+    input: { description: meal.description, mealType: meal.mealType, ...(subject.isSelf ? {} : { subjectId: subject.id }) },
+    proposal: { title: `Log ${slot}`, summary: `${slot}: ${meal.name} (${preview.totals.calories} kcal) on ${ctx.today}${subject.isSelf ? "" : ` for ${subject.name}`}`, preview },
+  };
+};
 
 /* ------------------------------- log_vital ------------------------------- */
 

@@ -59,6 +59,8 @@ export type PortionPlan = {
   totals: { calories: number; protein_g: number; carbs_g: number; fat_g: number };
   /** Calories of a normal (unscaled) portion — what the analyser read. */
   normalKcal: number;
+  /** The ingredients at this portion, full rows — what "Log it" saves, so the log matches the card. */
+  scaled: AnalyzedIngredient[];
 };
 
 const r0 = (n: number) => Math.round(n);
@@ -198,6 +200,7 @@ export function planPortion(input: AnalyzedIngredient[], aimKcal: number | null,
       stated: stated(i),
     })),
     totals: macros(ings),
+    scaled: ings,
   };
 }
 

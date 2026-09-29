@@ -62,6 +62,95 @@ const suggestionFits = ({ cards, text }: { cards: { type: string; data: any }[];
   ];
 };
 
+/* --------------------------- food routing family --------------------------- */
+
+const LOOKUP_CARDS = ["nutrition_summary", "meals", "plan", "activity", "vitals"];
+
+/** Every food card ends in a one-tap log: the loop stamps the prepared proposal id on it. */
+const oneTapAndNoLookups = (type: string) => ({ cards }: { cards: { type: string; data: any }[] }) => {
+  const c = cards.find((x) => x.type === type)?.data;
+  return [
+    { ok: !!c?.proposalId, what: `${type} card carries a one-tap log (proposalId ${c?.proposalId ? "set" : "missing"})` },
+    { ok: !cards.some((x) => LOOKUP_CARDS.includes(x.type)), what: `no lookup card beside it (got ${cards.map((x) => x.type).join(", ")})` },
+  ];
+};
+
+/** "I have X — what goes with it": X stays on the card, marked kept, and the card adds to it. */
+const completes = (food: RegExp) => (turn: { text: string; tools: string[]; cards: { type: string; data: any }[] }) => {
+  const s = turn.cards.find((c) => c.type === "meal_suggestion")?.data;
+  if (!s) return [{ ok: false, what: "meal_suggestion card present" }];
+  const ings = (s.ingredients ?? []) as { name: string; kept?: boolean }[];
+  return [
+    { ok: ings.some((i) => i.kept && food.test(i.name)), what: `their food is kept on the card (${ings.map((i) => `${i.name}${i.kept ? "*" : ""}`).join(", ")})` },
+    { ok: ings.some((i) => !i.kept), what: "something was added to it" },
+    ...oneTapAndNoLookups("meal_suggestion")(turn),
+  ];
+};
+
+const COMPLETE: { message: string; food: RegExp }[] = [
+  { message: "How much lentil soup should I have for dinner? And what could I add to make dinner more balanced?", food: /lentil/i },
+  { message: "Having a burger for lunch — what side would keep me on track?", food: /burger|patty|bun|beef/i },
+  { message: "I've got some grilled chicken breast. What should I eat with it tonight?", food: /chicken/i },
+  { message: "Tonight is a bowl of pasta with tomato sauce. How much should I have, and what can I pair it with so dinner is more balanced?", food: /pasta|spaghetti|penne|tomato/i },
+  { message: "Can you suggest a balanced dinner built around the leftover mushroom risotto I have?", food: /risotto|rice/i },
+  { message: "Scrambled eggs for breakfast — is that enough or should I add something?", food: /egg/i },
+];
+
+const AMOUNT: { message: string; food: RegExp }[] = [
+  { message: "How much of the chicken curry I made should I eat for dinner?", food: /curry|chicken/i },
+  { message: "Can I finish this 300 g bag of trail mix as my snack?", food: /trail|nut|raisin|mix|almond|peanut/i },
+  { message: "I'm having ramen for lunch, how big a bowl should it be?", food: /ramen|noodle/i },
+];
+
+const OPEN: string[] = ["What should I have for dinner?", "Any idea for a snack that fits what I have left today?", "I'm hungry and it's lunchtime — what should I make?"];
+
+function routingScenarios(): Scenario[] {
+  return [
+    ...COMPLETE.map((c, i) => ({
+      name: `route_complete_${i + 1}`,
+      category: "capability" as const,
+      turns: [{ message: c.message, expect: { tools: ["suggest_meal"], notTools: ["portion_check", "log_meal"], cards: ["meal_suggestion"], proposal: null, custom: completes(c.food) } }],
+    })),
+    ...AMOUNT.map((a, i) => ({
+      name: `route_amount_${i + 1}`,
+      category: "capability" as const,
+      turns: [
+        {
+          message: a.message,
+          expect: {
+            tools: ["portion_check"],
+            notTools: ["suggest_meal", "log_meal"],
+            cards: ["portion_check"],
+            proposal: null,
+            custom: (turn: { text: string; tools: string[]; cards: { type: string; data: any }[] }) => {
+              const c = turn.cards.find((x) => x.type === "portion_check")?.data;
+              return [{ ok: !!c && a.food.test((c.ingredients ?? []).map((i: any) => i.name).join(" ")), what: `kept their food (${(c?.ingredients ?? []).map((i: any) => i.name).join(", ")})` }, ...oneTapAndNoLookups("portion_check")(turn)];
+            },
+          },
+        },
+      ],
+    })),
+    ...OPEN.map((m, i) => ({
+      name: `route_open_${i + 1}`,
+      category: "capability" as const,
+      turns: [
+        {
+          message: m,
+          expect: {
+            tools: ["suggest_meal"],
+            notTools: ["portion_check"],
+            cards: ["meal_suggestion"],
+            custom: (turn: { text: string; tools: string[]; cards: { type: string; data: any }[] }) => {
+              const s = turn.cards.find((c) => c.type === "meal_suggestion")?.data;
+              return [{ ok: !!s && !(s.ingredients ?? []).some((x: any) => x.kept), what: "nothing marked kept when nothing was chosen" }, ...oneTapAndNoLookups("meal_suggestion")(turn)];
+            },
+          },
+        },
+      ],
+    })),
+  ];
+}
+
 export type Scenario = { name: string; category: "safety" | "capability" | "honesty"; turns: { message: string; expect: Expect }[] };
 
 const NO_MED_ADVICE: RegExp[] = [
@@ -534,6 +623,16 @@ export const SCENARIOS: Scenario[] = [
       },
     ],
   },
+  /*
+   * Food routing by what is still OPEN, not by wording (Sep 28 2026). Seen on
+   * device: "how much lentil soup, and what can I add to balance dinner?" went
+   * to portion_check (soup sized alone, the rest a generic list), while "suggest
+   * a balanced meal with lentil soup" went to suggest_meal — same question, two
+   * answers. Each intent below is phrased several ways over different foods and
+   * meals; every phrasing must land on the same tool. Add phrasings here when a
+   * new one misroutes — never a food- or phrase-specific rule in the prompt.
+   */
+  ...routingScenarios(),
   {
     name: "message_care_team_proposal",
     category: "capability",

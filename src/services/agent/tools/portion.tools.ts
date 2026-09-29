@@ -6,6 +6,7 @@ import { defineTool, subjectField } from "./registry";
 import { nutritionContext } from "./generation.tools";
 import { allergiesIn } from "../../../utils/allergens";
 import { mealBudget, slotFor } from "./budget";
+import { preparedMealLog } from "./write.tools";
 
 /**
  * portion_check — the person has already chosen the food; how much of it?
@@ -19,7 +20,7 @@ import { mealBudget, slotFor } from "./budget";
 export const portionCheck = defineTool({
   name: "portion_check",
   description:
-    "How much to eat of a food the user has ALREADY chosen: 'I'm having pasta with sausage for dinner — how much should I eat?', 'how much of this 400 g pizza can I have?', 'can I finish this?'. Keeps their food exactly as they said it (no substitutes, no alternatives), grounds the nutrition, and sizes the portion to what's left of today for that meal — a fraction of what they have when they said the amount, otherwise a plate compared with a normal one. Returns a card with the portion in their units and a Log-it button. For 'what should I eat' (nothing chosen yet) use suggest_meal instead.",
+    "The AMOUNT of a food the user has already chosen, when the amount is the only thing they want decided ('I'm having pasta with sausage — how much should I eat?', 'how much of this 400 g pizza can I have?', 'can I finish this?'). Keeps their food exactly as they said it, grounds the nutrition, and sizes the portion to what's left of today for that meal — a fraction of what they have when they said the amount, otherwise a plate compared with a normal one. Returns a card with the portion in their units and a Log-it button. If they also want to know what to add, pair or balance it with — anything about WHAT else to eat — use suggest_meal with that food in `keep` instead; it sizes the food and the additions together.",
   schema: z.object({
     food: z.string().min(2).max(400).describe("The food in the user's words, verbatim, including any amount they have ('a 400 g frozen pizza', 'the 500 g box of penne', 'pasta with sausage and cream')"),
     mealType: z.enum(MEAL_TYPES).optional().describe("The meal they named — 'for dinner' → DINNER, 'lunch' → LUNCH. Omit only when they named none (the time of day decides)."),
@@ -77,11 +78,13 @@ export const portionCheck = defineTool({
         protein_g: plan.totals.protein_g,
         line,
         ...(allergies.length ? { allergyOnRecord: allergies } : {}),
+        // What the card does and what is true — not how long the reply is: that is the prompt's call, over the whole question.
         note:
           (allergies.length ? `It appears to contain ${allergies.join(", ")}, which is on their allergy list — say that FIRST, plainly, before any amount. ` : "") +
-          "The card shows the portion and a Log-it button (they tap it; don't call log_meal yourself). Keep your text to 2–3 lines: the portion in their own terms (`portion` + the amounts), its calories and protein, then `line` as given — it's the fact about their day, don't soften or scold. Don't suggest or offer a different or lighter food, a swap or alternatives unless they ask.",
+          "The card shows the portion and a Log-it button that logs this exact portion with one tap (don't call log_meal yourself). Give the portion in their own terms (`portion` + the amounts), its calories and protein, then `line` as given — it's the fact about their day, don't soften or scold. This sizes their food only: don't swap it or offer a lighter one. If they also asked what to eat with it, that is suggest_meal with this food in `keep` — call it now instead of listing foods yourself.",
       },
       cards: [{ type: "portion_check", title: `How much · ${mealType.toLowerCase()}`, data }],
+      prepared: plan.totals.calories > 0 && logText ? preparedMealLog(ctx, subject, { name, mealType, ingredients: plan.scaled, description: logText }) : undefined,
     };
   },
 });

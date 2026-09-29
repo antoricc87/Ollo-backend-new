@@ -654,6 +654,48 @@ dinner" once) before the clock.
 - Evals `portion_check_their_dish`, `portion_check_on_hand`, safety
   `portion_check_allergy_first`; `suggest_meal_tonight` must not call it.
 
+### Food routing, one-tap logging, lookup cards (Sep 28 2026)
+
+Device bug: "how much lentil soup for dinner, and what can I add to balance
+it?" went to portion_check (soup sized alone; the "add" half was a generic
+unsized list in the reply, bullets flattened by the app, plus a meaningless
+"1 of 1 days logged" card), while "suggest a balanced meal with lentil soup"
+went to suggest_meal. Same question, two answers. Fixed as general rules,
+never food- or phrase-specific:
+- **Route by what is OPEN, not wording** (prompt TOOL_RULES "Food
+  questions" bullet + both tool descriptions): anything about WHAT to eat,
+  incl. what to add/pair/balance with food they have → `suggest_meal`; only
+  the AMOUNT of a chosen food → `portion_check`; both at once → suggest_meal.
+- `suggest_meal keep: string[]` — food already chosen, grounded FIRST with
+  analyzeMeal exactly as said; the model proposes only additions (and
+  alternatives that complete the same food); stated amounts never rescale.
+  Code drops any addition that names the kept food (`isKept`) — the model
+  re-listed it in 3/6 runs, counting it twice. Card ingredients carry
+  `kept: true`.
+- **Tool notes say what the card does and what is true, not how long the
+  reply is** — "keep it to 2–3 lines / no alternatives" in one tool's note
+  was read as a rule for the whole reply and squeezed out half the question.
+- **`ToolOutcome.prepared`** — a write a card's own button performs. The tool
+  builds it (`write.tools.ts preparedMealLog`: a log_meal preview from the
+  card's grounded ingredients); the loop stores it as a proposal with
+  `viaCard: true` (no proposal card; excluded from `?status=PENDING` so the
+  dashboard never counts it as waiting) and stamps `data.proposalId` on the
+  card. One tap = confirm = exactly the card's numbers. suggest_meal +
+  portion_check use it; any future card with a Log/Save button should too.
+- **`ToolDef.cardRole`** "lookup" (default for risk read) | "result". The loop
+  holds lookup cards and shows them only when the turn produced no result
+  card. record_checkin / assess_checkin are `read` but marked "result".
+  `get_nutrition_summary` also skips its card for one day with no targets.
+- `nutritionContext`: a plan WITHOUT a calories target no longer masks the
+  onboarding estimate (every card said "no calorie target").
+- Evals: `routingScenarios()` in tests/agent/scenarios.ts — intents ×
+  phrasings over different foods/meals (complete / amount / open); each
+  asserts the tool, the kept food on the card, the one-tap id, no lookup
+  card. Add a phrasing there when one misroutes. 12/12 on Sep 28.
+- Seen while running them: 5 of 12 turns took ~520 s once (not reproducible
+  in isolation — every call < 6 s). The agent's OpenAI client has the SDK
+  default timeout (10 min, 2 retries); unresolved.
+
 ## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`
 
 "How much of it" as ONE coarse choice per meal (light | normal | hearty | lots)

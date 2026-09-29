@@ -11,7 +11,7 @@ import { detectRedFlag, emergencyAnswer } from "./safety/redFlags";
 import { checkOutput, rewriteUnsafe, SAFE_FALLBACK, SafetyOutcome, SafetyVerdict } from "./safety/outputCheck";
 import { regionFromTimeZone } from "./safety/policy";
 import { registry } from "./tools";
-import { Card, ToolContext } from "./tools/registry";
+import { Card, cardRoleOf, ToolContext } from "./tools/registry";
 import { makeSubjectResolver } from "./tools/subject";
 import { checkinModeFor, CheckinMode } from "../encounter/domain/mode";
 import encounterService, { CheckinThreadView } from "../encounter/model/encounter.model";
@@ -232,6 +232,8 @@ async function* runLoop(p: {
   };
 
   const cards: Card[] = [];
+  /** Cards from lookups (see ToolDef.cardRole) — shown at the end, only if nothing actionable came out of the turn. */
+  const lookupCards: Card[] = [];
   let usage: Usage | null = null;
   let model: string | null = null;
   let steps = 0;
@@ -314,7 +316,7 @@ async function* runLoop(p: {
           proposedThisTurn = true;
           yield { type: "proposal", proposalId: pr.id, toolName: call.name, title: pr.title, summary: pr.summary, preview: pr.preview, expiresAt: pr.expiresAt.toISOString() };
           yield { type: "card", card };
-          modelResult = { proposed: true, proposalId: pr.id, summary: pr.summary, preview: out.result, note: "NOT saved yet — the user must confirm the card in the app. Tell them what you prepared and ask them to confirm; do not say it is logged/sent/booked." };
+          modelResult = { proposed: true, proposalId: pr.id, summary: pr.summary, preview: out.result, note: "NOT saved yet — the user must confirm the card. Tell them what you prepared and ask them to confirm; do not say it is logged/sent/booked." };
         }
         let content = JSON.stringify(modelResult);
         if (content.length > MAX_TOOL_RESULT_CHARS) content = content.slice(0, MAX_TOOL_RESULT_CHARS) + '…(truncated)"}';
@@ -322,12 +324,36 @@ async function* runLoop(p: {
         messages.push({ role: "tool", toolCallId: call.id, name: call.name, content });
         yield { type: "tool_result", id: call.id, name: call.name, ok: out.ok, ...(out.error ? { error: out.error } : {}) };
         if (out.ok && out.pinnedAnswer && !pinned) pinned = String(out.pinnedAnswer);
+        // A card whose button performs a write: park it now, no proposal card.
+        if (out.ok && out.prepared && out.cards?.[out.prepared.card ?? 0]) {
+          try {
+            const pr = await proposalStore.create(patientId, threadId, out.prepared.toolName, out.prepared.input, out.prepared.proposal, { viaCard: true });
+            const target = out.cards[out.prepared.card ?? 0];
+            target.data = { ...(target.data as object), proposalId: pr.id };
+          } catch (e) {
+            // The card still works through the chat fallback.
+            console.error("agent: prepared write failed", e);
+          }
+        }
+        const lookup = cardRoleOf(tool) === "lookup";
         for (const card of out.cards ?? []) {
+          if (lookup) {
+            lookupCards.push(card);
+            continue;
+          }
           cards.push(card);
           yield { type: "card", card };
         }
       }
     }
+    // A lookup is context for the answer. Beside a suggestion, a portion or a
+    // proposal it is noise (seen Sep 28 2026: a "1 of 1 days logged" card with
+    // empty bars above a dinner portion nobody asked about the day for).
+    if (!cards.length)
+      for (const card of lookupCards) {
+        cards.push(card);
+        yield { type: "card", card };
+      }
     if (!draft.trim()) {
       draft = steps >= MAX_STEPS ? "I got a bit lost pulling that together — can you ask me in a smaller piece?" : "I didn't manage to put an answer together. Could you rephrase?";
     }

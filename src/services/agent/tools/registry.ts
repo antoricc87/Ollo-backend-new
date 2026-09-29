@@ -41,6 +41,16 @@ export type ToolOutcome = {
    * such criterion here). Use it only for copy assembled in the domain layer.
    */
   pinnedAnswer?: string;
+  /**
+   * A write the card's own button performs ("Log it"). Prepared here from the
+   * exact numbers the card shows; the loop stores it as a pending proposal
+   * WITHOUT a proposal card and stamps its id on `cards[card]` as
+   * `data.proposalId`, so one tap confirms it (POST /proposals/:id/confirm).
+   * Before this (Sep 28 2026) the button sent a chat message, the model
+   * re-analysed the food, a second card appeared and the user confirmed again
+   * — two taps, and the logged numbers could differ from the card's.
+   */
+  prepared?: { toolName: string; input: unknown; proposal: Proposal; card?: number };
 };
 
 /** What a write tool prepares for the user to confirm. */
@@ -64,9 +74,19 @@ export type ToolDef<S extends ZodTypeAny = ZodTypeAny> = {
   risk: "read" | "memory" | "generate" | "write";
   run: (ctx: ToolContext, input: z.infer<S>) => Promise<ToolOutcome & { proposal?: Proposal }>;
   commit?: (ctx: ToolContext, input: z.infer<S>, preview: unknown) => Promise<ToolOutcome>;
+  /**
+   * What this tool's cards are. "lookup" = data the model read to answer
+   * (default for risk "read"); "result" = the thing the user acts on or asked
+   * for (default otherwise). The loop shows lookup cards only in a turn that
+   * produced no result card — the model checking today's intake before a
+   * suggestion must not put a nutrition card above it (Sep 28 2026).
+   */
+  cardRole?: "lookup" | "result";
   /** Apply user edits to a stored preview before commit (e.g. portion sizes). Must validate. */
   applyPreviewEdits?: (preview: unknown, edits: unknown) => unknown;
 };
+
+export const cardRoleOf = (tool: ToolDef | null) => tool?.cardRole ?? (tool?.risk === "read" ? "lookup" : "result");
 
 export const defineTool = <S extends ZodTypeAny>(def: ToolDef<S>): ToolDef<S> => {
   if (def.risk === "write" && !def.commit) throw new Error(`write tool ${def.name} needs commit()`);

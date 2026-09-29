@@ -29,16 +29,17 @@ export const nutritionContext = async (patientId: string, subjectId: string) => 
   ]);
   const n = summary?.nutrition;
   const t = (key: string) => plan?.targets.find((x) => x.metricKey === key);
-  // No active plan → fall back to the onboarding calorie estimate (±10%) so generation is never unconstrained.
+  const range = (key: string): MacroRange => [t(key)?.min ?? null, t(key)?.max ?? null];
+  // No calorie target in the plan (or no plan) → the onboarding calorie estimate (±10%), so sizing is never
+  // unconstrained. A plan WITHOUT a calories target used to mask the estimate and every card said "no target".
   const kcal = summary?.caloricAmount ?? null;
-  const dailyTargets: DailyTargets | null = plan
-    ? { calories: [t("calories")?.min, t("calories")?.max], protein_g: [t("protein_g")?.min, t("protein_g")?.max], carbs_g: [t("carbs_g")?.min, t("carbs_g")?.max], fat_g: [t("fat_g")?.min, t("fat_g")?.max] }
-    : kcal
-    ? { calories: [Math.round(kcal * 0.9), Math.round(kcal * 1.1)], protein_g: [null, null], carbs_g: [null, null], fat_g: [null, null] }
-    : null;
+  const planKcal = plan && (t("calories")?.min != null || t("calories")?.max != null);
+  const calories: MacroRange | null = planKcal ? range("calories") : kcal ? [Math.round(kcal * 0.9), Math.round(kcal * 1.1)] : null;
+  const dailyTargets: DailyTargets | null =
+    plan || calories ? { calories: calories ?? [null, null], protein_g: range("protein_g"), carbs_g: range("carbs_g"), fat_g: range("fat_g") } : null;
   return {
     dailyTargets,
-    targetsFrom: plan ? "plan" : kcal ? "estimate" : "none",
+    targetsFrom: planKcal ? "plan" : kcal ? "estimate" : plan ? "plan" : "none",
     watchOuts: plan?.watchOuts.map((w) => `${w.nutrientKey} (${w.level}${w.limit ? ` ≤${w.limit}${w.unit ?? ""}` : ""})`) ?? [],
     dietaryPreferences: n?.dietaryPreferences ?? [],
     foodAllergies: [...(n?.foodAllergies ?? []), ...(summary?.allergies.map((a) => a.allergy.substance) ?? [])],

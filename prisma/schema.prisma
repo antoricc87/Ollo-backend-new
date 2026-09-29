@@ -1225,6 +1225,8 @@ model AgentProposal {
   input       Json // validated tool input the proposal was built from
   preview     Json // tool-specific preview payload shown in the card
   status      AgentProposalStatus @default(PENDING)
+  /// Prepared for a card's own button ("Log it"), not shown as a proposal card — never listed as waiting for the user's OK.
+  viaCard     Boolean             @default(false)
   result      Json? // commit result (or error)
   expiresAt   DateTime
   confirmedAt DateTime?

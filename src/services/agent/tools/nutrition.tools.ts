@@ -110,7 +110,9 @@ export const getNutritionSummary = defineTool({
       watchOuts: plan ? plan.watchOuts.map((w) => ({ nutrientKey: w.nutrientKey, level: w.level, limit: w.limit, unit: w.unit })) : [],
       days: rows,
     };
-    return { result, cards: rows.length ? [{ type: "nutrition_summary", title: "Nutrition", data: result }] : [] };
+    // One day with nothing to compare it to is a row of empty bars — the numbers belong in the reply, not a card.
+    const worthACard = rows.length > 1 || (rows.length === 1 && result.dailyTargets.length > 0);
+    return { result, cards: worthACard ? [{ type: "nutrition_summary", title: "Nutrition", data: result }] : [] };
   },
 });
 

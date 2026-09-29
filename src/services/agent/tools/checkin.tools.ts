@@ -114,6 +114,7 @@ export const recordCheckin = defineTool({
       .max(8),
   }),
   risk: "read",
+  cardRole: "result", // records answers and ends the interview — its cards are the conversation, not a lookup
   async run(ctx, input) {
     const active = await encounterService.activeForThread(ctx.patientId, ctx.threadId);
     if (!active) return { result: (await encounterService.pausedForThread(ctx.patientId, ctx.threadId)) ? PAUSED : NO_CHECKIN };
@@ -186,6 +187,7 @@ export const assessCheckin = defineTool({
       .optional(),
   }),
   risk: "read",
+  cardRole: "result", // records answers and ends the interview — its cards are the conversation, not a lookup
   async run(ctx, input) {
     const active = await encounterService.activeForThread(ctx.patientId, ctx.threadId);
     if (!active) return { result: (await encounterService.pausedForThread(ctx.patientId, ctx.threadId)) ? PAUSED : NO_CHECKIN };

@@ -7,6 +7,9 @@ import { defineTool, subjectField } from "./registry";
 import { nutritionContext } from "./generation.tools";
 import MealPlanService, { SLOT_SHARE } from "../../meal_plan/model/meal_plan.model";
 import { mealBudget, slotFor } from "./budget";
+import { isPortionScalable } from "../../meal_analysis/mealPortion";
+import type { AnalyzedIngredient } from "../../meal_analysis/mealAnalysis.schema";
+import { preparedMealLog } from "./write.tools";
 
 /**
  * suggest_meal — ONE meal for the next slot, sized to what is left of today's
@@ -14,19 +17,32 @@ import { mealBudget, slotFor } from "./budget";
  * (USDA resolver) computes the nutrition, so the card's numbers are the same
  * numbers the user would see when logging it. Nothing is persisted; the card
  * carries a Log-it hand-off.
+ *
+ * `keep` (Sep 28 2026): food the person has already chosen ("I have lentil
+ * soup — what goes with it?"). It is grounded first, exactly as said; the
+ * model proposes only what completes the meal, and the two are sized
+ * together. Before, that question went to portion_check, which sized the soup
+ * alone, and the "what to add" half was answered from general knowledge —
+ * unsized, ungrounded, and at odds with the portion just given.
  */
 
 const r0 = (n: number) => Math.round(n);
 const r1 = (n: number) => Math.round(n * 10) / 10;
 const sum = (xs: number[]) => xs.reduce((a, b) => a + (Number(b) || 0), 0);
+const norm = (s: string) => s.toLowerCase().replace(/\([^)]*\)/g, " ").replace(/\b(the|my|a|an|some|leftover|homemade|i made|i have|of|bowl|plate|serving)\b/g, " ").replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
 
 export const suggestMeal = defineTool({
   name: "suggest_meal",
   description:
-    "Suggest ONE concrete meal for a slot (default: the next one by time of day), sized to what is left of today's calorie and protein targets and shaped by allergies, preferences, favorites and anything the user asks for (ingredients on hand, cuisine, time). Nutrition is computed from the actual portions. Returns a card with portions and a Log-it button, plus two alternatives. Use whenever the user asks what to eat — don't answer with a generic list, and don't ask what's in the fridge first unless they clearly want that.",
+    "Decide WHAT to eat for a meal (default: the next one by time of day): one concrete meal sized to what is left of today's calorie and protein targets, shaped by allergies, preferences, favorites and anything the user asks for (ingredients on hand, cuisine, time). Also when they already have part of the meal and ask what to add, pair, round it out or balance it with — pass that food in `keep`: it stays exactly as they said and the tool adds what completes it, sized together. Nutrition is computed from the actual portions. Returns a card with portions and a Log-it button, plus two alternatives. Don't answer what-to-eat questions with a generic list, and don't ask what's in the fridge first unless they clearly want that.",
   schema: z.object({
     mealType: z.enum(MEAL_TYPES).optional().describe("Omit to pick the next slot from the time of day"),
     request: z.string().max(400).optional().describe("The user's wishes verbatim: ingredients on hand, cuisine, quick, light, 'like my usual'…"),
+    keep: z
+      .array(z.string().min(2).max(200))
+      .max(4)
+      .optional()
+      .describe("Food they have ALREADY chosen for this meal, in their words with any amount ('the lentil soup I made', 'half a frozen pizza'). It stays in the meal as said; the suggestion is what to add to it. Omit when nothing is chosen yet."),
     planDay: z.number().int().min(1).max(7).optional().describe("SWAP in the saved meal plan: the plan day (1-based) whose slot this replaces; pass mealType too. The meal is sized like the one it replaces and the card gets a 'Put in plan' button."),
     subjectId: subjectField,
   }),
@@ -61,14 +77,39 @@ export const suggestMeal = defineTool({
     const aimKcal = planSlot ? r0(clamp(planSlot.calories, isSnack ? 100 : 300, isSnack ? 300 : 900)) : kcalLeft != null ? r0(clamp(kcalLeft * share, isSnack ? 100 : 300, isSnack ? 300 : 900)) : dayKcal != null ? r0(dayKcal * SLOT_SHARE[mealType]) : isSnack ? 200 : 550;
     const aimProtein = planSlot ? r0(clamp(planSlot.proteins, isSnack ? 8 : 20, isSnack ? 25 : 60)) : proteinLeft != null ? r0(clamp(proteinLeft * share, isSnack ? 8 : 20, isSnack ? 25 : 60)) : isSnack ? 10 : 35;
 
+    /* ------------------------------- kept ------------------------------- */
+    // What they already have is grounded first, as said; the rest is sized around it.
+    let kept: AnalyzedIngredient[] = [];
+    if (input.keep?.length) {
+      const read = await analyzeMeal({ text: input.keep.join(", "), mealTypeHint: mealType, todayLocal: ctx.today }, { patientId: subject.id });
+      kept = read.meals.flatMap((m) => m.ingredients).filter((i) => i.grams > 0);
+      if (!kept.length) return { result: { error: `I couldn't read a food in "${input.keep.join(", ")}". Ask what they have, in a few words.` } };
+    }
+    const keptKcal = r0(sum(kept.map((i) => i.calories)));
+    const keptProtein = r1(sum(kept.map((i) => i.nutrients.proteins)));
+    const keptText = kept.map((i) => `${r0(i.grams)} g ${i.name}`).join(", ");
+    // The model re-lists the kept food among its additions despite being told not to
+    // (seen in 3 of 6 eval runs: "Lentil soup, Lentil soup" — its calories counted twice).
+    // Code decides: anything that names the kept food is the kept food.
+    const keptWords = [...(input.keep ?? []), ...kept.map((i) => i.name)].map(norm).filter(Boolean);
+    const isKept = (name: string) => {
+      const n = norm(name);
+      return !!n && keptWords.some((k) => k.includes(n) || n.includes(k));
+    };
+
     /* ----------------------------- generate ----------------------------- */
     const draft = await getLLM().json<{ name: string; description: string; ingredients: { item: string; grams: number; note: string }[]; prepMinutes: number; why: string; alternatives: { name: string; description: string }[] }>({
-      system: `You are a dietitian suggesting ONE ${mealType.toLowerCase()}${planSlot ? ` to REPLACE "${planSlot.replaces}" on day ${planSlot.day} of the user's saved meal plan — something clearly different from it` : " for right now"}. Hit the calorie and protein aim (±15%) with realistic portions in grams — count honestly (protein 4 kcal/g, carbs 4, fat 9). Respect allergies (never, in any form), intolerances, dislikes, watch-outs (keep flagged nutrients low) and remembered constraints; lean on likes and favorites when they fit. Honour the request (ingredients on hand, time, cuisine). Simple food people actually cook. Two different alternatives in one line each. No supplements, no medical claims.`,
+      system:
+        `You are a dietitian suggesting ONE ${mealType.toLowerCase()}${planSlot ? ` to REPLACE "${planSlot.replaces}" on day ${planSlot.day} of the user's saved meal plan — something clearly different from it` : " for right now"}. Hit the calorie and protein aim (±15%) with realistic portions in grams — count honestly (protein 4 kcal/g, carbs 4, fat 9). Respect allergies (never, in any form), intolerances, dislikes, watch-outs (keep flagged nutrients low) and remembered constraints; lean on likes and favorites when they fit. Honour the request (ingredients on hand, time, cuisine). Simple food people actually cook. Two different alternatives in one line each. No supplements, no medical claims.` +
+        (kept.length
+          ? ` The user has ALREADY chosen part of this meal (\`kept\`, with its grounded calories and protein). It is in the meal exactly as given: list ONLY the additions in \`ingredients\`, sized so kept + additions hit the aim and balance the plate (what the kept food lacks — often protein, vegetables or a whole grain). If the kept food already reaches the calorie aim, add only light things (vegetables, salad). The name describes the whole meal, kept food included. The alternatives are two other ways to complete the SAME kept food, never a different dish.`
+          : ""),
       user: JSON.stringify({
         mealType,
         aim: { calories: aimKcal, protein_g: aimProtein },
         today: { eatenKcal, eatenProtein_g: eatenProtein, kcalLeft, proteinLeft_g: proteinLeft, dailyTargets: t },
         request: input.request ?? null,
+        ...(kept.length ? { kept: { foods: keptText, calories: keptKcal, protein_g: keptProtein }, aimForAdditions: { calories: Math.max(0, aimKcal - keptKcal), protein_g: Math.max(0, r0(aimProtein - keptProtein)) } } : {}),
         ...(planSlot ? { replacing: { name: planSlot.replaces, calories: planSlot.calories, protein_g: planSlot.proteins } } : {}),
         context,
         favorites: favorites.map((f) => `${f.mealType.toLowerCase()}: ${f.description} (${f.calories} kcal, ${r0(f.proteins)} g protein)`),
@@ -95,15 +136,22 @@ export const suggestMeal = defineTool({
     });
 
     /* ------------------------------ ground ------------------------------ */
-    const lines = draft.ingredients.map((i) => `${i.grams} g ${i.item}${i.note ? ` (${i.note})` : ""}`);
-    let logText = `${draft.name}: ${lines.join(", ")}`;
+    const additions = kept.length ? draft.ingredients.filter((i) => !isKept(i.item)) : draft.ingredients;
+    const lines = additions.map((i) => `${i.grams} g ${i.item}${i.note ? ` (${i.note})` : ""}`);
+    let logText = `${draft.name}: ${[keptText, ...lines].filter(Boolean).join(", ")}`;
+    let groundedIngs: AnalyzedIngredient[] = [];
     let rescaled: number | null = null;
     let nutrition: { calories: number; protein_g: number; carbs_g: number; fat_g: number; saturatedFat_g: number | null; fiber_g: number | null; sodium_mg: number | null } | null = null;
-    let ingredients: { name: string; quantity: string; grams: number; calories: number | null }[] = draft.ingredients.map((i) => ({ name: i.item, quantity: i.note || `${i.grams} g`, grams: i.grams, calories: null }));
+    let ingredients: { name: string; quantity: string; grams: number; calories: number | null; kept?: boolean }[] = [
+      ...kept.map((i) => ({ name: i.name, quantity: `${r0(i.grams)} g`, grams: r0(i.grams), calories: r0(i.calories), kept: true })),
+      ...additions.map((i) => ({ name: i.item, quantity: i.note || `${i.grams} g`, grams: i.grams, calories: null })),
+    ];
     let nutrientSource: "usda" | "model" | "unresolved" = "unresolved";
     try {
-      const analysis = await analyzeMeal({ text: logText, mealTypeHint: mealType, todayLocal: ctx.today }, { patientId: subject.id });
-      let ings = analysis.meals.flatMap((m) => m.ingredients);
+      // Only the additions are analysed; the kept food was grounded above.
+      const added = lines.length ? (await analyzeMeal({ text: `${draft.name}: ${lines.join(", ")}`, mealTypeHint: mealType, todayLocal: ctx.today }, { patientId: subject.id })).meals.flatMap((m) => m.ingredients).filter((i) => !(kept.length && isKept(i.name))) : [];
+      const keptSet = new Set<AnalyzedIngredient>(kept);
+      let ings = [...kept, ...added];
       if (ings.length) {
         // Portion correction: the model sizes meals small. When the grounded
         // calories miss the aim by >15% and every ingredient carries a
@@ -113,6 +161,7 @@ export const suggestMeal = defineTool({
           const f = Math.min(1.35, Math.max(0.75, aimKcal / grounded));
           ings = ings.map((i) => {
             if (!(i.grams > 0)) return i; // seasonings etc. — leave as is
+            if (keptSet.has(i) && !isPortionScalable(i as any)) return i; // an amount they stated is what they have
             const nutrients = Object.fromEntries(Object.entries(i.nutrients).map(([k, v]) => [k, (Number(v) || 0) * f])) as typeof i.nutrients;
             return { ...i, grams: r0(i.grams * f), quantity: r0(i.grams * f), unit: "g" as const, calories: i.calories * f, nutrients };
           });
@@ -120,9 +169,11 @@ export const suggestMeal = defineTool({
         }
         const n = (k: keyof (typeof ings)[number]["nutrients"]) => r1(sum(ings.map((i) => i.nutrients[k])));
         nutrition = { calories: r0(sum(ings.map((i) => i.calories))), protein_g: n("proteins"), carbs_g: n("carbohydrates"), fat_g: n("fats"), saturatedFat_g: n("saturatedFats"), fiber_g: n("fiber"), sodium_mg: r0(n("sodium")) };
-        ingredients = ings.map((i) => ({ name: i.name, quantity: i.unit === "g" ? `${r0(i.grams)} g` : `${i.quantity} ${i.unit}`.trim(), grams: r0(i.grams), calories: r0(i.calories) }));
+        const nKept = kept.length; // ings = [...kept, ...added], order kept through the rescale map
+        ingredients = ings.map((i, idx) => ({ name: i.name, quantity: i.unit === "g" ? `${r0(i.grams)} g` : `${i.quantity} ${i.unit}`.trim(), grams: r0(i.grams), calories: r0(i.calories), ...(idx < nKept ? { kept: true } : {}) }));
         nutrientSource = ings.some((i) => i.nutrientSource === "usda") ? "usda" : "model";
-        if (rescaled) logText = `${draft.name}: ${ingredients.map((i) => `${i.grams} g ${i.name}`).join(", ")}`;
+        logText = `${draft.name}: ${ingredients.map((i) => `${i.grams} g ${i.name}`).join(", ")}`;
+        groundedIngs = ings;
       }
     } catch (e) {
       console.error("suggest_meal: analyzeMeal failed, falling back to model estimate", e);
@@ -180,9 +231,16 @@ export const suggestMeal = defineTool({
         dayAfterThisMeal: { calories: r0(dayAfter), targetRange: t?.calories ?? null },
         alternatives: draft.alternatives.map((a) => a.name),
         ...(planSlot ? { planSlot: { day: planSlot.day, date: planSlot.date, replaces: planSlot.replaces } } : {}),
-        note: planSlot ? "The card shows the portions and a 'Put in plan' button that replaces the planned meal when the user taps it — don't say the plan is changed until they do. Keep your text to 2–3 lines: the new meal with its calories and protein versus the one it replaces, then the alternatives by name." : "The card shows the portions and a Log-it button (the user taps it; don't call log_meal yourself). Keep your text to 2–4 lines: name the meal with its calories and protein (e.g. '≈ 700 kcal, 70 g protein'), then repeat `fit` as given — it is the verdict on where the day lands, don't soften 'Light'/'over' into 'within target' — then the alternatives by name.",
+        ...(kept.length ? { kept: keptText } : {}),
+        // What the card does and what is true — not how long the reply is: that is the prompt's call, over the whole question.
+        note:
+          (planSlot
+            ? "The card shows the portions and a 'Put in plan' button that replaces the planned meal when the user taps it — don't say the plan is changed until they do. Give the new meal with its calories and protein versus the one it replaces, then the alternatives by name."
+            : "The card shows the portions and a Log-it button that logs this exact meal with one tap (don't call log_meal yourself). Name the meal with its calories and protein (e.g. '≈ 700 kcal, 70 g protein'), then `fit` as given — it is the verdict on where the day lands, don't soften 'Light'/'over' into 'within target' — then the alternatives by name.") +
+          (kept.length ? ` Their ${input.keep!.join(", ")} is in the meal as they said it; say what was added to it and what that adds to the plate.` : ""),
       },
       cards: [{ type: "meal_suggestion", title: planSlot ? `Swap · day ${planSlot.day} ${mealType.toLowerCase()}` : `${mealType.charAt(0) + mealType.slice(1).toLowerCase()} idea`, data }],
+      prepared: groundedIngs.length ? preparedMealLog(ctx, subject, { name: draft.name, mealType, ingredients: groundedIngs, description: logText }) : undefined,
     };
   },
 });

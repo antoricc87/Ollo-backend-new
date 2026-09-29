@@ -19,10 +19,11 @@ export const PROPOSAL_TTL_HOURS = 24;
 const json = (v: unknown) => v as Prisma.InputJsonValue;
 
 class ProposalStore {
-  async create(patientId: string, threadId: string | null, toolName: string, input: unknown, proposal: Proposal) {
+  async create(patientId: string, threadId: string | null, toolName: string, input: unknown, proposal: Proposal, opts: { viaCard?: boolean } = {}) {
     return prisma.agentProposal.create({
       data: {
         patientId,
+        viaCard: opts.viaCard ?? false,
         threadId,
         toolName,
         title: proposal.title,
@@ -41,7 +42,8 @@ class ProposalStore {
   async list(patientId: string, opts: { status?: "PENDING" | "CONFIRMED" | "CANCELLED" | "EXPIRED" | "FAILED"; threadId?: string; limit?: number } = {}) {
     await this.expireStale(patientId);
     return prisma.agentProposal.findMany({
-      where: { patientId, ...(opts.status ? { status: opts.status } : {}), ...(opts.threadId ? { threadId: opts.threadId } : {}) },
+      // A card's prepared log is the card's button, not something waiting for an OK.
+      where: { patientId, ...(opts.status ? { status: opts.status } : {}), ...(opts.status === "PENDING" ? { viaCard: false } : {}), ...(opts.threadId ? { threadId: opts.threadId } : {}) },
       orderBy: { createdAt: "desc" },
       take: opts.limit ?? 20,
     });
