@@ -47,6 +47,7 @@ export type JsonOptions<T> = {
   schemaName: string;
   model?: string;
   parse?: (raw: unknown) => T;
+  signal?: AbortSignal;
 };
 
 export interface LLMClient {

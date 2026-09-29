@@ -693,8 +693,22 @@ never food- or phrase-specific:
   asserts the tool, the kept food on the card, the one-tap id, no lookup
   card. Add a phrasing there when one misroutes. 12/12 on Sep 28.
 - Seen while running them: 5 of 12 turns took ~520 s once (not reproducible
-  in isolation — every call < 6 s). The agent's OpenAI client has the SDK
-  default timeout (10 min, 2 retries); unresolved.
+  in isolation — every call < 6 s). Fixed by the deadlines below.
+
+### LLM deadlines (Sep 28 2026) — `agent/llm/openai.client.ts`
+
+The agent client had the SDK defaults (10 min per attempt, 2 retries) and the
+loop called it non-streaming, so one request OpenAI never answered held the
+whole turn (the phone's 5-min cap → "Something went wrong"). Now `chat` AND
+`json` both stream internally through `streamed()`: no chunk within
+`AGENT_LLM_FIRST_CHUNK_MS` (45 s) or silence for `AGENT_LLM_IDLE_MS` (30 s)
+aborts; a stall is retried ONCE unless live text already reached the caller;
+SDK `maxRetries: 1` covers transport errors/5xx. Long outputs (meal plans)
+are never cut — they keep sending chunks. An abort mid-stream can END the SDK
+iterator without throwing, so a stall is checked after the loop too (the
+fake-server test caught a half JSON returned as success). `JsonOptions.signal`
+added. Logs `[llm] slow …` (> 15 s, with first-chunk time) and `[llm]
+stalled …` — read Railway logs for these before guessing at a slow turn.
 
 ## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`
 
