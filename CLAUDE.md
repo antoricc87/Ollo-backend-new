@@ -1124,6 +1124,33 @@ the user's words) is the structured brief every design reads.
   and Plan v1 use the workouts API); the backend keeps it only for today's
   `get_activity` ring minutes and the legacy exercises_tracker routes.
 
+### Editing a week draft (Oct 5 2026) — `design/weekEdit.ts`, `edit_workout_plan`
+
+Device conversation: "Sessions should be Monday Wednesday and Thursday" (they
+were Mon/Wed/Fri) came back with all three sessions rewritten, because the
+only week tool designs from a description and every change request called it
+again. Rule now: a change to a drafted week touches only what was named.
+- `applyWeekEdits(week, edits, design)` (pure, `tests/workouts/weekEdit.test.ts`):
+  `move` (code only; a taken day swaps; the day to keep follows its session),
+  `remove`, `add` and `change` (design ONE session through the passed-in
+  designer with the other sessions as `weekContext`). Untouched sessions are
+  the same objects that came in. Days are addressed by WEEKDAY (unambiguous in
+  a ≤7-day week), resolved from the draft's startDate.
+- `DesignAsk.previous` + `CHANGE_RULES`: a `change` is designed against the
+  session it replaces — keep every exercise/set/rep the request doesn't touch.
+- `weekShapeIssues()` (consecutive heavy days; under caution no strength day
+  and one mobility day) is shared by `designWeek`'s layout check and the edit
+  tool, so a move that breaks the week says so in `fit.issues`.
+- Tool `edit_workout_plan {draftId?, edits[]}` (risk generate): reads the
+  latest unsaved `workout_plan` card of the thread (`findWeekCard`), reads the
+  training gate like the design tools, emits the same card with a new draftId.
+  The result's `note` states what is true (only `changed` moved); the prompt's
+  design bullet routes every change to a draft here, never to a second
+  generate_workout_plan. Saved weeks are unchanged (move_workout / swap).
+- Eval `week_draft_edit_keeps_the_rest` (draft → move → add → lengthen one;
+  compares session bodies turn to turn). The caution path of the edit tool is
+  covered by code sharing only — no eval runs an edit with a check-in on record.
+
 ## Labs journey (Aug 27 2026) — `src/services/labs_journey/`
 
 How a patient gets labs done. `domain/screening.rules.ts` `buildPanel(profile)`

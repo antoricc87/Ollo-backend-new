@@ -13,7 +13,7 @@ import { getWorkouts, logWorkout } from "./workout.tools";
 import { suggestMeal } from "./suggest.tools";
 import { portionCheck } from "./portion.tools";
 import { getMealPlan, saveMealPlan } from "./mealplan.tools";
-import { generateWorkout, generateWorkoutPlan, moveWorkout, saveWorkoutPlan, updateTrainingProfile } from "./workoutplan.tools";
+import { editWorkoutPlan, generateWorkout, generateWorkoutPlan, moveWorkout, saveWorkoutPlan, updateTrainingProfile } from "./workoutplan.tools";
 import { assessCheckin, getCheckins, recordCheckin, resumeCheckin, startCheckin } from "./checkin.tools";
 import { deleteFavorite, saveFavorite } from "./favorite.tools";
 
@@ -61,6 +61,7 @@ export const registry = new ToolRegistry().register(
   logWorkout,
   generateWorkout,
   generateWorkoutPlan,
+  editWorkoutPlan,
   saveWorkoutPlan,
   updateTrainingProfile,
   moveWorkout

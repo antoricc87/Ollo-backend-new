@@ -10,7 +10,8 @@ import TrainingProfileService from "../../workouts/model/training_profile.model"
 import { activityByKey } from "../../workouts/domain/activity.catalog";
 import { fmtDuration, fmtSets } from "../../workouts/domain/workout.metrics";
 import { EQUIPMENT, EXPERIENCE, FOCUS, PLACE, PlannedSessionInput, WEEKDAYS, WorkoutPlanInput, timeString } from "../../workouts/domain/workout.schema";
-import { buildBrief, DEFAULT_SESSION_MIN, designSession, designWeek } from "../../workouts/design/workoutDesign.service";
+import { asPrevious, buildBrief, DEFAULT_SESSION_MIN, designSession, designWeek, weekShapeIssues } from "../../workouts/design/workoutDesign.service";
+import { applyWeekEdits, dateOfDay, WeekEditError, type WeekEdit, type WeekSession } from "../../workouts/design/weekEdit";
 import encounterService from "../../encounter/model/encounter.model";
 import { generalSessionLine, stopLine, type TrainingGate } from "../../encounter/domain/trainingGate";
 
@@ -20,6 +21,9 @@ import { generalSessionLine, stopLine, type TrainingGate } from "../../encounter
  *    card carries a draftId and the exact PlannedSessionInput rows the server
  *    would save, so the app's "Put in plan" / "Save this week" buttons and the
  *    save_workout_plan proposal all write through WorkoutService.
+ *  - edit_workout_plan: a change to the week draft on the table (move / add /
+ *    remove / change one session) — design/weekEdit.ts; sessions the request
+ *    doesn't name come back exactly as they were. A new card, a new draftId.
  *  - save_workout_plan: confirm-gated write → WorkoutPlanService.create.
  *  - update_training_profile: confirm-gated write → TrainingProfile.
  *  Reading planned sessions is get_workouts with status (workout.tools.ts).
@@ -81,6 +85,26 @@ const findWeekDraft = async (threadId: string | null, draftId?: string | null): 
     }
   }
   return null;
+};
+
+/** The latest unsaved week card of this conversation, whole (edit_workout_plan builds the next draft from it). */
+const findWeekCard = async (threadId: string | null, draftId?: string | null): Promise<any | null> => {
+  if (draftId && weekDrafts.has(draftId)) return weekDrafts.get(draftId)!.card;
+  if (threadId) {
+    const rows = await prisma.agentMessage.findMany({ where: { threadId, role: "ASSISTANT" }, orderBy: { seq: "desc" }, take: 40, select: { cards: true } });
+    for (const r of rows) {
+      const cards = Array.isArray(r.cards) ? (r.cards as any[]) : [];
+      for (const c of [...cards].reverse()) {
+        if (c?.type !== "workout_plan" || c?.data?.saved || !c?.data?.sessions?.length) continue;
+        if (draftId && c.data.draftId !== draftId) continue;
+        return c.data;
+      }
+    }
+    return null;
+  }
+  // No thread (scripts): the newest draft still in memory.
+  const newest = [...weekDrafts.entries()].sort((x, y) => y[1].at - x[1].at)[0];
+  return !draftId && newest && Date.now() - newest[1].at < 30 * 60 * 1000 ? newest[1].card : null;
 };
 
 /* ------------------------------ card shapes ------------------------------ */
@@ -246,7 +270,7 @@ export const generateWorkout = defineTool({
 export const generateWorkoutPlan = defineTool({
   name: "generate_workout_plan",
   description:
-    "Lay out a training week (1–7 days) for the user: which days train, what each session is, then every session designed in full (exercises, sets × reps, rest, loads from their history). Uses their plan's sessions-per-week target, training profile, recent sessions and preferences. Returns a card; nothing is saved until save_workout_plan (or the card's Save).",
+    "Lay out a training week (1–7 days) for the user: which days train, what each session is, then every session designed in full (exercises, sets × reps, rest, loads from their history). Uses their plan's sessions-per-week target, training profile, recent sessions and preferences. Returns a card; nothing is saved until save_workout_plan (or the card's Save). Not for changing a week already drafted in this conversation (move a day, add or change a session) — that is edit_workout_plan, which keeps the rest as it is.",
   schema: z.object({
     days: z.number().int().min(1).max(7).default(7),
     sessionsPerWeek: z.number().int().min(1).max(7).optional().describe("Defaults to the plan's exercise target (else 3)"),
@@ -317,6 +341,116 @@ export const generateWorkoutPlan = defineTool({
         design: { model: week.model, latencyMs: week.latencyMs },
       },
       cards: [{ type: "workout_plan", title: week.title, data: cardData }],
+    };
+  },
+});
+
+const weekDay = z.enum(WEEKDAYS);
+const designFields = {
+  request: z.string().min(1).max(600).describe("What they asked for this session, verbatim"),
+  durationMin: z.number().int().min(10).max(180).optional().describe("Only when they gave a length for this session"),
+  focus: z.enum(FOCUS).optional(),
+  muscleGroups: z.array(z.string().max(40)).max(6).optional(),
+};
+
+export const editWorkoutPlan = defineTool({
+  name: "edit_workout_plan",
+  description:
+    "Change the training week draft already on the table in this conversation — move a session to another day, add a session, remove one, or change ONE session. Every session the user did not mention stays exactly as it is (same exercises, sets, reps). Use this for ANY change request to a drafted week; generate_workout_plan is only for a first week or when they ask for a different week altogether. Returns the updated card; nothing is saved. Not for a week that is already saved (move_workout / generate_workout with replaceSessionId).",
+  schema: z.object({
+    draftId: z.string().optional().describe("The draftId of the week to change. Omit for the latest week card in this conversation."),
+    edits: z
+      .array(
+        z.discriminatedUnion("op", [
+          z.object({ op: z.literal("move"), from: weekDay.describe("Weekday the session is on now"), to: weekDay.describe("Weekday it goes to; if that day has a session the two swap") }),
+          z.object({ op: z.literal("remove"), day: weekDay }),
+          z.object({ op: z.literal("add"), day: weekDay.describe("A day with no session"), ...designFields }),
+          z.object({ op: z.literal("change"), day: weekDay.describe("The day of the session to change"), ...designFields }),
+        ])
+      )
+      .min(1)
+      .max(7)
+      .describe("Applied in order. 'Sessions on Mon, Wed and Thu' when they are on Mon, Wed, Fri = ONE move (fri → thu)."),
+  }),
+  risk: "generate",
+  async run(ctx, input) {
+    const card = await findWeekCard(ctx.threadId, input.draftId);
+    if (!card) return { result: { error: "No training week draft in this conversation to change — call generate_workout_plan first (for a saved week: move_workout, or generate_workout with replaceSessionId)." } };
+    const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
+    if (gate?.level === "hold") return heldResult(gate);
+    const caution = gate?.level === "general" ? gate : null;
+    const startDate: string = card.startDate ?? card.sessions[0].date;
+    const days: number = Number(card.days) || 7;
+    const place = card.brief?.place ?? null;
+    let brief: Awaited<ReturnType<typeof buildBrief>> | null = null;
+    let edited: Awaited<ReturnType<typeof applyWeekEdits>>;
+    try {
+      edited = await applyWeekEdits(
+        { startDate, days, priorityDay: Number(card.priorityDay) || null, sessions: (card.sessions as any[]).map((s) => ({ day: s.day, session: s.session, fit: s.fit ?? { ok: true, issues: [] }, assumptions: s.assumptions ?? [] })) },
+        input.edits as WeekEdit[],
+        async (spec) => {
+          brief = brief ?? (await buildBrief(ctx.patientId, { today: ctx.today, timeZone: ctx.timeZone, client: ctx.client }));
+          const d = await designSession(
+            {
+              durationMin: spec.durationMin ?? spec.previous?.durationMin ?? card.brief?.sessionMinutes ?? DEFAULT_SESSION_MIN,
+              focus: spec.focus ?? (spec.previous?.focus as (typeof FOCUS)[number] | undefined) ?? null,
+              muscleGroups: spec.muscleGroups ?? spec.previous?.muscleGroups ?? [],
+              place,
+              // The week's original wishes still hold for a new session (their limits, what the week is for).
+              request: [spec.request, card.brief?.request ? `The week was asked for as: ${card.brief.request}` : null].filter(Boolean).join(" "),
+              date: spec.date,
+              weekContext: spec.others.map((o) => ({ date: dateOfDay(startDate, o.day), title: o.session.title ?? "", focus: o.session.focus ?? "mixed", muscleGroups: o.session.muscleGroups ?? [] })),
+              caution,
+              previous: spec.previous ? asPrevious(spec.previous) : null,
+            },
+            brief
+          );
+          return { session: d.session, fit: d.fit, assumptions: d.assumptions };
+        }
+      );
+    } catch (e) {
+      if (e instanceof WeekEditError) return { result: { error: `${e.message}. The week is unchanged. Its sessions: ${(card.sessions as any[]).map((s) => `${moment.utc(s.date, "YYYY-MM-DD").format("ddd").toLowerCase()} "${s.session?.title}"`).join(", ")}.` } };
+      throw e;
+    }
+    const draftId = randomUUID();
+    const before = new Map<WeekSession["session"], any>((card.sessions as any[]).map((s) => [s.session, s]));
+    const sessions = edited.sessions.map((s) => {
+      const date = dateOfDay(startDate, s.day);
+      // An untouched or moved session keeps its display rows as they were.
+      const kept = [...before.values()].find((b) => b.session === s.session || (b.day !== s.day && JSON.stringify({ ...b.session, plannedFor: null }) === JSON.stringify({ ...s.session, plannedFor: null })));
+      return { day: s.day, date, session: s.session, display: kept?.display ?? sessionDisplay(s.session), fit: s.fit, assumptions: s.assumptions };
+    });
+    const shape = weekShapeIssues(sessions.map((s) => ({ day: s.day, focus: s.session.focus, muscleGroups: s.session.muscleGroups })), !!caution);
+    const issues = [...shape, ...sessions.flatMap((s) => (s.fit?.issues ?? []).map((i: string) => `day ${s.day}: ${i}`))];
+    const cardData = {
+      ...card,
+      draftId,
+      caution: caution ? { about: caution.about, stopIf: caution.stopIf } : card.caution ?? null,
+      priorityDay: edited.priorityDay,
+      startDate,
+      days,
+      brief: { ...(card.brief ?? {}), sessionsPerWeek: sessions.length },
+      fit: { ok: issues.length === 0, issues },
+      sessions,
+      rest: Array.from({ length: days }, (_, i) => i + 1).filter((d) => !sessions.some((s) => s.day === d)).map((d) => ({ day: d, date: dateOfDay(startDate, d) })),
+      timeZone: ctx.timeZone,
+    };
+    try {
+      registerWeekDraft(draftId, weekInputFromCard(cardData), cardData);
+    } catch (e) {
+      console.error("edit_workout_plan: draft not registrable", e);
+    }
+    return {
+      result: {
+        draftId,
+        title: cardData.title,
+        changed: edited.log,
+        sessions: sessions.map((s) => `${moment.utc(s.date, "YYYY-MM-DD").format("ddd")}: ${edited.designed.includes(s.day) ? sessionLine(s.session) : `${s.session.title} — unchanged`}`),
+        fit: issues.length ? { ok: false, issues, note: "Say plainly what still misses; offer to adjust. Do not claim it fits." } : { ok: true },
+        ...(caution && edited.designed.length ? { caution: cautionNote(caution, "week") } : {}),
+        note: "What is true: only the changes listed in `changed` were made; every other session is exactly as it was on the previous card. Say what changed (for a designed session, its key moves) and that the rest is untouched — do not list the unchanged sessions again. The new card replaces the previous one; nothing is saved until they ask (save_workout_plan with this draftId) or tap Save on the card.",
+      },
+      cards: [{ type: "workout_plan", title: cardData.title, data: cardData }],
     };
   },
 });

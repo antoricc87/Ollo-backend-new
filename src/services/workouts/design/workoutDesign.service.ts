@@ -42,6 +42,8 @@ export type DesignAsk = {
   caution?: DesignCaution | null;
   /** Other sessions planned in the same week (when designing a week) so recovery is judged across days. */
   weekContext?: { date: string; title: string; focus: string; muscleGroups: string[] }[];
+  /** The session this one CHANGES (editing a week draft): everything the request doesn't touch stays as it is. */
+  previous?: { title: string; focus: string; durationMin: number; exercises: { exerciseKey: string; name: string; sets: number; reps: number | null; repsMax: number | null; durationSec: number | null; restSec: number | null; targetKg: number | null }[] } | null;
 };
 
 /** What the designer is told about a symptom on record: the person's own facts, never a condition to design for. */
@@ -200,6 +202,18 @@ CAUTION — the ask carries \`caution\`: this person has a symptom on record (ca
 
 /* --------------------------------- checks -------------------------------- */
 
+/** Added when the ask carries `previous`: the person asked to change one session of a week they already have. */
+const CHANGE_RULES = `
+CHANGE — the ask carries \`previous\`: the session they already have for this day. ask.request says what to change. Keep every exercise, set, rep, rest and load the request does not touch, in the same order, with the same exerciseKey; add, remove or alter only what it asks for (a longer session = more sets or one or two more exercises, not a new session). Keep the title unless the session's purpose changes.`;
+
+/** A planned session as the \`previous\` a change request is designed against. */
+export const asPrevious = (s: PlannedSessionInput): NonNullable<DesignAsk["previous"]> => ({
+  title: s.title ?? "Session",
+  focus: s.focus ?? "mixed",
+  durationMin: s.durationMin ?? DEFAULT_SESSION_MIN,
+  exercises: (s.exercises ?? []).map((e) => ({ exerciseKey: e.exerciseKey, name: e.name, sets: e.sets?.length ?? 0, reps: e.sets?.[0]?.targetReps ?? null, repsMax: e.sets?.[0]?.targetRepsMax ?? null, durationSec: e.sets?.[0]?.durationSec ?? null, restSec: e.sets?.[0]?.restSec ?? null, targetKg: e.sets?.[0]?.targetKg ?? null })),
+});
+
 const estimateMinutes = (s: PlannedSessionInput) => {
   let sec = (WARMUP_MIN + COOLDOWN_MIN) * 60;
   for (const e of s.exercises ?? []) {
@@ -322,7 +336,7 @@ export const designSession = async (ask: DesignAsk, brief: DesignBrief, opts: { 
   const t0 = Date.now();
   const generate = (revision?: { previous: SessionOut; issues: string[] }) =>
     llm.json<SessionOut>({
-      system: SYSTEM + (ask.caution ? CAUTION_RULES : "") + (revision ? "\nYou are REVISING a session that missed its checks: fix every listed issue, keep what was fine." : ""),
+      system: SYSTEM + (ask.caution ? CAUTION_RULES : "") + (ask.previous ? CHANGE_RULES : "") + (revision ? "\nYou are REVISING a session that missed its checks: fix every listed issue, keep what was fine." : ""),
       user: JSON.stringify({
         ask: { ...ask, dayName: moment.utc(ask.date, DAY).format("dddd") },
         person: brief.person,
@@ -412,6 +426,30 @@ const WEEK_OUT = {
   additionalProperties: false,
 } as const;
 
+/**
+ * What a week must hold whatever produced it — the layout model or an edit to
+ * a draft (weekEdit.ts): no two consecutive heavy days on the same muscles,
+ * and under caution no strength day and at least one mobility day.
+ */
+export const weekShapeIssues = (sessions: { day: number; focus?: string | null; muscleGroups?: string[] | null }[], caution: boolean): string[] => {
+  const issues: string[] = [];
+  const sorted = [...sessions].sort((x, y) => x.day - y.day);
+  const heavyFocus = (f?: string | null) => ["strength", "hypertrophy"].includes(f ?? "");
+  for (let i = 1; i < sorted.length; i++) {
+    const a = sorted[i - 1], b = sorted[i];
+    if (b.day - a.day === 1 && heavyFocus(a.focus) && heavyFocus(b.focus)) {
+      const overlap = (a.muscleGroups ?? []).flatMap(muscleGroupsFor).filter((g) => (b.muscleGroups ?? []).flatMap(muscleGroupsFor).includes(g) && g !== "core");
+      if (overlap.length) issues.push(`day ${a.day} and day ${b.day} both load ${Array.from(new Set(overlap)).join(", ")} on consecutive days`);
+    }
+  }
+  if (caution) {
+    const heavy = sorted.filter((x) => x.focus === "strength");
+    if (heavy.length) issues.push(`day ${heavy.map((x) => x.day).join(", ")} has focus "strength" — under caution use mixed, conditioning, mobility or endurance`);
+    if (!sorted.some((x) => x.focus === "mobility")) issues.push("under caution at least one day is a general mobility session");
+  }
+  return issues;
+};
+
 export type DesignedWeek = { title: string; notes: string; keepDay: number | null; sessions: (DesignedSession & { day: number })[]; fit: { ok: boolean; issues: string[] }; model: string; latencyMs: number };
 
 export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model?: string } = {}): Promise<DesignedWeek> => {
@@ -434,17 +472,8 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
     sessions = sessions.filter((s, i) => sessions.findIndex((x) => x.day === s.day) === i); // one per day
     if (dupes) issues.push(`${dupes} day(s) had two sessions — one session per day`);
     if (sessions.length !== ask.sessionsPerWeek) issues.push(`${sessions.length} sessions laid out, exactly ${ask.sessionsPerWeek} asked (days available: 1–${ask.days})`);
-    for (let i = 1; i < sessions.length; i++) {
-      const a = sessions[i - 1], b = sessions[i];
-      if (b.day - a.day === 1 && ["strength", "hypertrophy"].includes(a.focus) && ["strength", "hypertrophy"].includes(b.focus)) {
-        const overlap = a.muscleGroups.flatMap(muscleGroupsFor).filter((g) => b.muscleGroups.flatMap(muscleGroupsFor).includes(g) && g !== "core");
-        if (overlap.length) issues.push(`day ${a.day} and day ${b.day} both load ${overlap.join(", ")} on consecutive days`);
-      }
-    }
+    issues.push(...weekShapeIssues(sessions, !!ask.caution));
     if (ask.caution) {
-      const heavy = sessions.filter((x) => x.focus === "strength");
-      if (heavy.length) issues.push(`day ${heavy.map((x) => x.day).join(", ")} has focus "strength" — under caution use mixed, conditioning, mobility or endurance`);
-      if (!sessions.some((x) => x.focus === "mobility")) issues.push("under caution at least one day is a general mobility session");
       const framed = treatmentWording([out.title, out.notes, ...sessions.flatMap((x) => [x.title, x.why])], ask.caution);
       if (framed) issues.push(`"${framed}" presents the week as treatment or names a condition — title days by what they are and keep it general`);
     }

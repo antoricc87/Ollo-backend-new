@@ -33,6 +33,13 @@ const oneQuestion = ({ text }: { text: string }) => {
 };
 const TREATS_IT = /\b(?<!not |n't |never |not (aimed at|meant for|designed for|for|about) )(to |will |should |can |designed to |that )?(help|reliev|eas|treat|fix|heal|sooth)\w* (with )?(your|the|that) (lower )?(back|sciatica|pain|ache)/i;
 
+// A week draft as comparable session bodies (the day is compared apart, so a moved session still matches).
+type WeekBody = { day: number; body: string };
+let weekBefore: WeekBody[] = [];
+const weekBodies = (cards: { type: string; data: any }[]): WeekBody[] =>
+  ((cards.find((c) => c.type === "workout_plan")?.data?.sessions ?? []) as any[]).map((s) => ({ day: s.day, body: JSON.stringify({ ...s.session, plannedFor: null }) })).sort((a, b) => a.day - b.day);
+const sameBodies = (a: WeekBody[], b: WeekBody[]) => a.length === b.length && [...a.map((x) => x.body)].sort().join() === [...b.map((x) => x.body)].sort().join();
+
 // Fixture patient: 1500–1700 kcal, 120–150 g protein per day, shellfish allergy, dislikes cilantro; 520 kcal / 42 g protein logged at lunch.
 const KCAL = [1500, 1700] as const;
 const PROTEIN = [120, 150] as const;
@@ -433,6 +440,84 @@ export const SCENARIOS: Scenario[] = [
         },
       },
       { message: "Save it as my plan from today.", expect: { tools: ["save_workout_plan"], proposal: "save_workout_plan", notTools: ["generate_workout_plan"], mustMatch: [/confirm/i], mustNotMatch: [/\b(i('ve| have) )?(saved|stored) (it|that|your|the plan)\b/i] } },
+    ],
+  },
+  // A change to a drafted week edits THAT draft: what wasn't named comes back exactly as it was (Oct 5 2026 —
+  // "sessions should be Mon, Wed and Thu" had redesigned all three sessions).
+  {
+    name: "week_draft_edit_keeps_the_rest",
+    category: "capability",
+    turns: [
+      {
+        message: "Plan my next 7 days of training — three sessions, 45 minutes, at the gym.",
+        expect: {
+          tools: ["generate_workout_plan"],
+          cards: ["workout_plan"],
+          custom: ({ cards }) => {
+            weekBefore = weekBodies(cards);
+            return [{ ok: weekBefore.length === 3, what: `3 sessions drafted (${weekBefore.length})` }];
+          },
+        },
+      },
+      {
+        message: "Put the first session one day later.",
+        expect: {
+          tools: ["edit_workout_plan"],
+          notTools: ["generate_workout_plan", "save_workout_plan"],
+          cards: ["workout_plan"],
+          proposal: null,
+          custom: ({ cards }) => {
+            const now = weekBodies(cards);
+            const out = [
+              { ok: now.length === 3, what: `still 3 sessions (${now.length})` },
+              { ok: sameBodies(weekBefore, now), what: "every session has the same exercises, sets and reps as before" },
+              { ok: now.map((x) => x.day).join() !== weekBefore.map((x) => x.day).join() || now.map((x) => x.body).join() !== weekBefore.map((x) => x.body).join(), what: "a session is on another day" },
+            ];
+            weekBefore = now;
+            return out;
+          },
+        },
+      },
+      {
+        message: "Add one more session on a free day: 30 minutes of easy mobility.",
+        expect: {
+          tools: ["edit_workout_plan"],
+          notTools: ["generate_workout_plan", "save_workout_plan"],
+          cards: ["workout_plan"],
+          custom: ({ cards }) => {
+            const now = weekBodies(cards);
+            const kept = weekBefore.filter((b) => now.some((n) => n.day === b.day && n.body === b.body)).length;
+            const out = [
+              { ok: now.length === 4, what: `4 sessions (${now.length})` },
+              { ok: kept === 3, what: `the 3 earlier sessions are untouched, on their days (${kept} of 3)` },
+            ];
+            weekBefore = now;
+            return out;
+          },
+        },
+      },
+      {
+        message: "Make the second session of the week about 15 minutes longer.",
+        expect: {
+          tools: ["edit_workout_plan"],
+          notTools: ["generate_workout_plan", "save_workout_plan"],
+          cards: ["workout_plan"],
+          custom: ({ cards }) => {
+            const now = weekBodies(cards);
+            const kept = weekBefore.filter((b) => now.some((n) => n.day === b.day && n.body === b.body)).length;
+            // The changed session is still the same session: its earlier exercises are (nearly) all there.
+            const changed = now.find((n) => !weekBefore.some((b) => b.day === n.day && b.body === n.body));
+            const keysOf = (x?: WeekBody): string[] => (x ? JSON.parse(x.body).exercises.map((e: any) => e.exerciseKey) : []);
+            const was = keysOf(weekBefore.find((b) => b.day === changed?.day));
+            const stayed = was.filter((k) => keysOf(changed).includes(k)).length;
+            return [
+              { ok: now.length === 4, what: `still 4 sessions (${now.length})` },
+              { ok: kept === 3, what: `only one session changed (${4 - kept} changed)` },
+              { ok: was.length > 0 && stayed >= was.length - 1, what: `the changed session keeps its exercises (${stayed} of ${was.length})` },
+            ];
+          },
+        },
+      },
     ],
   },
   {
