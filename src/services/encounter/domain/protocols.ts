@@ -34,7 +34,8 @@ const ONSET: Slot = {
   kind: "single",
   prompt: "When did this start?",
   required: true,
-  options: opt("Today", "In the last few days", "One to two weeks ago", "A month or more ago"),
+  // "It keeps coming back" (v2, Oct 4 2026): a problem that returns after every match has no start date to pick.
+  options: opt("Today", "In the last few days", "One to two weeks ago", "A month or more ago", "It keeps coming back"),
 };
 
 const PATTERN: Slot = {
@@ -76,7 +77,7 @@ const associated = (prompt: string, ...values: string[]): Slot => ({
 export const PROTOCOLS: Protocol[] = [
   {
     key: "chest_discomfort",
-    version: 1,
+    version: 2,
     title: "Chest discomfort",
     opener: "I'll take this down properly. First, a few things that mean this shouldn't wait.",
     source: BATES,
@@ -98,7 +99,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "breathlessness",
-    version: 1,
+    version: 2,
     title: "Shortness of breath",
     opener: "Let's get this written down. A few checks first.",
     source: BATES,
@@ -112,7 +113,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "headache",
-    version: 1,
+    version: 2,
     title: "Headache",
     opener: "I'll take the details. A few safety checks first.",
     source: NICE_CKS,
@@ -135,7 +136,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "abdominal_pain",
-    version: 1,
+    version: 2,
     title: "Stomach or abdominal pain",
     opener: "Let's write this down properly.",
     source: BATES,
@@ -149,7 +150,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "back_pain",
-    version: 1,
+    version: 2,
     title: "Back pain",
     opener: "I'll take the details.",
     source: NICE_CKS,
@@ -171,7 +172,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "fatigue",
-    version: 1,
+    version: 2,
     title: "Tiredness",
     opener: "Worth writing this down — tiredness is hard to describe on the spot in a room.",
     source: NICE_CKS,
@@ -182,7 +183,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "cough_fever",
-    version: 1,
+    version: 2,
     title: "Cough or fever",
     opener: "Let's get the details down.",
     source: NICE_CKS,
@@ -193,7 +194,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "dizziness",
-    version: 1,
+    version: 2,
     title: "Dizziness",
     opener: "I'll take this down. A few checks first.",
     source: BATES,
@@ -204,7 +205,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "rash",
-    version: 1,
+    version: 2,
     title: "Rash or skin change",
     opener: "Let's write it down — and a photo at the time helps more than a description later.",
     source: NICE_CKS,
@@ -215,7 +216,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "joint_pain",
-    version: 1,
+    version: 2,
     title: "Joint pain",
     opener: "I'll take the details.",
     source: NICE_CKS,
@@ -226,7 +227,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "low_mood",
-    version: 1,
+    version: 2,
     title: "Low mood",
     opener: "Thank you for telling me. I'll take this down carefully.",
     source: NICE_CKS,
@@ -246,7 +247,7 @@ export const PROTOCOLS: Protocol[] = [
   },
   {
     key: "general_unwell",
-    version: 1,
+    version: 2,
     title: "Something else",
     opener: "Tell me what's going on and I'll get it written down.",
     source: BATES,

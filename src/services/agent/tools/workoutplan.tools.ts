@@ -11,6 +11,8 @@ import { activityByKey } from "../../workouts/domain/activity.catalog";
 import { fmtDuration, fmtSets } from "../../workouts/domain/workout.metrics";
 import { EQUIPMENT, EXPERIENCE, FOCUS, PLACE, PlannedSessionInput, WEEKDAYS, WorkoutPlanInput, timeString } from "../../workouts/domain/workout.schema";
 import { buildBrief, DEFAULT_SESSION_MIN, designSession, designWeek } from "../../workouts/design/workoutDesign.service";
+import encounterService from "../../encounter/model/encounter.model";
+import { generalSessionLine, stopLine, type TrainingGate } from "../../encounter/domain/trainingGate";
 
 /**
  * Designing training in the agent — on the SAME workouts domain that logs it.
@@ -159,6 +161,25 @@ const askDefaults = async (patientId: string, input: { durationMin?: number; pla
   return { profile, durationMin, place, needsPlace };
 };
 
+/**
+ * A check-in on record decides what may be designed (encounter/domain/
+ * trainingGate.ts). Both design tools read it here, at call time — the
+ * interview may have been assessed earlier in this same turn.
+ */
+const heldResult = (gate: TrainingGate) => ({
+  result: {
+    held: true,
+    about: gate.about,
+    reasons: gate.reasons,
+    note: gate.pending
+      ? `No session is designed while the check-in about their ${gate.about.toLowerCase()} is unfinished. Say so in one line and carry on with it (or offer once to pick it back up if it was paused) — the training question is answered straight after. Do NOT say a clinician has to clear them first: finishing the check-in is the next step.`
+      : `No session is designed: ${gate.reasons.join("; ")}. Say that plainly in one or two lines, without softening, and offer what you can do — the summary for a clinician, a message to the care team, a booking. Do not describe exercises in your own words instead.`,
+  },
+});
+
+const cautionNote = (gate: TrainingGate, what: "session" | "week") =>
+  `This is a GENERAL, lighter ${what}${what === "session" ? " — the card says so and lists when to stop" : ""}. What is true and must come across: (1) say ONCE, in one line, that exercises aimed at their ${gate.about.toLowerCase()} are for a clinician or physiotherapist to choose; (2) describe the ${what} as what it is — never that it will help, relieve, treat or fix the ${gate.about.toLowerCase()}${gate.conditions.length ? `, and never as being for ${gate.conditions.join(" / ")}` : ""}; (3) if they asked for it "for" a condition, say plainly that you built the general version instead${what === "week" ? `; (4) end with when to stop: ${stopLine(gate) ?? "if it gets worse, stop and get seen"}` : ""}. You may offer once to keep their limitation, in their own words, in their training profile (update_training_profile).`;
+
 /* --------------------------------- tools --------------------------------- */
 
 export const generateWorkout = defineTool({
@@ -188,6 +209,9 @@ export const generateWorkout = defineTool({
           question: "Ask ONE question: where they'll train and what they have (a gym, or home/outdoor with dumbbells, bands, a bar, or just bodyweight). Then call generate_workout again with place/equipment, and offer to remember it with update_training_profile.",
         },
       };
+    const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
+    if (gate?.level === "hold") return heldResult(gate);
+    const caution = gate?.level === "general" ? gate : null;
     const date = input.date && input.date >= ctx.today ? input.date : ctx.today;
     const brief = await buildBrief(ctx.patientId, { today: ctx.today, timeZone: ctx.timeZone, client: ctx.client });
     let replaces: { id: string; title: string; date: string } | null = null;
@@ -195,12 +219,12 @@ export const generateWorkout = defineTool({
       const row = await WorkoutService.get(ctx.patientId, input.replaceSessionId);
       if (row && row.status === "PLANNED") replaces = { id: row.id, title: row.title ?? activityByKey(row.activityKey).label, date: row.plannedFor ?? date };
     }
-    const designed = await designSession({ durationMin, focus: input.focus ?? null, muscleGroups: input.muscleGroups ?? [], place, equipment: input.equipment ?? profile?.equipment ?? [], request: input.request ?? null, date: replaces?.date ?? date }, brief);
+    const designed = await designSession({ durationMin, focus: input.focus ?? null, muscleGroups: input.muscleGroups ?? [], place, equipment: input.equipment ?? profile?.equipment ?? [], request: input.request ?? null, date: replaces?.date ?? date, caution }, brief);
     const draftId = randomUUID();
     const display = sessionDisplay(designed.session);
     const active = await WorkoutPlanService.getActive(ctx.patientId);
     const inWeek = !!active && designed.session.plannedFor! >= active.startDate && designed.session.plannedFor! <= active.endDate;
-    const cardData = { draftId, session: designed.session, display, fit: designed.fit, assumptions: designed.assumptions, slot: { date: designed.session.plannedFor, replaces, planId: inWeek ? active!.id : null, inWeek }, lastLoads: Object.fromEntries(designed.session.exercises!.filter((e) => brief.lastLoads[e.exerciseKey]).map((e) => [e.exerciseKey, brief.lastLoads[e.exerciseKey]])), timeZone: ctx.timeZone };
+    const cardData = { draftId, session: designed.session, display, fit: designed.fit, assumptions: designed.assumptions, slot: { date: designed.session.plannedFor, replaces, planId: inWeek ? active!.id : null, inWeek }, lastLoads: Object.fromEntries(designed.session.exercises!.filter((e) => brief.lastLoads[e.exerciseKey]).map((e) => [e.exerciseKey, brief.lastLoads[e.exerciseKey]])), timeZone: ctx.timeZone, caution: caution ? { about: caution.about, stopIf: caution.stopIf } : null };
     registerSessionDraft(draftId, designed.session, cardData);
     return {
       result: {
@@ -210,6 +234,7 @@ export const generateWorkout = defineTool({
         warmup: designed.session.warmup,
         assumptions: designed.assumptions,
         fit: designed.fit.ok ? { ok: true } : { ok: false, issues: designed.fit.issues, note: "Say plainly what still misses; do not claim it fits." },
+        ...(caution ? { caution: cautionNote(caution, "session") } : {}),
         cardActions: `The card has 'Log it as done' (when they've done it), 'Put in plan · ${moment.utc(designed.session.plannedFor!, "YYYY-MM-DD").format("ddd D")}' (writes it onto that day of their week — direct, no proposal) and 'Something else'. Nothing is saved and nothing needs confirming: it is a plan to do, not a log — never call log_workout for it unless they say they did it, and don't ask them to confirm. Keep your text to the highlights: the split, the one or two key lifts with their loads, and the why.`,
         design: { model: designed.model, latencyMs: designed.latencyMs },
       },
@@ -244,17 +269,23 @@ export const generateWorkoutPlan = defineTool({
           question: "Ask ONE question: where they'll train and what they have (a gym, or home/outdoor with dumbbells, bands, a bar, or just bodyweight). Then call generate_workout_plan again with place, and offer to remember it with update_training_profile.",
         },
       };
+    const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
+    if (gate?.level === "hold") return heldResult(gate);
+    const caution = gate?.level === "general" ? gate : null;
     const brief = await buildBrief(ctx.patientId, { today: ctx.today, timeZone: ctx.timeZone, client: ctx.client });
     const sessionsPerWeek = input.sessionsPerWeek ?? brief.plan?.sessionsPerWeek ?? 3;
     const startDate = input.startDate && input.startDate >= ctx.today ? input.startDate : ctx.today;
-    const week = await designWeek({ startDate, days: input.days, sessionsPerWeek: Math.min(sessionsPerWeek, input.days), sessionMinutes: durationMin, focus: input.focus ?? null, place, request: input.request ?? null }, brief);
+    const week = await designWeek({ startDate, days: input.days, sessionsPerWeek: Math.min(sessionsPerWeek, input.days), sessionMinutes: durationMin, focus: input.focus ?? null, place, request: input.request ?? null, caution }, brief);
+    // Saved with the week. The week card does not print notes today, so the reply carries the same line (cautionNote).
+    const notes = caution ? [week.notes, generalSessionLine(caution, "week"), stopLine(caution)].filter(Boolean).join("\n") : week.notes;
     const draftId = randomUUID();
     const active = await WorkoutPlanService.getActive(ctx.patientId);
     const sessions = week.sessions.map((s) => ({ day: s.day, date: s.session.plannedFor, session: s.session, display: sessionDisplay(s.session), fit: s.fit, assumptions: s.assumptions }));
     const cardData = {
       draftId,
       title: week.title,
-      notes: week.notes,
+      notes,
+      caution: caution ? { about: caution.about, stopIf: caution.stopIf } : null,
       // The day to keep if only one happens — the card tags it "Priority".
       priorityDay: week.keepDay,
       startDate,
@@ -280,6 +311,7 @@ export const generateWorkoutPlan = defineTool({
         sessions: sessions.map((s) => `day ${s.day} (${moment.utc(s.date!, "YYYY-MM-DD").format("ddd")}): ${sessionLine(s.session)}`),
         notes: week.notes,
         fit: week.fit.ok ? { ok: true } : { ok: false, issues: week.fit.issues, note: "Say plainly which days miss and why; offer to adjust. Do not claim it fits." },
+        ...(caution ? { caution: cautionNote(caution, "week") } : {}),
         replaces: cardData.replaces,
         cardActions: "The card shows every day with its exercises, a 'Save this week' button and per-day Log/Swap once saved. Nothing is saved yet: if the user asks to save/keep/use it, call save_workout_plan with this draftId (a proposal they confirm) — otherwise mention once that the card has Save. Keep your text to the split, the days, and one highlight per session.",
         design: { model: week.model, latencyMs: week.latencyMs },

@@ -51,6 +51,10 @@ const DRUG =
 const NUTRIENT =
   /\b(magnesium|creatine|berberine|ashwagandha|zinc|iron|omega[- ]?3|fish oil|probiotics?|vitamin [abcdek]\d*|multivitamins?)\b/i;
 
+/** A symptom, or a condition as the thing that hurts. "Soreness" is left out on purpose — post-training soreness is coaching. */
+const SYMPTOM =
+  /\b(pain|aches?|strains?|sprains?|headaches?|migraines?|symptoms?|injur(y|ies)|rash|stiffness|flare(-ups?)?|irritation|cough|fever|dizziness|nausea|cramps?|cramping|sciatica|tendin\w+|condition|episodes?)\b/i;
+
 const SUPPLEMENT_FORM = /\b(supplements?|capsules?|tablets?|pills?|dose|dosage|drops|sachets?|\d+\s?(mg|mcg|iu|ui)\b)/i;
 
 /**
@@ -112,6 +116,13 @@ const RULES: Rule[] = [
   /* Sep 16 2026, from the End-then-keep-talking transcript: "skip deep squats… until this settles". */
   { id: "pg.until", act: "PROGNOSE", frame: /\buntil (it|this|the pain|the ache|things?) (settles?|clears? up|goes? away|passes|calms? down|eases? off)\b/i },
   { id: "pg.settle", act: "PROGNOSE", frame: /\b(settles?|clears? up|goes? away|passes) (over|within|in) (the next |a |the )?(few |couple of )?(days?|weeks?)\b/i },
+
+  /* Oct 4 2026, after an assessment: "It usually causes mild pain that … improves over a few days" and "tends to get
+     better with time and gentle movement" passed — the usual course of a condition, told to the person who may have
+     it, is a prediction. Needs a symptom or condition word beside it: "sleep usually improves with a steady bedtime"
+     and "strength improves over a few weeks" are coaching and must stay clean. */
+  { id: "pg.course", act: "PROGNOSE", frame: /\b(usually|typically|normally|generally|often|tends? to|should|will|most (cases|people)) (\w+ ){0,3}?(improves?|gets? better|eases?|heals?|recovers?|settles?|resolves?|clears? up|goes? away)\b/i, near: SYMPTOM },
+  { id: "pg.improve", act: "PROGNOSE", frame: /\b(improves?|gets? better|eases?|heals?|recovers?) (over|within|in|after|with) (time|rest|(the next |a |the )?(few |couple of )?(days?|weeks?)|\d+ (days?|weeks?))\b/i, near: SYMPTOM },
 
   /* CLAIM_ACCURACY — performance claims. */
   { id: "ac.percent", act: "CLAIM_ACCURACY", frame: /\bi'?m \d+ ?% (sure|certain|confident)\b/i },

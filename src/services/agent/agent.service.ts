@@ -15,6 +15,8 @@ import { Card, cardRoleOf, ToolContext } from "./tools/registry";
 import { makeSubjectResolver } from "./tools/subject";
 import { checkinModeFor, CheckinMode } from "../encounter/domain/mode";
 import encounterService, { CheckinThreadView } from "../encounter/model/encounter.model";
+import { historyComplete } from "../encounter/domain/stateMachine";
+import { turnEndNudge } from "./turnChecks";
 
 /**
  * The agent loop, as an event stream. Two entry points share it:
@@ -132,10 +134,6 @@ function* chunks(text: string) {
 
 /* ============================== entry points ============================== */
 
-/** Phrases that only make sense after a write tool produced a proposal card. */
-const CLAIMS_CARD =
-  /\b(prepar\w*|ready)\b[^.!?\n]{0,80}\b(card|entry|log|logged|confirm)\b|\bcard\b[^.!?\n]{0,60}\b(confirm|edit|review)\b|\byou'?ll see a card\b|\bconfirm\b[^.!?\n]{0,40}\b(in|on) the app\b|\breview and confirm\b|\btap confirm\b/i;
-
 export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
   const { patientId } = input;
   const message = input.message.trim();
@@ -219,6 +217,8 @@ async function* runLoop(p: {
     checkin,
     paused: pausedView ? { about: pausedView.about, covered: pausedView.progress.covered, total: pausedView.progress.total } : null,
     assessedConditions: mode.assessedConditions,
+    // Patient-wide, unlike the mode: a workout asked for in another thread is shaped by the same check-in.
+    trainingGate: await encounterService.trainingGate(patientId, threadId).catch(() => null),
   });
   const messages: ChatMessage[] = [{ role: "system", content: system }, ...toChatMessages(window.messages)];
 
@@ -246,6 +246,8 @@ async function* runLoop(p: {
   let generatedThisTurn = false;
   let usedTools = false;
   let nudged = false;
+  const toolsCalled: string[] = [];
+  let assessRejected: string | null = null;
 
   try {
     while (steps < MAX_STEPS) {
@@ -256,35 +258,32 @@ async function* runLoop(p: {
       model = res.model;
 
       if (res.finishReason !== "tool_calls" || res.toolCalls.length === 0) {
-        // A reply that talks about a card or asks for confirmation when no
-        // write tool ran this turn is a hallucinated proposal (seen 2026-08-27:
-        // "I've prepared a card to log…" with tools=[]). Nudge once to call it.
-        // Weekly review: the snapshot is THIS week; judging last week without
-        // reading it (seen 2026-08-27: no tool calls, this week's numbers quoted
-        // as last week's) is wrong. Force the reads once.
-        if (!nudged && p.proactive === "weekly_review" && !usedTools) {
-          nudged = true;
-          void audit(patientId, "error", { threadId, payload: { stage: "weekly_review_without_reads", text: (res.text ?? "").slice(0, 300) } });
-          messages.push({ role: "assistant", content: res.text ?? "" });
-          messages.push({
-            role: "user",
-            content: "[System: the snapshot describes the CURRENT week, not the week under review. Call get_nutrition_summary, get_activity and get_workouts for the exact range given in the review instruction, then write the review from those results.]",
+        // The words and the tool calls must agree (turnChecks.ts) — one nudge per turn at most.
+        if (!nudged) {
+          const live = await encounterService.activeForThread(patientId, threadId).catch(() => null);
+          const nudge = turnEndNudge({
+            text: res.text ?? "",
+            userMessage: p.proactive ? "" : p.safetyContext ?? "",
+            proactive: p.proactive ?? null,
+            usedTools,
+            toolsCalled,
+            proposed: proposedThisTurn,
+            generated: generatedThisTurn,
+            checkin: {
+              inThread: checkin || mode.paused || mode.assessedConditions.length > 0 || toolsCalled.includes("start_checkin"),
+              active: !!live && live.state.phase !== "ROUTE" && live.state.phase !== "CLOSED",
+              historyComplete: !!live && historyComplete(live.state, live.protocol),
+              flagged: !!live && live.state.redFlags.length > 0,
+              rejected: assessRejected,
+            },
           });
-          continue;
-        }
-        // Not after a generate tool: its card is real, and nudging there once turned
-        // "give me a workout" into a log_workout proposal (Sep 12 2026: every one of
-        // the flaky workout_request_card failures followed this nudge).
-        if (!nudged && !proposedThisTurn && !generatedThisTurn && !p.proactive && CLAIMS_CARD.test(res.text ?? "")) {
-          nudged = true;
-          void audit(patientId, "error", { threadId, payload: { stage: "claim_without_proposal", text: (res.text ?? "").slice(0, 300) } });
-          messages.push({ role: "assistant", content: res.text ?? "" });
-          messages.push({
-            role: "user",
-            content:
-              "[System: your reply describes a card or asks the user to confirm, but nothing was prepared for them to confirm this turn. If they asked to log or send something, call the right tool now with their words verbatim (log_meal, log_workout, log_vital, message_care_team, book_appointment, update_plan_targets, save_workout_plan, update_training_profile, move_workout); otherwise answer plainly without claiming anything was prepared.]",
-          });
-          continue;
+          if (nudge) {
+            nudged = true;
+            void audit(patientId, "error", { threadId, payload: { stage: nudge.stage, text: (res.text ?? "").slice(0, 300) } });
+            messages.push({ role: "assistant", content: res.text ?? "" });
+            messages.push({ role: "user", content: nudge.message });
+            continue;
+          }
         }
         draft = res.text;
         break;
@@ -302,12 +301,14 @@ async function* runLoop(p: {
           return;
         }
         usedTools = true;
+        toolsCalled.push(call.name);
         yield { type: "tool_start", id: call.id, name: call.name, input: call.input };
         const tool = registry.get(call.name);
         if (tool?.risk === "generate") generatedThisTurn = true;
         void audit(patientId, tool?.risk === "memory" ? "memory_write" : "tool_call", { threadId, toolName: call.name, payload: { input: call.input } });
         const out = await registry.execute(call.name, call.input, ctx);
         let modelResult: unknown = out.result;
+        if (call.name === "assess_checkin") assessRejected = (out.result as any)?.rejected ? String((out.result as any).fix ?? "rejected") : null;
         if (out.ok && out.proposal) {
           // Write tool: nothing happened yet. Park it for the user to confirm.
           const pr = await proposalStore.create(patientId, threadId, call.name, out.input, out.proposal);

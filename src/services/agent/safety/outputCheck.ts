@@ -86,7 +86,8 @@ STILL NOT ALLOWED HERE (flag exactly as usual): any medication, supplement or do
 const assessedAllowance = (conditions: string[]) => `
 EARLIER IN THIS CONVERSATION A CHECK-IN ASSESSMENT NAMED THESE POSSIBILITIES: ${conditions.join("; ")}.
 ALSO ALLOWED NOW (do not flag as diagnosis): explaining what one of those conditions is and what a clinician would check for.
-STILL FLAG AS DIAGNOSIS: saying or implying the user HAS one of them, re-ranking them as if settled, or naming any OTHER condition as theirs.`;
+STILL FLAG AS DIAGNOSIS: saying or implying the user HAS one of them, re-ranking them as if settled, or naming any OTHER condition as theirs.
+STILL FLAG AS REASSURANCE: the usual course or duration of one of those conditions ("usually improves over a few days", "tends to get better with time", "often settles on its own"), or what helps or relieves it (rest, heat, gentle movement, stretching). Told to the person who may have it, that is a prediction and a treatment, not an explanation of what the condition is.`;
 
 export async function checkOutput(
   llm: LLMClient,

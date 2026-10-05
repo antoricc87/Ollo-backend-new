@@ -9,12 +9,13 @@ import { ownDataBlocks } from "../domain/context";
 import { followUpFor, FollowUp, CheckInRecord } from "../domain/followUp";
 import { buildPatientSnapshot } from "../../agent/context/snapshot";
 import { resolveProtocol } from "../domain/protocols";
-import { applyAnswer, historyComplete, markAsked, nextStep, open, shouldHalt } from "../domain/stateMachine";
+import { applyAnswer, historyComplete, isSafetySlot, markAsked, nextStep, open, questionFor, shouldHalt } from "../domain/stateMachine";
 import { bookingReason, handout, recapLines } from "../domain/summary";
 import { EncounterState, emptyState, Protocol, Slot, SlotValue, TrippedFlag } from "../domain/types";
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
 import { checkinModeFor } from "../domain/mode";
 import { CHECKIN_DISCLAIMER } from "../domain/assessment";
+import { GATE_DAYS, strictestGate, TrainingGate, trainingGateFor } from "../domain/trainingGate";
 
 /**
  * Persistence and orchestration for the check-in.
@@ -232,6 +233,16 @@ class EncounterService {
 
     const ctx = await patientContext(patientId);
 
+    /**
+     * They answered, but not with one of the listed options ("it comes back
+     * after every match" to "when did this start?"). Keep their words AS the
+     * answer and move on — the question used to stay open, so the tool told
+     * the model to ask it again (Oct 4 2026). Never for the warning-sign
+     * question (only its own options can settle it) or a 0–10 scale.
+     */
+    const ownWords = resolved === null && !!text?.trim() && !isSafetySlot(slot) && (slot.kind === "single" || slot.kind === "multi");
+    if (ownWords) resolved = text!.trim().slice(0, 300);
+
     // Unplaceable answer: mark asked only if it was optional, else keep the question up.
     if (resolved === null) {
       const next = slot.required ? state : markAsked(state, slotKey);
@@ -243,7 +254,7 @@ class EncounterService {
     const before = state.redFlags.length;
     const next = applyAnswer(state, protocol, slotKey, resolved, text);
     await persist(id, next);
-    await logEvent(id, "answer", { slotKey, value: resolved }, slotKey, undefined, usedModel ? SLOTFILL_VERSION : undefined);
+    await logEvent(id, "answer", { slotKey, value: resolved, ...(ownWords ? { ownWords: true } : {}) }, slotKey, undefined, usedModel ? SLOTFILL_VERSION : undefined);
     if (next.redFlags.length > before) await logEvent(id, "red_flag", { flags: next.redFlags.slice(before) });
 
     return { ...view({ ...row, phase: next.phase }, next, protocol, ctx.region), unplaced: false };
@@ -332,6 +343,38 @@ class EncounterService {
     return row ? row.checkIns : null;
   }
 
+  /**
+   * What training help the check-ins on record allow (domain/trainingGate.ts).
+   * Patient-wide for a FINISHED check-in: a workout asked for in a new
+   * conversation the next day is shaped by it. Null = nothing recent on record.
+   * The workout tools and the prompt both read THIS, so they cannot disagree.
+   */
+  async trainingGate(patientId: string, threadId: string | null = null): Promise<TrainingGate | null> {
+    const since = new Date(Date.now() - GATE_DAYS * 86400000);
+    const rows = await prisma.encounter.findMany({
+      where: { patientId, status: { in: ["OPEN", "ABANDONED"] }, updatedAt: { gte: since } },
+      orderBy: { updatedAt: "desc" },
+      take: 5,
+    });
+    if (!rows.length) return null;
+    const assessments = await prisma.encounterEvent.findMany({
+      where: { encounterId: { in: rows.map((r) => r.id) }, kind: "assessment" },
+      orderBy: { seq: "desc" },
+      select: { encounterId: true, payload: true },
+    });
+    return strictestGate(
+      rows
+        .map((row) => {
+          const state = toState(row);
+          const last = assessments.find((a) => a.encounterId === row.id);
+          const gate = trainingGateFor({ id: row.id, status: row.status, state, protocol: resolveProtocol(state.complaintKey) }, (last?.payload as any) ?? null);
+          // An unfinished interview established nothing: it holds training only in the conversation it is running in.
+          return gate.pending && row.threadId !== threadId ? null : gate;
+        })
+        .filter((g): g is TrainingGate => !!g)
+    );
+  }
+
   /* ------------------------ the conversational path ------------------------ */
 
   /** The open check-in running in this chat thread, if any. */
@@ -371,6 +414,20 @@ class EncounterService {
       last = out as any;
     }
     return { view: last, unplaced };
+  }
+
+  /**
+   * Which question the reply is about to ask (null = the next one in order).
+   * Logged on every record so a stale choice never outlives its turn; the app's
+   * choices and the tool's `askNext` both read it through `questionFor`.
+   */
+  async setAsking(id: string, slotKey: string | null) {
+    await logEvent(id, "asking", { slotKey }, slotKey ?? undefined);
+  }
+
+  async askingFor(id: string): Promise<string | null> {
+    const last = await prisma.encounterEvent.findFirst({ where: { encounterId: id, kind: "asking" }, orderBy: { seq: "desc" }, select: { payload: true } });
+    return ((last?.payload as any)?.slotKey as string | null) ?? null;
   }
 
   /**
@@ -440,7 +497,7 @@ class EncounterService {
       return typeof v !== "string" || v.trim().length > 0;
     };
     const required = protocol.slots.filter((s) => s.required);
-    const step = active ? nextStep(state, protocol) : null;
+    const step = active ? questionFor(state, protocol, await this.askingFor(row.id)) : null;
 
     return {
       id: row.id,

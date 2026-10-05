@@ -36,6 +36,9 @@ const isSettled = (state: EncounterState, key: string): boolean => isAnswered(st
 
 const isSafety = (s: Slot) => SAFETY_SLOT_KEYS.indexOf(s.key) >= 0;
 
+/** The warning-sign question. The one slot that is never settled by anything but one of its own options. */
+export const isSafetySlot = isSafety;
+
 export type Step =
   | { kind: "ask"; slot: Slot; phase: Phase }
   | { kind: "done"; phase: Phase };
@@ -60,6 +63,23 @@ export const nextStep = (state: EncounterState, protocol: Protocol): Step => {
   if (optional) return { kind: "ask", slot: optional, phase: "HISTORY" };
 
   return { kind: "done", phase: "RECAP" };
+};
+
+/**
+ * THE question on the table: what the reply asks and what the app shows
+ * choices for. One definition, so the two cannot drift (Oct 4 2026 — the chips
+ * followed nextStep while the model asked two or three questions in its own
+ * order, so the choices matched at most one of them).
+ *
+ * The model may lead: it names the uncovered question it is asking (`asking`)
+ * and that one is used. Two things it cannot do — skip the warning-sign
+ * question while that is open, or point at a question already answered.
+ */
+export const questionFor = (state: EncounterState, protocol: Protocol, asking?: string | null): Step => {
+  const step = nextStep(state, protocol);
+  if (step.kind !== "ask" || step.phase === "SAFETY_SCREEN" || !asking) return step;
+  const named = protocol.slots.find((s) => s.key === asking);
+  return named && !isSafety(named) && !isAnswered(state, named.key) ? { kind: "ask", slot: named, phase: "HISTORY" } : step;
 };
 
 /** Every required slot settled (answered or explicitly skipped). */

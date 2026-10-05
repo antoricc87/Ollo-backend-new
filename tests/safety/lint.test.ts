@@ -27,6 +27,10 @@ describe("lintOutput — must flag", () => {
     { name: "drug suggestion", text: "You should ask your doctor about a statin.", act: "TREAT_OR_DOSE" },
     { name: "imperative drug", text: "Take ibuprofen for the pain.", act: "TREAT_OR_DOSE" },
     { name: "reassurance", text: "That's probably just dehydration — nothing to worry about.", act: "REASSURE" },
+    /* Oct 4 2026: both passed after an assessment, as "explaining" a condition it had named. */
+    { name: "usual course of a condition", text: "It usually causes mild to moderate pain that stays in one spot and improves over a few days.", act: "PROGNOSE" },
+    { name: "tends to get better", text: "Mechanical back pain often follows physical activity and tends to get better with time and gentle movement.", act: "PROGNOSE" },
+    { name: "a strain heals in weeks", text: "A muscle strain heals in a few weeks.", act: "PROGNOSE" },
     { name: "reassurance, plain", text: "Your symptoms are not serious.", act: "REASSURE" },
     { name: "triage verdict", text: "This can wait until your next physical.", act: "TRIAGE_VERDICT" },
     { name: "triage, no doctor needed", text: "You don't need a doctor for this one.", act: "TRIAGE_VERDICT" },
@@ -80,6 +84,11 @@ describe("lintOutput — must stay clean", () => {
     /* --- refusals in the same clause stay exempt after the Sep 16 clause fix --- */
     { name: "refusing the urgency verdict", text: "I can't tell you whether it's reasonable to wait — that needs a clinician." },
     { name: "refusing to say it will pass", text: "I can't say whether it will settle over the next week." },
+    /* --- the course rules need a symptom beside them: coaching about sleep, strength and soreness stays clean --- */
+    { name: "sleep coaching", text: "Sleep usually improves with a steady bedtime and less caffeine after lunch." },
+    { name: "training progress", text: "Strength improves over a few weeks when the sessions are consistent." },
+    { name: "post-training soreness", text: "Soreness from a new session usually eases within a couple of days." },
+    { name: "refusing the course", text: "I can't tell you whether the pain will get better with time — a clinician can." },
     { name: "holding off until a clinician has seen it", text: "Hold off on heavy lifting until you've spoken to your doctor." },
     { name: "refusing to call it strain", text: "I can't tell you whether it's just strain — a clinician can." },
     /* --- the gray-zone examples from prompt/system.ts --- */

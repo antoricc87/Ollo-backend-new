@@ -331,6 +331,103 @@ founder-level risk decision — not a compliance claim.)
   the recorded answers every turn, everything lands on the append-only log, and
   it already knows their record, medications and labs.
 
+### Training with a check-in on record (Oct 4 2026) — `domain/trainingGate.ts`
+
+Device conversation: recurring lower-back pain after football, every warning
+sign answered "no", check-in assessed — and the request for a couple of
+recovery sessions was still refused "until a clinician has cleared you". Cause:
+ONE blanket prompt bullet (pain is never worked around with exercise → care
+team) and nothing connecting the check-in's answers to what Ollie may do next.
+Ruling (user): the answers decide, in code.
+- `trainingGateFor(encounter, lastAssessment)` (pure, `tests/encounter/
+  trainingGate.test.ts`) → `{level, about, reasons, pending, conditions,
+  stopIf}`. **hold**: a red flag tripped, an exertion protocol
+  (`EXERTION_PROTOCOLS`: chest, breathing, dizziness — a clear check-in does
+  not open training there), or the interview is unfinished/paused (`pending`).
+  **general**: assessed, no flag, but an answer says go carefully (travels,
+  a month or more, getting worse, constant, severity ≥ `CAUTION_SEVERITY` 7).
+  **normal**: assessed and none of that.
+- `EncounterService.trainingGate(patientId, threadId)` — strictest gate over
+  OPEN/ABANDONED check-ins touched in the last `GATE_DAYS` (14). A FINISHED
+  check-in applies patient-wide (a new thread tomorrow is shaped by it); an
+  unfinished one only in its own thread (it established nothing). The design
+  tools, `assess_checkin`'s result and the prompt all read this one function.
+- `generate_workout` / `generate_workout_plan`: hold → `{held, reasons, note}`
+  and no card; general → `DesignAsk.caution` / `WeekAsk.caution`. The designer
+  gets `CAUTION_RULES`, and `checkSession` / `checkLayout` ENFORCE it: no
+  "strength" focus, no rep sets under `CAUTION_MIN_REPS` (8), targetKg never
+  above history, at least one mobility day in a week, and `treatmentWording()`
+  rejects rehab / relieve / fix / treat / nerve glides… and any condition the
+  assessment named, in titles, why, notes and exercise names. The session card
+  gets two code-built `assumptions` lines (what it is not; when to stop) and
+  `data.caution {about, stopIf}`. The week card prints no notes, so the tool's
+  `caution` note makes the reply carry both lines.
+- The line that holds at every level: exercises aimed at a symptom or a named
+  condition are treatment and are never designed. "Recovery" and "mobility"
+  alone are ordinary training words and stay clean.
+- Prompt: the "Training and the body" bullet now says pain inside a training
+  request opens the check-in FIRST (no refusal in the same breath, never
+  "cleared by a clinician" as a condition) and to follow the tool result;
+  `trainingGateSection` is injected whenever a gate exists.
+- Evals: `pain_checkin_general_training` (the device conversation),
+  `pain_checkin_warning_sign_holds_training`, `pain_checkin_mild_normal_
+  training`; `knee_pain_workout` now expects the check-in. `agent-eval.ts`
+  deletes the fixture's encounters before each scenario (a finished check-in
+  would otherwise shape the next scenario's workout).
+- Open: thresholds are Claude-drafted, not clinically reviewed; the gate ends
+  silently after 14 days or when the check-in is closed; the week card shows
+  no caution line (needs a mockup).
+
+### One question on the table, and words that match the tools (Oct 4 2026)
+
+Same device conversation: six turns for what was said in two — onset asked
+twice, pattern asked twice, the warning signs listed as bullets although the
+prompt forbade lists, "look at my workout" dropped. One cause behind most of
+it: TWO things decided "the next question" (the app's chips followed
+`nextStep`, the model asked two or three questions in its own order), so the
+chips matched at most one question and the rest had to be listed in text.
+- `stateMachine.questionFor(state, protocol, asking?)` is THE question: the
+  tool's `askNext` and `threadView().question` (the chips) both read it. The
+  model may lead by passing `asking` (a slotKey) on `record_checkin`; it is
+  logged as an `asking` event on EVERY record (null = in order) so a choice
+  never outlives its turn. It cannot skip the warning-sign question or name an
+  answered one. No app change — the chips already render `question`.
+- ONE question per message (prompt + tool notes; eval `oneQuestion` counts
+  question marks). `askNext.how` says how to ask it: the warning-sign question
+  is the ONE place a list is right (every sign must be read; the user dictates
+  rather than taps), everything else is one sentence with the options left to
+  the chips.
+- An answer that fits no option is still an answer: `EncounterService.answer`
+  keeps their words AS the value for single/multi questions (event
+  `ownWords: true`), so the question is settled instead of being handed back
+  as `askNext`. Never for the warning-sign question or the 0–10 scale. The
+  handout prints it verbatim (`labelFor` falls back to the raw value); the
+  training gate treats an off-list answer as "go carefully".
+- ONSET gained "It keeps coming back"; every protocol is `version: 2`.
+- A second request in the symptom message is not dropped: a quick read or log
+  happens in the same turn, anything else is acknowledged in a clause and
+  picked up after the assessment (prompt; `assess_checkin`'s note repeats it).
+- `agent/turnChecks.ts` `turnEndNudge(facts)` — the loop's end-of-turn guards
+  as ONE pure, tested list (`tests/agent/turnChecks.test.ts`) instead of inline
+  ifs: `weekly_review_without_reads`, `claim_without_proposal` (both moved
+  verbatim), plus `checkin_complete_not_assessed` (history covered, reply
+  announces or free-texts possibilities with no saved assessment — usually
+  after `assess_checkin` refused a phrasing; the nudge carries the refusal) and
+  `checkin_not_opened` (the reply says "check-in", or asks a question back to a user message with a symptom word, with no
+  start_checkin). One nudge per turn. Add a check there only when FACTS decide
+  it; meaning is the output guard's job. Rejections log `[checkin] assessment
+  rejected: …`.
+- Guard: after an assessment "explain what the condition is" was read as
+  licence for its usual course ("usually … improves over a few days", "tends
+  to get better with time and gentle movement"). `lint.ts` `pg.course` /
+  `pg.improve` (need a `SYMPTOM` word beside them — sleep, strength and
+  post-training soreness coaching stay clean), `assessedAllowance` flags course
+  and what-relieves-it as reassurance, and the prompt's assessed section says
+  the same.
+- Evals: `checkin_one_question_no_reask` replays the device conversation turn
+  by turn (second request acknowledged, no re-ask, one question each);
+  `pain_checkin_mild_normal_training` asks "does it go away by itself?".
+
 ### Phase 2 — the follow-up loop and own-data context (2026-09-10)
 
 `domain/followUp.ts` (pure): `FOLLOW_UP_DAYS` [2, 5, 10]; `followUpFor()`

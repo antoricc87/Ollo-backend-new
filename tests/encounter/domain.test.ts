@@ -1,6 +1,6 @@
 import { PROTOCOLS, byKey, resolveProtocol, requiredSlots, slug } from "../../src/services/encounter/domain/protocols";
 import { RULES, evaluateSlots, highestLevel } from "../../src/services/encounter/domain/redflags";
-import { applyAnswer, historyComplete, markAsked, nextStep, open, shouldHalt, MAX_TURNS } from "../../src/services/encounter/domain/stateMachine";
+import { applyAnswer, historyComplete, markAsked, nextStep, open, questionFor, shouldHalt, MAX_TURNS } from "../../src/services/encounter/domain/stateMachine";
 import { handout, recapLines, bookingReason } from "../../src/services/encounter/domain/summary";
 import { emptyState, EncounterState, Protocol } from "../../src/services/encounter/domain/types";
 import { lintOutput } from "../../src/services/agent/safety/lint";
@@ -173,5 +173,48 @@ describe("summary", () => {
 
   it("emits nothing the output guard would flag, for every red-flag criterion", () => {
     for (const rule of RULES) expect(lintOutput(rule.criterion)).toEqual([]);
+  });
+});
+
+/**
+ * One question on the table (Oct 4 2026). The app's choices followed nextStep
+ * while the model asked two or three questions in its own order, so the chips
+ * matched at most one of them. Now both read questionFor.
+ */
+describe("questionFor — the one question the reply asks and the app shows choices for", () => {
+  const back = byKey("back_pain") as Protocol;
+  const opened = () => open(emptyState("back_pain", "my lower back hurts after football", back.version), back);
+  const screened = () => applyAnswer(opened(), back, "associated", ["none_of_these"]);
+
+  it("is the next question in order when the model names nothing", () => {
+    const s = screened();
+    expect(questionFor(s, back)).toEqual(nextStep(s, back));
+  });
+
+  it("follows the model when it names an uncovered question", () => {
+    const step = questionFor(screened(), back, "radiates");
+    expect(step.kind === "ask" && step.slot.key).toBe("radiates");
+  });
+
+  it("never lets the warning-sign question be skipped", () => {
+    const step = questionFor(opened(), back, "radiates");
+    expect(step.kind === "ask" && step.slot.key).toBe("associated");
+  });
+
+  it("ignores a question that is already answered, and one that does not exist", () => {
+    const s = applyAnswer(screened(), back, "radiates", slug("Down one leg"));
+    expect(questionFor(s, back, "radiates")).toEqual(nextStep(s, back));
+    expect(questionFor(s, back, "made_up")).toEqual(nextStep(s, back));
+  });
+
+  it("an answer kept in their own words settles the question and prints as they said it", () => {
+    const s = applyAnswer(screened(), back, "onset", "worse after every match, eases over three or four days");
+    const next = questionFor(s, back);
+    expect(next.kind === "ask" && next.slot.key).not.toBe("onset");
+    expect(recapLines(s, back).find((l) => l.question === "When did this start?")?.answer).toBe("worse after every match, eases over three or four days");
+  });
+
+  it("offers 'It keeps coming back' for when it started", () => {
+    expect(back.slots.find((x) => x.key === "onset")?.options?.map((o) => o.label)).toContain("It keeps coming back");
   });
 });

@@ -18,6 +18,7 @@ import { fmtSets } from "../domain/workout.metrics";
 import { FOCUS, PLACE, PlannedSessionInput, type ExerciseInput } from "../domain/workout.schema";
 import TrainingProfileService from "../model/training_profile.model";
 import WorkoutService from "../model/workouts.model";
+import { generalSessionLine, stopLine, treatmentWording, type TrainingGate } from "../../encounter/domain/trainingGate";
 
 const DAY = "YYYY-MM-DD";
 export const DEFAULT_SESSION_MIN = 45;
@@ -37,9 +38,17 @@ export type DesignAsk = {
   request?: string | null;
   /** Local day the session is for (defaults today) — only used for recovery reasoning and the row. */
   date: string;
+  /** A check-in on record says to keep this general and lighter (encounter/domain/trainingGate.ts, level "general"). */
+  caution?: DesignCaution | null;
   /** Other sessions planned in the same week (when designing a week) so recovery is judged across days. */
   weekContext?: { date: string; title: string; focus: string; muscleGroups: string[] }[];
 };
+
+/** What the designer is told about a symptom on record: the person's own facts, never a condition to design for. */
+export type DesignCaution = Pick<TrainingGate, "about" | "reasons" | "conditions" | "stopIf">;
+
+/** Under caution no rep set goes below this — heavy low-rep work is what "lighter" rules out. */
+export const CAUTION_MIN_REPS = 8;
 
 export type DesignBrief = Awaited<ReturnType<typeof buildBrief>>;
 
@@ -179,6 +188,16 @@ const SYSTEM = `You are a careful strength & conditioning coach designing ONE se
 - Keep it doable: 4–7 exercises for 45 min strength, fewer for shorter; supersets are fine, say so in notes. Warm-up 2–4 lines, cool-down 1–3 lines.
 - Plain language, no medical claims, no supplements. Output ONLY the schema.`;
 
+/**
+ * Added when a check-in is on record at level "general". The session is still
+ * a training session — what changes is the load and the framing.
+ */
+const CAUTION_RULES = `
+CAUTION — the ask carries \`caution\`: this person has a symptom on record (caution.about) and a clinician has not looked at it. Design a GENERAL, LIGHTER session:
+- Gentle whole-body movement, mobility and easy core or conditioning work that any healthy adult could do. No heavy or maximal sets (rep sets of ${CAUTION_MIN_REPS} or more), no jumping or impact, no heavy loading through the area in caution.about, nothing that needs pushing through discomfort. Loads at or below their history, never a progression.
+- It is NOT designed for the symptom. Never present an exercise, the title, the why or the notes as helping, relieving, fixing, treating, rehabilitating or "being good for" the symptom, and never name a condition. Title it by what it is ("Mobility and easy core", "Light full body"), not by the body part that hurts.
+- why = one line saying it is a lighter, general session because of what they told you (their fact, e.g. "kept light and general while your back pain is unassessed by a clinician"). No advice about the symptom itself.`;
+
 /* --------------------------------- checks -------------------------------- */
 
 const estimateMinutes = (s: PlannedSessionInput) => {
@@ -240,6 +259,23 @@ export const checkSession = (s: PlannedSessionInput, ask: DesignAsk, brief: Desi
     }
     if (e.exerciseKey.startsWith("custom:")) assumptions.push(`${e.name} is not in the exercise library`);
   }
+  // A check-in on record (level "general"): lighter in fact, and never framed as treatment.
+  if (ask.caution) {
+    for (const e of s.exercises ?? []) {
+      const hist = brief.lastLoads[e.exerciseKey];
+      for (const set of e.sets ?? []) {
+        if (set.targetKg != null && hist?.kg != null && set.targetKg > hist.kg) set.targetKg = hist.kg; // no progression
+      }
+      const low = (e.sets ?? []).find((set) => set.durationSec == null && set.targetReps != null && set.targetReps < CAUTION_MIN_REPS);
+      if (low) issues.push(`${e.name} has sets of ${low.targetReps} — under caution no heavy low-rep work: ${CAUTION_MIN_REPS}+ reps with a lighter load, or a timed hold`);
+    }
+    if (s.focus === "strength") issues.push(`focus "strength" (heavy, low reps) is not a lighter session — use mobility, conditioning or mixed`);
+    const framed = treatmentWording([s.title, s.why, s.notes, ...(s.warmup ?? []), ...(s.cooldown ?? []), ...(s.exercises ?? []).flatMap((e) => [e.name, e.loadNote])], ask.caution);
+    if (framed) issues.push(`"${framed}" presents the session as treatment or names a condition — describe it as a general, lighter session and title it by what it is`);
+    assumptions.push(generalSessionLine(ask.caution));
+    const stop = stopLine(ask.caution);
+    if (stop) assumptions.push(stop);
+  }
   if (brief.training?.limitations) assumptions.push(`kept your note: "${brief.training.limitations}"`);
   if (!brief.training) assumptions.push("no training profile yet — assumed a normal gym");
   return { issues, assumptions };
@@ -286,7 +322,7 @@ export const designSession = async (ask: DesignAsk, brief: DesignBrief, opts: { 
   const t0 = Date.now();
   const generate = (revision?: { previous: SessionOut; issues: string[] }) =>
     llm.json<SessionOut>({
-      system: SYSTEM + (revision ? "\nYou are REVISING a session that missed its checks: fix every listed issue, keep what was fine." : ""),
+      system: SYSTEM + (ask.caution ? CAUTION_RULES : "") + (revision ? "\nYou are REVISING a session that missed its checks: fix every listed issue, keep what was fine." : ""),
       user: JSON.stringify({
         ask: { ...ask, dayName: moment.utc(ask.date, DAY).format("dddd") },
         person: brief.person,
@@ -331,6 +367,8 @@ export type WeekAsk = {
   focus?: (typeof FOCUS)[number] | null;
   place?: (typeof PLACE)[number] | null;
   request?: string | null;
+  /** Same as DesignAsk.caution — applied to the layout and to every session in it. */
+  caution?: DesignCaution | null;
 };
 
 type WeekOut = { title: string; notes: string; keepDay: number; sessions: { day: number; title: string; activityKey: string; focus: (typeof FOCUS)[number]; durationMin: number; muscleGroups: string[]; why: string }[] };
@@ -342,6 +380,9 @@ const WEEK_SYSTEM = `You are a coach laying out ONE training week for a specific
 - Session titles are SHORT and in sentence case ("Full body strength", "Lower back recovery"), never Title Case; put the emphasis in muscleGroups, not in brackets after the title.
 - Respect limitations, equipment and place. why = one line per session, second person.
 - Output ONLY the schema.`;
+
+const WEEK_CAUTION_RULES = `
+CAUTION — the ask carries \`caution\`: this person has a symptom on record (caution.about) and a clinician has not looked at it. Lay out a LIGHTER week: keep the session count, but no "strength" focus days (use mixed, conditioning, mobility or endurance), and make at least one day a general mobility session. Titles say what the day is ("Mobility and easy core", "Light full body"), never the body part that hurts, a condition, or words like rehab, relief or treatment. notes = one line that the week is kept lighter and general because of what they reported, one line on a missed day. Nothing about the symptom itself.`;
 
 const WEEK_OUT = {
   type: "object",
@@ -380,7 +421,7 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
   const dayNames = Array.from({ length: ask.days }, (_, i) => `${i + 1}: ${moment.utc(ask.startDate, DAY).add(i, "days").format("ddd D MMM")}`);
   const layout = (revision?: { previous: WeekOut; issues: string[] }) =>
     llm.json<WeekOut>({
-      system: WEEK_SYSTEM + (revision ? "\nYou are REVISING a layout that missed its checks: fix every listed issue (exact session count, one session per day, no consecutive heavy days), keep what was fine." : ""),
+      system: WEEK_SYSTEM + (ask.caution ? WEEK_CAUTION_RULES : "") + (revision ? "\nYou are REVISING a layout that missed its checks: fix every listed issue (exact session count, one session per day, no consecutive heavy days), keep what was fine." : ""),
       user: JSON.stringify({ ask: { ...ask, dayNames }, person: brief.person, training: brief.training, plan: brief.plan, recentSessions: brief.recent, remembered: brief.remembered, ...(revision ? { previous: revision.previous, issues: revision.issues } : {}) }),
       schema: WEEK_OUT,
       schemaName: "workout_week_design",
@@ -399,6 +440,13 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
         const overlap = a.muscleGroups.flatMap(muscleGroupsFor).filter((g) => b.muscleGroups.flatMap(muscleGroupsFor).includes(g) && g !== "core");
         if (overlap.length) issues.push(`day ${a.day} and day ${b.day} both load ${overlap.join(", ")} on consecutive days`);
       }
+    }
+    if (ask.caution) {
+      const heavy = sessions.filter((x) => x.focus === "strength");
+      if (heavy.length) issues.push(`day ${heavy.map((x) => x.day).join(", ")} has focus "strength" — under caution use mixed, conditioning, mobility or endurance`);
+      if (!sessions.some((x) => x.focus === "mobility")) issues.push("under caution at least one day is a general mobility session");
+      const framed = treatmentWording([out.title, out.notes, ...sessions.flatMap((x) => [x.title, x.why])], ask.caution);
+      if (framed) issues.push(`"${framed}" presents the week as treatment or names a condition — title days by what they are and keep it general`);
     }
     return { sessions, issues };
   };
@@ -426,6 +474,7 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
           request: `${s.title}. ${s.why} ${ask.request ?? ""}`.trim(),
           date,
           weekContext: weekContext.filter((w) => w.date !== date),
+          caution: ask.caution ?? null,
         },
         brief,
         { model }

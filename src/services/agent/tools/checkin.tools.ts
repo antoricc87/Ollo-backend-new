@@ -4,7 +4,7 @@ import { defineTool } from "./registry";
 import encounterService from "../../encounter/model/encounter.model";
 import { AssessmentRejected, buildAssessment, NEXT_STEP_KINDS } from "../../encounter/domain/assessment";
 import { resolveProtocol } from "../../encounter/domain/protocols";
-import { historyComplete, nextStep, shouldHalt } from "../../encounter/domain/stateMachine";
+import { historyComplete, isSafetySlot, questionFor, shouldHalt } from "../../encounter/domain/stateMachine";
 import { escalationFor } from "../../encounter/domain/escalation";
 import { Protocol, SlotValue, TrippedFlag } from "../../encounter/domain/types";
 
@@ -31,8 +31,9 @@ import { Protocol, SlotValue, TrippedFlag } from "../../encounter/domain/types";
 const SLOT_VALUE = z.union([z.string(), z.array(z.string()), z.number()]);
 
 /** What the model needs to keep the interview covering the protocol. */
-const protocolPlan = (protocol: Protocol, state: { slots: Record<string, unknown>; askedKeys: string[] }) => {
-  const step = nextStep(state as any, protocol);
+const protocolPlan = (protocol: Protocol, state: { slots: Record<string, unknown>; askedKeys: string[] }, asking: string | null = null) => {
+  // The same question the app shows choices for (stateMachine.questionFor) — text and chips cannot drift.
+  const step = questionFor(state as any, protocol, asking);
   return {
     covers: protocol.slots.map((s) => ({
       slotKey: s.key,
@@ -43,7 +44,18 @@ const protocolPlan = (protocol: Protocol, state: { slots: Record<string, unknown
       ...(s.range ? { range: s.range } : {}),
       answered: state.slots[s.key] !== undefined && state.slots[s.key] !== null,
     })),
-    askNext: step.kind === "ask" ? { slotKey: step.slot.key, ask: step.slot.prompt } : null,
+    askNext:
+      step.kind === "ask"
+        ? {
+            slotKey: step.slot.key,
+            ask: step.slot.prompt,
+            how: isSafetySlot(step.slot)
+              ? "The warning-sign question: list EVERY sign so each one is read, and end with 'or none of these'."
+              : step.slot.options
+              ? "One natural sentence. Its options are on screen as tappable choices — do not list them."
+              : "One natural sentence.",
+          }
+        : null,
     historyComplete: historyComplete(state as any, protocol),
   };
 };
@@ -72,7 +84,7 @@ const flagView = (flags: TrippedFlag[]) => flags.map((f) => ({ level: f.level, c
 export const startCheckin = defineTool({
   name: "start_checkin",
   description:
-    "Open a check-in when the user describes a symptom they are having (pain, breathlessness, a rash, dizziness, exhaustion, low mood…). Pass their own words as `complaint`. This CREATES the check-in and returns the questions to cover — you then take the history yourself, in conversation, one or two questions at a time. Do not call it for a condition already on their record, or for food, training or sleep coaching.",
+    "Open a check-in when the user describes a symptom they are having (pain, breathlessness, a rash, dizziness, exhaustion, low mood…). Pass their own words as `complaint`. This CREATES the check-in and returns the questions to cover — you then take the history yourself, in conversation, one question per message. Do not call it for a condition already on their record, or for food, training or sleep coaching.",
   schema: z.object({
     complaint: z.string().min(2).max(1000).describe("The user's own description of the symptom, in their words. Do not summarise or rename it."),
   }),
@@ -91,7 +103,7 @@ export const startCheckin = defineTool({
         trippedNow: flagView(active?.state.redFlags ?? []),
         escalation: started.escalation,
         note:
-          "Take the history in conversation — one or two questions at a time, in your own words, in whatever order their answers suggest. Ask the safety questions early. Use what you already know (record, medications, labs) instead of asking again. Call record_checkin as you learn each answer, then assess_checkin when you have enough.",
+          "FIRST record everything their messages so far already answer (record_checkin, same turn) — never ask what they have told you. Then ask ONE question in your reply: `askNext`, the way its `how` says. Use what you already know (record, medications, labs) instead of asking. assess_checkin when the history is covered.",
       },
     };
   },
@@ -107,11 +119,15 @@ export const recordCheckin = defineTool({
         z.object({
           slotKey: z.string().describe("A slotKey from start_checkin's `covers` list."),
           value: SLOT_VALUE.optional().describe("The option value (or values for a multi, or a 0-10 number for a scale)."),
-          text: z.string().max(1000).optional().describe("Their own words, when no option fits."),
+          text: z.string().max(1000).optional().describe("Their own words, when no option fits — kept as the answer, so the question is not asked again."),
         })
       )
       .min(1)
       .max(8),
+    asking: z
+      .string()
+      .optional()
+      .describe("Only when the ONE question you are about to ask is not the one this tool would return as askNext: the slotKey of the uncovered question their answer leads to. The app's choices follow it. Omit to ask them in order."),
   }),
   risk: "read",
   cardRole: "result", // records answers and ends the interview — its cards are the conversation, not a lookup
@@ -125,6 +141,9 @@ export const recordCheckin = defineTool({
     const { unplaced } = await encounterService.recordAnswers(ctx.patientId, active.row.id, answers);
     const after = await encounterService.stateFor(ctx.patientId, active.row.id);
     if (!after) return { result: { error: "That check-in could not be read back." } };
+    // Logged on every record (null = in order), so the question named for one turn never outlives it.
+    const asking = input.asking && after.protocol.slots.some((s) => s.key === input.asking) ? (input.asking as string) : null;
+    await encounterService.setAsking(active.row.id, asking);
 
     const newFlags = after.state.redFlags.slice(before);
     const escalation = escalationFor(after.state.redFlags, after.region);
@@ -149,14 +168,16 @@ export const recordCheckin = defineTool({
       result: {
         recorded: input.answers.length - unplaced.length,
         unplaced: unplaced.length ? unplaced : undefined,
-        ...protocolPlan(after.protocol, after.state),
+        ...protocolPlan(after.protocol, after.state, asking),
         matchedNow: flagView(newFlags),
         escalation: newFlags.length ? escalation : null,
         note: newFlags.length
           ? "They matched a published criterion. Say so plainly THIS TURN, with the criterion and who publishes it, and give the action from the escalation. Do not soften it, do not wait for the assessment."
           : historyComplete(after.state as any, after.protocol)
           ? "The history is covered — call assess_checkin now rather than asking anything else. Anything still unanswered is optional and will not change what you say."
-          : "Ask only what is still uncovered, one or two at a time, and never repeat a question they have answered.",
+          : unplaced.length
+          ? "Something could not be recorded (see `unplaced`): if they did answer it, record it again with their own words as `text` — do not ask it a second time. Then ask ONE question: `askNext`, the way its `how` says."
+          : "Ask ONE question in this reply: `askNext`, the way its `how` says. Nothing else with a question mark.",
       },
       cards: newFlags.length && escalation ? [{ type: "checkin_escalation", title: escalation.title, data: escalation }] : [],
     };
@@ -198,19 +219,34 @@ export const assessCheckin = defineTool({
     try {
       const assessment = buildAssessment(input as any, fresh.state, fresh.protocol, fresh.region);
       await encounterService.saveAssessment(ctx.patientId, active.row.id, assessment);
+      // What the answers allow for training, so a request made before the check-in gets its answer now.
+      const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId).catch(() => null);
       return {
         result: {
           assessed: true,
           checkinId: active.row.id,
           possibilities: assessment.possibilities.map((p) => p.condition),
           nextStep: assessment.nextStep,
+          ...(gate
+            ? {
+                training:
+                  gate.level === "hold"
+                    ? "No training is designed while this stands. If they asked for training help, say so in one line."
+                    : gate.level === "general"
+                    ? "A general, lighter session or week can be designed now (not one aimed at the symptom). If they asked for training help earlier in this conversation, offer it in ONE line here and design it when they say yes — don't leave the request unanswered."
+                    : "Training requests are designed as usual. If they asked for training help earlier in this conversation, offer it in one line here.",
+              }
+            : {}),
           note:
-            "The card carries the possibilities, the warning signs, the route and the disclaimer. In your reply: one or two lines, no repetition of the list, and offer the summary they can take to a visit. Never call this a diagnosis.",
+            "The card carries the possibilities, the warning signs, the route and the disclaimer. In your reply: one or two lines, no repetition of the list, and offer the summary they can take to a visit. Never call this a diagnosis. If they asked for anything else earlier that you set aside for the check-in (a look at their data, a log, a plan), come back to it now in one line.",
         },
         cards: [{ type: "checkin_assessment", title: `What this could be · ${fresh.protocol.title}`, data: { checkinId: active.row.id, about: fresh.protocol.title, ...assessment } }],
       };
     } catch (e: any) {
-      if (e instanceof AssessmentRejected) return { result: { rejected: true, fix: e.message } };
+      if (e instanceof AssessmentRejected) {
+        console.warn(`[checkin] assessment rejected: ${e.message}`);
+        return { result: { rejected: true, fix: e.message } };
+      }
       throw e;
     }
   },

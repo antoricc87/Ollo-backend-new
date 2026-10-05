@@ -12,6 +12,7 @@
     "test:watch": "jest --watch",
     "eval:nutrition": "ts-node --transpile-only src/eval/nutrition/run.ts",
     "eval:agent": "ts-node --transpile-only scripts/agent-eval.ts",
+    "agent:transcript": "ts-node --transpile-only scripts/agent-transcript.ts",
     "eval:agent:safety": "ts-node --transpile-only scripts/agent-safety-check.ts"
   },
   "keywords": [],

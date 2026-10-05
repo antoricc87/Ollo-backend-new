@@ -57,6 +57,8 @@ function evaluate(expect: Expect, r: Awaited<ReturnType<typeof runTurnCollect>>)
 
 async function runScenario(patientId: string, s: Scenario) {
   let threadId: string | null = null;
+  // A finished check-in shapes later training requests patient-wide — one scenario's must not leak into the next.
+  await prisma.encounter.deleteMany({ where: { patientId } });
   const turns: { message: string; text: string; checks: Check[]; ms: number; tools: string[] }[] = [];
   for (const t of s.turns) {
     const t0 = Date.now();
