@@ -1,5 +1,6 @@
 import { applyWeekEdits, dayOfWeekday, WeekEditError, type DesignOne, type WeekDraftState, type WeekSession } from "../../src/services/workouts/design/weekEdit";
 import { weekShapeIssues } from "../../src/services/workouts/design/workoutDesign.service";
+import { weekFitForModel } from "../../src/services/agent/tools/workoutplan.tools";
 
 /**
  * A change to a drafted week touches only what was named. The device
@@ -133,5 +134,23 @@ describe("what an edited week must still hold", () => {
     expect(weekShapeIssues([{ day: 1, focus: "mixed", muscleGroups: [] }], true).join(" ")).toMatch(/mobility/);
     expect(weekShapeIssues([{ day: 1, focus: "mobility", muscleGroups: [] }, { day: 3, focus: "strength", muscleGroups: [] }], true).join(" ")).toMatch(/strength/);
     expect(weekShapeIssues([{ day: 1, focus: "mobility", muscleGroups: [] }, { day: 3, focus: "mixed", muscleGroups: [] }], true)).toEqual([]);
+  });
+});
+
+describe("what the model is told about a week that misses", () => {
+  const consecutive = "day 2 and day 3 both load legs on consecutive days";
+  it("raises an issue the edit introduced", () => {
+    expect(weekFitForModel([consecutive], [])).toMatchObject({ ok: false, issues: [consecutive] });
+    expect((weekFitForModel([consecutive], []) as any).alreadyTold).toBeUndefined();
+  });
+  it("does not raise again what the previous card already carried", () => {
+    const out: any = weekFitForModel([consecutive], [consecutive]);
+    expect(out).toMatchObject({ ok: false, alreadyTold: [consecutive] });
+    expect(out.issues).toBeUndefined();
+    expect(out.note).toMatch(/do not raise it again/);
+  });
+  it("separates the new from the old, and says nothing when the week fits", () => {
+    expect(weekFitForModel([consecutive, "day 4: estimated 30 min of work vs 45 min asked"], [consecutive])).toMatchObject({ issues: ["day 4: estimated 30 min of work vs 45 min asked"], alreadyTold: [consecutive] });
+    expect(weekFitForModel([], [consecutive])).toEqual({ ok: true });
   });
 });

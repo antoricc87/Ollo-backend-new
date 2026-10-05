@@ -345,6 +345,26 @@ export const generateWorkoutPlan = defineTool({
   },
 });
 
+/**
+ * What an edited week still misses, for the model: an issue the previous card
+ * already carried has been said once — repeating it after every edit is
+ * nagging (seen in the first eval run: the same consecutive-days warning in
+ * three replies running). Only what this edit introduced is to be raised.
+ */
+export const weekFitForModel = (issues: string[], previous: string[]) => {
+  if (!issues.length) return { ok: true as const };
+  const fresh = issues.filter((i) => !previous.includes(i));
+  const told = issues.filter((i) => previous.includes(i));
+  return {
+    ok: false as const,
+    ...(fresh.length ? { issues: fresh } : {}),
+    ...(told.length ? { alreadyTold: told } : {}),
+    note: fresh.length
+      ? `Say plainly what \`issues\` lists and offer to adjust; do not claim the week fits.${told.length ? " `alreadyTold` was on the previous card and they have heard it — do not raise it again unless they ask." : ""}`
+      : "Nothing new misses. `alreadyTold` was on the previous card and they have heard it — do not raise it again unless they ask; do not claim the week fits either.",
+  };
+};
+
 const weekDay = z.enum(WEEKDAYS);
 const designFields = {
   request: z.string().min(1).max(600).describe("What they asked for this session, verbatim"),
@@ -446,7 +466,7 @@ export const editWorkoutPlan = defineTool({
         title: cardData.title,
         changed: edited.log,
         sessions: sessions.map((s) => `${moment.utc(s.date, "YYYY-MM-DD").format("ddd")}: ${edited.designed.includes(s.day) ? sessionLine(s.session) : `${s.session.title} — unchanged`}`),
-        fit: issues.length ? { ok: false, issues, note: "Say plainly what still misses; offer to adjust. Do not claim it fits." } : { ok: true },
+        fit: weekFitForModel(issues, card.fit?.issues ?? []),
         ...(caution && edited.designed.length ? { caution: cautionNote(caution, "week") } : {}),
         note: "What is true: only the changes listed in `changed` were made; every other session is exactly as it was on the previous card. Say what changed (for a designed session, its key moves) and that the rest is untouched — do not list the unchanged sessions again. The new card replaces the previous one; nothing is saved until they ask (save_workout_plan with this draftId) or tap Save on the card.",
       },

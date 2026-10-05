@@ -1147,6 +1147,10 @@ again. Rule now: a change to a drafted week touches only what was named.
   The result's `note` states what is true (only `changed` moved); the prompt's
   design bullet routes every change to a draft here, never to a second
   generate_workout_plan. Saved weeks are unchanged (move_workout / swap).
+- `weekFitForModel(issues, previousIssues)`: the tool raises only what THIS
+  edit introduced; an issue the previous card already carried goes under
+  `alreadyTold` with "do not raise it again" (the first eval run repeated the
+  same consecutive-days warning in three replies running).
 - Eval `week_draft_edit_keeps_the_rest` (draft → move → add → lengthen one;
   compares session bodies turn to turn). The caution path of the edit tool is
   covered by code sharing only — no eval runs an edit with a check-in on record.
