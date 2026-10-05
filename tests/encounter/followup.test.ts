@@ -163,6 +163,8 @@ describe("the follow-up as a conversation", () => {
 
   it("asks one neutral question and offers the three answers", () => {
     expect(followUpAsk("Back pain", 5)).toBe("Day 5 of your back pain check-in — how is it now?");
+    // The catch-all protocol's title names nothing — seen on the phone as "Day 10 of your something else check-in".
+    expect(followUpAsk("Something else", 10, "I am not feeling well")).toBe('Day 10 of your check-in about "I am not feeling well" — how is it now?');
     expect(FOLLOW_UP_CHOICES.map((c) => c.label)).toEqual(["Better", "No different", "Worse"]);
   });
 

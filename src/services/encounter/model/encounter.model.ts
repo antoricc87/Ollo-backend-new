@@ -354,6 +354,8 @@ class EncounterService {
       return {
         id: row.id,
         complaintTitle: resolveProtocol(row.complaintKey).title,
+        /** The catch-all protocol took it: its title ("Something else") names nothing, so their words do. */
+        unnamed: resolveProtocol(row.complaintKey).key === "general_unwell",
         complaintText: row.complaintText,
         startedAt: row.createdAt,
         followUp,
@@ -377,7 +379,7 @@ class EncounterService {
     const episode = (await this.followed(patientId)).find((e) => e.id === id);
     if (!episode) return null;
     await logEvent(id, "followup_asked", { threadId, day: episode.followUp.day });
-    return { ...episode, question: followUpAsk(episode.complaintTitle, episode.followUp.day) };
+    return { ...episode, question: followUpAsk(episode.complaintTitle, episode.followUp.day, episode.unnamed ? episode.complaintText : null) };
   }
 
   /** Record how it is now and return what may be said back (code-built — domain/followUp.ts). */
@@ -545,7 +547,7 @@ class EncounterService {
           followUp: { day: awaiting.followUp.day },
           progress: { covered: 0, total: 0 },
           historyComplete: false,
-          question: { slotKey: "followup", prompt: followUpAsk(awaiting.complaintTitle, awaiting.followUp.day), kind: "single", options: FOLLOW_UP_CHOICES.map((c) => ({ value: c.value, label: c.label })), range: null },
+          question: { slotKey: "followup", prompt: followUpAsk(awaiting.complaintTitle, awaiting.followUp.day, awaiting.unnamed ? awaiting.complaintText : null), kind: "single", options: FOLLOW_UP_CHOICES.map((c) => ({ value: c.value, label: c.label })), range: null },
           disclaimer: CHECKIN_DISCLAIMER,
         };
     }

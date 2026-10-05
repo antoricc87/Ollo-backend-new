@@ -141,7 +141,9 @@ const dateOfDay = (startedAt: string | Date, day: number) => new Date(new Date(s
 const shortDate = (d: Date, timeZone?: string) => d.toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short", ...(timeZone ? { timeZone } : {}) });
 
 /** "How is it now?" — the one question, naming the day and what it is about. Asks; suggests no answer. */
-export const followUpAsk = (about: string, day: number): string => `Day ${day} of your ${about.toLowerCase()} check-in — how is it now?`;
+export const followUpAsk = (about: string, day: number, theirWords?: string | null): string =>
+  // A check-in the catch-all protocol took has no name of its own ("Something else") — their words are its name.
+  theirWords ? `Day ${day} of your check-in about "${theirWords.trim().slice(0, 80)}" — how is it now?` : `Day ${day} of your ${about.toLowerCase()} check-in — how is it now?`;
 
 export type FollowUpAck = {
   /** What was written down, in one line. */
