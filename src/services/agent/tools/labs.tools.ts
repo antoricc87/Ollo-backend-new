@@ -1,4 +1,5 @@
 import { z } from "zod";
+import moment from "moment-timezone";
 import prisma from "../../../utility/prismaClient";
 import { buildCurrentLabs, canonicalBiomarkerKey, labFreshness } from "../../../utils/labBiomarkers";
 import { defineTool } from "./registry";
@@ -47,9 +48,37 @@ export const getLabs = defineTool({
       ...(wanted && rows.length === 0 ? { note: `no biomarker matched ${wanted.join(", ")}; known keys: ${current.map((b) => b.key).slice(0, 40).join(", ")}` } : {}),
       biomarkers: rows,
     };
-    return { result, cards: rows.length ? [{ type: "labs", title: input.flaggedOnly ? "Flagged labs" : "Labs", data: result }] : [] };
+    const facts = current.length ? labFacts(`Your labs on record hold ${plural(current.length, "current value")}`, current.map((b) => ({ ...b, on: b.collectedAt.slice(0, 10) }))) : undefined;
+    return { result, facts, cards: rows.length ? [{ type: "labs", title: input.flaggedOnly ? "Flagged labs" : "Labs", data: result }] : [] };
   },
 });
+
+type FactRow = { testType: string; result: string; units?: string | null; referenceRange: string; isOutOfRange: boolean; on?: string };
+const FACTS_MAX_FLAGGED = 12;
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const sayDay = (day: string) => moment.utc(day).format("D MMM YYYY");
+
+/**
+ * `ToolOutcome.facts` for labs: the count, and each value outside the range
+ * the lab printed, as printed. Same vocabulary as `buildLabReportSummary` —
+ * inside / outside the lab's range, nothing about what it means.
+ */
+export const labFacts = (opening: string, rows: FactRow[]): string => {
+  const flagged = rows.filter((r) => r.isOutOfRange);
+  if (!flagged.length) return `${opening}. None is outside the range the lab prints.`;
+  const lines = flagged.slice(0, FACTS_MAX_FLAGGED).map((r) => {
+    const notes = [r.referenceRange?.trim() && `lab range ${r.referenceRange.trim()}`, r.on && `tested ${sayDay(r.on)}`].filter(Boolean);
+    const tail = notes.length ? ` (${notes.join(", ")})` : "";
+    return `- **${r.testType}:** ${[r.result, r.units].filter(Boolean).join(" ")}${tail}`;
+  });
+  if (flagged.length > FACTS_MAX_FLAGGED) lines.push(`- and ${flagged.length - FACTS_MAX_FLAGGED} more`);
+  const rest = rows.length - flagged.length;
+  return [
+    `${opening}; ${flagged.length === 1 ? "1 is" : `${flagged.length} are`} outside the range the lab prints:`,
+    ...lines,
+    ...(rest > 0 ? [`\nThe other ${rest} ${rest === 1 ? "is" : "are"} inside the lab's range.`] : []),
+  ].join("\n");
+};
 
 const DAY_MS = 86400000;
 const testDay = (r: { collectedAt: Date | null; createdAt: Date }) => (r.collectedAt ?? r.createdAt).toISOString().slice(0, 10);
@@ -86,5 +115,6 @@ const readReport = (reports: any[], reportDate: string, flaggedOnly: boolean, wa
     returned: rows.length,
     biomarkers: rows,
   };
-  return { result, cards: rows.length ? [{ type: "labs", title: `Report · ${testDay(report)}`, data: result }] : [] };
+  const facts = report.labResults.length ? labFacts(`Your report from ${sayDay(testDay(report))} has ${plural(report.labResults.length, "value")}`, report.labResults) : undefined;
+  return { result, facts, cards: rows.length ? [{ type: "labs", title: `Report · ${testDay(report)}`, data: result }] : [] };
 };

@@ -469,6 +469,36 @@ clean through the Phase 0 guard.
 Not built yet: an Ollie tool for recording a follow-up by voice (the dashboard
 row and the recap screen both do it by tap).
 
+### Output guard repairs: cut, then facts, then refuse (Oct 5 2026)
+
+Device: "Explain my lab report from 30 Sep 2026." was answered with
+`SAFE_FALLBACK` ("I can't give advice on that part…") under a 58-value card.
+Reproduced on the classifier: the same explanation passes 6/6 or is flagged
+6/6 on three phrases ("harmless", "which is a good sign"). One flagged
+sentence cost the whole answer, and the refusal did not fit the request.
+- `outputCheck.ts` schema gained `violations` (after `analysis`): the flagged
+  sentences word for word → `SafetyVerdict.quotes` (plus the linter's
+  sentences when enforced).
+- `safety/trim.ts` `trimFlagged(answer, quotes)` — pure, can only REMOVE:
+  cuts matching sentences (through markdown, curly quotes, "…"-abridged
+  quotes), drops a heading left empty, returns null when nothing matched or
+  under 80 chars are left. `runLoop`: draft → rewrite → **cut the rewrite and
+  check a third time** → outcome `trimmed`, with `TRIM_NOTE` appended so the
+  gap is never silent. Skipped for `missedRedFlag`.
+- `ToolOutcome.facts` — a read tool's code-built statement of what it
+  returned. When no wording passes, `factsFallback(readFacts)` is the reply
+  (outcome `facts`, no hand-off card); only a turn that read nothing — or a
+  missed emergency — gets `SAFE_FALLBACK` + `care_team_handoff` (outcome
+  `fallback`). `get_labs` implements it (`labFacts`: count + each value
+  outside the printed range). Add `facts` to other read tools as they need it.
+- Prompt: the verdict bullet now names softer grades ("a good sign",
+  "harmless", "benign", "reassuring"…) of a result OR of a possible reason.
+- App: the "Reviewed · sent to your care team instead" line is gone (nothing
+  was ever sent). `SafetyOutcome` gained `trimmed` | `facts` on both sides.
+- Tests `tests/safety/trim.test.ts`; eval `NO_VERDICT` covers the new words.
+  Audit stages: `trimmed` (with the removed sentences) and `trim` (the cut
+  failed its check).
+
 ### Output guard, second key (2026-09-09)
 
 `safety/policy.ts` is the boundary AS DATA — the six forbidden acts

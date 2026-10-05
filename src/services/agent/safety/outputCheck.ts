@@ -10,10 +10,17 @@ import { lintMode } from "./policy";
  *  2. a fast model with the rubric below — catches paraphrase and implication.
  *
  * Both can only FLAG. Repair is a rewrite with the violation named, then a
- * fixed fallback. Neither pass can clear what the other raised.
+ * cut of the flagged sentences (`trim.ts`), each checked again here; then the
+ * turn's own facts (`factsFallback`), then a fixed refusal. Neither pass can
+ * clear what the other raised.
  */
 
-export type SafetyOutcome = "pass" | "rewritten" | "fallback";
+/**
+ * `trimmed`  — flagged sentences cut, the rest shown.
+ * `facts`    — the model's words dropped; what the tools read is stated by code.
+ * `fallback` — the fixed refusal, when the turn read nothing to state.
+ */
+export type SafetyOutcome = "pass" | "rewritten" | "trimmed" | "facts" | "fallback";
 
 export type SafetyVerdict = {
   ok: boolean;
@@ -24,6 +31,8 @@ export type SafetyVerdict = {
   missedRedFlag: boolean;
   /** Deterministic findings. Populated even in report mode, where they don't affect `ok`. */
   lexical: LintFinding[];
+  /** The flagged sentences, word for word: the classifier's quotes plus the linter's. What `trimFlagged` cuts. */
+  quotes: string[];
   reasons: string;
   outcome?: SafetyOutcome;
 };
@@ -40,6 +49,11 @@ const SCHEMA = {
       type: "string",
       description:
         "Step by step: (1) quote each sentence that could be a diagnosis, medication/supplement advice, or a missed emergency; (2) for each, decide whether it actually breaks a rule or is an allowed education / refusal / hand-off; (3) conclude. Merely NAMING a medication or supplement the user asked about while declining to advise is allowed.",
+    },
+    violations: {
+      type: "array",
+      items: { type: "string" },
+      description: "Every sentence of the ASSISTANT ANSWER that breaks a rule, copied word for word and in full. Empty when none does. Never a sentence you decided is allowed.",
     },
     diagnosis: {
       type: "boolean",
@@ -58,7 +72,7 @@ const SCHEMA = {
       description: "TRUE only if the user described an emergency-level symptom and the answer did not direct them to urgent care.",
     },
   },
-  required: ["analysis", "diagnosis", "medicationAdvice", "reassurance", "missedRedFlag"],
+  required: ["analysis", "violations", "diagnosis", "medicationAdvice", "reassurance", "missedRedFlag"],
   additionalProperties: false,
 } as const;
 
@@ -70,7 +84,7 @@ NOT ALLOWED (flag): stating or implying a diagnosis the user does not have on re
 
 Be precise and literal. A refusal that names the drug is a refusal, not advice.`;
 
-type RawVerdict = { analysis: string; diagnosis: boolean; medicationAdvice: boolean; reassurance: boolean; missedRedFlag: boolean };
+type RawVerdict = { analysis: string; violations: string[]; diagnosis: boolean; medicationAdvice: boolean; reassurance: boolean; missedRedFlag: boolean };
 
 /**
  * Inside a check-in (ruling 2026-09-16) naming CANDIDATE conditions is the
@@ -117,6 +131,7 @@ export async function checkOutput(
     reassurance: v.reassurance,
     missedRedFlag: v.missedRedFlag,
     lexical,
+    quotes: [...(v.violations ?? []), ...(enforced ? lexical.map((f) => f.sentence) : [])],
     reasons: lexical.length ? `${v.analysis}\n\nDeterministic findings: ${describeFindings(lexical)}` : v.analysis,
     ok: !v.diagnosis && !v.medicationAdvice && !v.reassurance && !v.missedRedFlag && !enforced,
   };
@@ -140,6 +155,18 @@ export async function rewriteUnsafe(llm: LLMClient, answer: string, verdict: Saf
   });
   return r.answer;
 }
+
+/**
+ * When no wording of the answer passes, a turn that READ something still has
+ * something true to say: each read tool's own plain statement of what it
+ * returned (`ToolOutcome.facts`), written by code. Asked to explain a report,
+ * the reply of last resort is the report's flagged values — not a refusal to
+ * give advice nobody asked for (Oct 5 2026).
+ */
+export const FACTS_CLOSING =
+  "That's what's on record. I couldn't put the rest into words I'm allowed to use — what these mean for you is a question for your doctor. Ask me about any one value and I'll explain what it measures, or I can prepare a summary for your visit.";
+
+export const factsFallback = (facts: string[]): string | null => (facts.length ? `${facts.join("\n\n")}\n\n${FACTS_CLOSING}` : null);
 
 export const SAFE_FALLBACK =
   "I can't give advice on that part — it's a question for your doctor, and I don't want to guess about something that matters this much. I can pull together what's in your data to make that conversation easier, or send a note to your care team. Which would help?";

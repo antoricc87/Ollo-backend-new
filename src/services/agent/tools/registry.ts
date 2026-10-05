@@ -42,6 +42,14 @@ export type ToolOutcome = {
    */
   pinnedAnswer?: string;
   /**
+   * What this read returned, as one plain statement built by code: the
+   * person's own data with its date and the source's range, no adjectives.
+   * Shown only when the output check rejects every wording of the model's
+   * answer (`factsFallback`), so the reply of last resort is what was read
+   * rather than a refusal. Never model-written, never advice.
+   */
+  facts?: string;
+  /**
    * A write the card's own button performs ("Log it"). Prepared here from the
    * exact numbers the card shows; the loop stores it as a pending proposal
    * WITHOUT a proposal card and stamps its id on `cards[card]` as

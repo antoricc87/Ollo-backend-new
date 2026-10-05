@@ -8,7 +8,8 @@ import threadStore from "./memory/thread.store";
 import proposalStore from "./memory/proposals.store";
 import { buildSystemPrompt } from "./prompt/system";
 import { detectRedFlag, emergencyAnswer } from "./safety/redFlags";
-import { checkOutput, rewriteUnsafe, SAFE_FALLBACK, SafetyOutcome, SafetyVerdict } from "./safety/outputCheck";
+import { checkOutput, factsFallback, rewriteUnsafe, SAFE_FALLBACK, SafetyOutcome, SafetyVerdict } from "./safety/outputCheck";
+import { trimFlagged, TRIM_NOTE } from "./safety/trim";
 import { regionFromTimeZone } from "./safety/policy";
 import { registry } from "./tools";
 import { Card, cardRoleOf, ToolContext } from "./tools/registry";
@@ -234,6 +235,8 @@ async function* runLoop(p: {
   const cards: Card[] = [];
   /** Cards from lookups (see ToolDef.cardRole) — shown at the end, only if nothing actionable came out of the turn. */
   const lookupCards: Card[] = [];
+  /** Each read tool's code-built statement of what it returned — the reply of last resort (`factsFallback`). */
+  const readFacts: string[] = [];
   let usage: Usage | null = null;
   let model: string | null = null;
   let steps = 0;
@@ -325,6 +328,7 @@ async function* runLoop(p: {
         messages.push({ role: "tool", toolCallId: call.id, name: call.name, content });
         yield { type: "tool_result", id: call.id, name: call.name, ok: out.ok, ...(out.error ? { error: out.error } : {}) };
         if (out.ok && out.pinnedAnswer && !pinned) pinned = String(out.pinnedAnswer);
+        if (out.ok && out.facts) readFacts.push(String(out.facts));
         // A card whose button performs a write: park it now, no proposal card.
         if (out.ok && out.prepared && out.cards?.[out.prepared.card ?? 0]) {
           try {
@@ -368,34 +372,56 @@ async function* runLoop(p: {
     const onRecord = { conditions: snapshot.records.conditions, medications: snapshot.records.medications.map((m) => m.name) };
     let verdict: SafetyVerdict;
     let text = draft;
+    const handoffCards: Card[] = [];
+    const recheck = (answer: string) => checkOutput(llm, p.safetyContext, answer, onRecord, { checkin, assessedConditions: mode.assessedConditions });
+    // No wording passed: state what the turn read, or — having read nothing — decline.
+    const lastResort = (v: SafetyVerdict): SafetyVerdict => {
+      // A missed emergency is not answered with a list of lab values.
+      const facts = v.missedRedFlag ? null : factsFallback(readFacts);
+      if (facts) {
+        text = facts;
+        return { ...v, outcome: "facts" };
+      }
+      text = SAFE_FALLBACK;
+      const card: Card = { type: "care_team_handoff", title: "Ask your care team", data: { reason: "clinical question" } };
+      cards.push(card);
+      handoffCards.push(card);
+      return { ...v, outcome: "fallback" };
+    };
     try {
       verdict = pinned
-        ? { ok: true, diagnosis: false, medicationAdvice: false, reassurance: false, missedRedFlag: false, lexical: [], reasons: "fixed escalation copy — written by the domain layer, not the model" }
-        : await checkOutput(llm, p.safetyContext, draft, onRecord, { checkin, assessedConditions: mode.assessedConditions });
+        ? { ok: true, diagnosis: false, medicationAdvice: false, reassurance: false, missedRedFlag: false, lexical: [], quotes: [], reasons: "fixed escalation copy — written by the domain layer, not the model" }
+        : await recheck(draft);
       if (verdict.ok) verdict.outcome = "pass";
       else {
         void audit(patientId, "safety_flag", { threadId, payload: { stage: "draft", verdict, draft: draft.slice(0, 2000) } });
         const rewritten = await rewriteUnsafe(llm, draft, verdict);
-        const second = await checkOutput(llm, p.safetyContext, rewritten, onRecord, { checkin, assessedConditions: mode.assessedConditions });
+        const second = await recheck(rewritten);
         if (second.ok) {
           text = rewritten;
           verdict = { ...verdict, outcome: "rewritten" };
         } else {
           void audit(patientId, "safety_flag", { threadId, payload: { stage: "rewrite", verdict: second, draft: rewritten.slice(0, 2000) } });
-          text = SAFE_FALLBACK;
-          const card: Card = { type: "care_team_handoff", title: "Ask your care team", data: { reason: "clinical question" } };
-          cards.push(card);
-          yield { type: "card", card };
-          verdict = { ...second, outcome: "fallback" };
+          // Cut what was flagged and keep the rest. Cutting cannot add the urgent-care line a missed emergency needs.
+          const cut = second.missedRedFlag ? null : trimFlagged(rewritten, second.quotes);
+          const third = cut ? await recheck(cut.text) : null;
+          if (cut && third?.ok) {
+            void audit(patientId, "safety_flag", { threadId, payload: { stage: "trimmed", removed: cut.removed } });
+            text = `${cut.text}\n\n${TRIM_NOTE}`;
+            verdict = { ...second, outcome: "trimmed" };
+          } else {
+            if (cut && third) void audit(patientId, "safety_flag", { threadId, payload: { stage: "trim", verdict: third, draft: cut.text.slice(0, 2000) } });
+            verdict = lastResort(third ?? second);
+          }
         }
       }
     } catch (e) {
       // The classifier failing must not leak an unchecked answer.
       console.error("agent safety check failed", e);
       void audit(patientId, "error", { threadId, payload: { stage: "safety", error: String(e) } });
-      text = SAFE_FALLBACK;
-      verdict = { ok: false, diagnosis: false, medicationAdvice: false, reassurance: false, missedRedFlag: false, lexical: [], reasons: "classifier unavailable — fallback used", outcome: "fallback" };
+      verdict = lastResort({ ok: false, diagnosis: false, medicationAdvice: false, reassurance: false, missedRedFlag: false, lexical: [], quotes: [], reasons: "classifier unavailable — fallback used" });
     }
+    for (const card of handoffCards) yield { type: "card", card };
 
     const flagged = [
       verdict.diagnosis && "diagnosis",
