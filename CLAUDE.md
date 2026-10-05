@@ -469,6 +469,42 @@ clean through the Phase 0 guard.
 Not built yet: an Ollie tool for recording a follow-up by voice (the dashboard
 row and the recap screen both do it by tap).
 
+### The follow-up is a conversation (Oct 5 2026) — `domain/followUp.ts`, `ask_followup` / `record_followup`
+
+Device: the follow-up was a dashboard row opening the OLD stepped page (three
+buttons, no reply, and an unanswered interview question first — with the
+keyboard over Continue). Ruling (user): move it into Ollie; a notification
+when one is due belongs to the notifications work, not built here.
+- Who is followed: `EncounterService.followed(patientId)` — OPEN, interview
+  over, NO red flag (a matched sign has its route already). `openEpisodes`
+  (the dashboard row) is that list filtered to due / persisted. Unfinished or
+  paused interviews are not followed up — resume is their next step.
+- Schedule (pure, tested): days 2 / 5 / 10; an answer up to
+  `FOLLOW_UP_GRACE_DAYS` (1) before a scheduled day counts for it; nothing is
+  due after day `FOLLOW_UP_WINDOW_DAYS` (14). `followUpAsk` is the one
+  question; `followUpAck` builds what may be said back: what was written
+  down, the count so far, the persistence line, when it asks next (or that
+  the schedule is over), and `offerRoute` only for worse / persisted. All of
+  it lints clean; nothing says what a change means.
+- Tools (both risk read, no card): `ask_followup` logs a `followup_asked`
+  event `{threadId, day}`; `record_followup {trend, note?, checkinId?}` →
+  `EncounterCheckIn` + the `say` lines. Works unprompted too ("my back is
+  worse today").
+- Chips: `threadView` returns state `followup` (+ `followUp.day`, the three
+  answers as the question's options) while a question asked in THIS thread
+  within 24 h is unanswered — unless an interview is running or paused there.
+- Ollie raises a due follow-up by itself ONCE per scheduled day (`raise`: no
+  `followup_asked` event for that slot yet) — three unprompted questions per
+  check-in at most. Prompt section `followUpSection` (ids rendered; injected
+  outside interviews and proactive runs) + `turnChecks` `followup_not_raised`
+  (the prompt alone skipped it whenever the user asked for something else;
+  never over a proposal / generated card or during an interview).
+- Evals: `followup_due_asked_and_recorded`, `followup_unprompted_worse_
+  offers_route`, `followup_due_after_their_request`; `Scenario.setup` +
+  `seedFinishedCheckin` (fixture.ts) seed a finished check-in N days old.
+- Open: no push when one is due; the check-in stays OPEN after the schedule
+  ends; the stepped pages still exist in the app (handout, recap).
+
 ### Output guard repairs: cut, then facts, then refuse (Oct 5 2026)
 
 Device: "Explain my lab report from 30 Sep 2026." was answered with

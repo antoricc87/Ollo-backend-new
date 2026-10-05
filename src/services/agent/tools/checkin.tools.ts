@@ -278,6 +278,82 @@ export const resumeCheckin = defineTool({
   },
 });
 
+/* ------------------------------ follow-ups ------------------------------ */
+
+/**
+ * The follow-up as a conversation (Oct 5 2026). It was three buttons on the
+ * old stepped page that answered nothing back, reached only from a dashboard
+ * row. Now Ollie asks (`ask_followup` puts the question on the table and the
+ * app shows the three answers as chips), the answer is recorded
+ * (`record_followup`), and the reply is what the domain layer built: what was
+ * written down, the count so far, when the next question comes — never what
+ * the change means (encounter/domain/followUp.ts).
+ */
+const NOT_FOLLOWED =
+  "No finished check-in with that id is being followed. The system prompt's 'Check-ins being followed' section lists the ones that are (with their ids); an unfinished or paused check-in is picked back up with resume_checkin instead. Do not call this again for it.";
+
+const pickFollowed = async (ctx: { patientId: string; threadId: string | null }, checkinId?: string) => {
+  const all = await encounterService.followed(ctx.patientId);
+  if (checkinId) return all.find((e) => e.id === checkinId || e.id.startsWith(checkinId)) ?? null;
+  // No id: the one whose question is on the table here, else the only one there is.
+  return all.find((e) => e.awaiting?.threadId === ctx.threadId) ?? (all.length === 1 ? all[0] : null);
+};
+
+export const askFollowup = defineTool({
+  name: "ask_followup",
+  description:
+    "Put the follow-up question for a finished check-in on the table: how is it now? Call it when a follow-up is due (system prompt, 'Check-ins being followed') and you are about to ask, or when the user asks to follow up on a check-in. Then ask the ONE question it returns — the three answers appear as chips. Records nothing by itself.",
+  schema: z.object({ checkinId: z.string().optional().describe("Id from 'Check-ins being followed'. Omit when there is only one.") }),
+  risk: "read",
+  cardRole: "result",
+  async run(ctx, input) {
+    const picked = await pickFollowed(ctx, input.checkinId);
+    const asked = picked ? await encounterService.askFollowUp(ctx.patientId, picked.id, ctx.threadId) : null;
+    if (!asked) return { result: { error: NOT_FOLLOWED } };
+    return {
+      result: {
+        checkinId: asked.id,
+        about: asked.complaintTitle,
+        inTheirWords: asked.complaintText,
+        day: asked.followUp.day,
+        reportedSoFar: asked.followUp.trajectory,
+        ask: asked.question,
+        note: "Ask exactly that ONE question and stop. The answers (Better / No different / Worse) are on screen as chips — do not list them, do not suggest one, and say nothing about how it should be going by now. When they answer, call record_followup.",
+      },
+    };
+  },
+});
+
+export const recordFollowup = defineTool({
+  name: "record_followup",
+  description:
+    "Record how a symptom from a finished check-in is now: better, no different or worse. Call it whenever the user tells you — after ask_followup, or unprompted ('my back is much better today'). Returns exactly what to say back.",
+  schema: z.object({
+    trend: z.enum(["BETTER", "SAME", "WORSE"]).describe("SAME = no different / about the same"),
+    note: z.string().max(500).optional().describe("Anything they added, in their own words"),
+    checkinId: z.string().optional().describe("Id from 'Check-ins being followed'. Omit when the question was just asked here, or there is only one."),
+  }),
+  risk: "read",
+  cardRole: "result",
+  async run(ctx, input) {
+    const picked = await pickFollowed(ctx, input.checkinId);
+    const done = picked ? await encounterService.recordFollowUp(ctx.patientId, picked.id, input.trend, input.note, ctx.timeZone) : null;
+    if (!done) return { result: { error: NOT_FOLLOWED } };
+    const { ack } = done;
+    const say = [ack.recorded, ack.trajectory, ack.persistence ? `${ack.persistence.line} ${ack.persistence.action}` : null, ack.next].filter(Boolean);
+    return {
+      result: {
+        checkinId: done.id,
+        about: done.about,
+        say,
+        offer: ack.offerRoute ? "Offer ONCE, as a choice not a verdict: a booking with a clinician, a message to the care team, or the written summary to take along." : null,
+        note:
+          "Your reply is the `say` lines, in your own voice but with nothing added: it was written down, what they have reported so far, when you will ask next. Day numbers count from the check-in, not from when the symptom began — never say 'since it started'. What is NOT yours to say: what the change means, that it is healing / settling / on track / nothing to worry about, how long it should take, or anything to do for the symptom. 'Better' gets a plain acknowledgement, not congratulations on recovering. If they described something NEW (a new symptom, it spread, a warning sign), say that it is new and offer to go through it — record_checkin reopens the check-in.",
+      },
+    };
+  },
+});
+
 export const getCheckins = defineTool({
   name: "get_checkins",
   description:

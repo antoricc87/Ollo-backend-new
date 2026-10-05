@@ -171,3 +171,27 @@ export async function destroyFixture() {
   }
   await prisma.patient.delete({ where: { id: uid } }); // cascades plan, agent tables
 }
+
+/**
+ * A finished back-pain check-in started `daysAgo` days ago, no warning sign
+ * matched — what the follow-up scenarios need (the interview itself is
+ * covered by the pain_checkin scenarios).
+ */
+export async function seedFinishedCheckin(patientId: string, daysAgo: number, complaintText = "My lower back has been aching since football on Sunday") {
+  const createdAt = new Date(Date.now() - daysAgo * 86400000);
+  const row = await prisma.encounter.create({
+    data: {
+      patientId,
+      complaintKey: "back_pain",
+      protocolVersion: 2,
+      complaintText,
+      phase: "ROUTE",
+      slots: { safety: ["none_of_these"], onset: "a_few_days_ago", severity: 4 },
+      askedKeys: ["safety", "onset", "severity"],
+      region: "US",
+      createdAt,
+    },
+  });
+  await prisma.encounterEvent.create({ data: { encounterId: row.id, seq: 0, kind: "assessment", payload: { possibilities: [] }, createdAt } });
+  return row.id;
+}

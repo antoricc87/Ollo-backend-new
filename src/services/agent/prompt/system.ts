@@ -148,6 +148,35 @@ const trainingGateSection = (g: TrainingGate) => {
   return `${head} No warning sign matched and nothing in their answers calls for holding back, so training requests are designed as usual. Pass what they said about the ${about} as the request, in their words. Still never present a session as treating it.`;
 };
 
+/**
+ * Finished check-ins still being followed (EncounterService.followed). The
+ * model cannot act on a check-in it cannot name, so ids are rendered; what it
+ * may say after an answer comes from record_followup, not from here.
+ */
+export type FollowedCheckin = { id: string; about: string; inTheirWords: string; day: number; due: boolean; raise: boolean; nextDay: number | null; askedHere: boolean; answeredToday: boolean };
+const followUpSection = (rows: FollowedCheckin[]) => {
+  const line = (r: FollowedCheckin) =>
+    `- ${r.about}: "${r.inTheirWords.trim().slice(0, 80)}" · day ${r.day} [checkinId ${r.id}] — ${
+      r.answeredToday
+        ? "answered today, nothing to ask"
+        : r.askedHere
+        ? "you asked in this conversation and are waiting for the answer — do not ask again"
+        : r.raise
+        ? "FOLLOW-UP DUE — raise it"
+        : r.due
+        ? "follow-up due, already raised once and not answered — do not bring it up yourself; ask only if they mention it"
+        : r.nextDay
+        ? `next follow-up on day ${r.nextDay}`
+        : "no more scheduled follow-ups"
+    }`;
+  return `## Check-ins being followed
+${rows.map(line).join("\n")}
+- A row marked "FOLLOW-UP DUE — raise it": if their message is about following up, is about that symptom, or is just a greeting, call ask_followup and ask its one question. If they asked for something else, answer that first and end with the follow-up question as the last line (call ask_followup in the same turn) — except in a turn that carries a card they have to act on.
+- When they ask to follow up on a check-in themselves (the app sends "Follow up on my check-in: …"), call ask_followup whatever the row says.
+- Whenever they tell you how one of these is now — asked or not, due or not — call record_followup (better / no different / worse; their words as the note) and reply with what it returns. A one-word answer to your question ("Better", "No different", "Worse") is that answer.
+- This is a follow-up, not a new check-in: do not call start_checkin for a symptom listed here unless they describe something new about it.`;
+};
+
 export function buildSystemPrompt(input: {
   snapshotText: string;
   threadSummary?: string | null;
@@ -156,12 +185,15 @@ export function buildSystemPrompt(input: {
   paused?: { about: string; covered: number; total: number } | null;
   assessedConditions?: string[];
   trainingGate?: TrainingGate | null;
+  followed?: FollowedCheckin[];
 }) {
   const parts = [PERSONA, BOUNDARY, TOOL_RULES, STYLE];
   if (input.checkin) parts.push(CHECKIN);
   else if (input.paused) parts.push(pausedSection(input.paused));
   else if (input.assessedConditions?.length) parts.push(assessedSection(input.assessedConditions));
   if (input.trainingGate) parts.push(trainingGateSection(input.trainingGate));
+  // Not while an interview is running (one thing at a time) and not on a job-triggered run.
+  if (input.followed?.length && !input.checkin && !input.proactive) parts.push(followUpSection(input.followed));
   if (input.proactive && PROACTIVE[input.proactive]) parts.push(PROACTIVE[input.proactive]);
   parts.push(input.snapshotText);
   if (input.threadSummary) parts.push(`## Earlier in this conversation\n${input.threadSummary}`);

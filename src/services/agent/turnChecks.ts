@@ -22,6 +22,8 @@ export type TurnFacts = {
   proposed: boolean;
   /** A generate tool ran this turn (its card is real). */
   generated: boolean;
+  /** A finished check-in has a follow-up due that Ollie has not raised yet for this scheduled day (what it is about). */
+  followUpToRaise?: string | null;
   checkin: {
     /** A check-in exists in this thread (running, paused or assessed) — before or because of this turn. */
     inThread: boolean;
@@ -50,7 +52,21 @@ const ABOUT_ASSESSMENT = /\b(could be|possibilit\w+|what (this|it) (could|might)
 /** The user said something hurts or is wrong. Deliberately narrow: "sore" and "tired" are everyday training talk. */
 const USER_SYMPTOM = /\b(pain(ful|s)?|hurt(s|ing)?|ach(e|es|ing|y)|dizz(y|iness)|faint(ed|ing)?|rash|numb(ness)?|swollen|swelling|short of breath|breathless|palpitations?|nause(a|ous)|vomit\w*|fever)\b/i;
 
+const FOLLOWUP_TOOLS = ["ask_followup", "record_followup"];
+
 const CHECKS: ((f: TurnFacts) => TurnNudge | null)[] = [
+  // A follow-up is due and this turn would end without raising it (Oct 5 2026).
+  // Left to the prompt alone it was skipped whenever the user asked for
+  // something else. Not during an interview, and not under a card they have to
+  // act on — the question would compete with it. Raised once per scheduled
+  // day: ask_followup logs the ask, which clears `followUpToRaise`.
+  (f) =>
+    f.followUpToRaise && !f.proactive && !f.checkin.active && !f.proposed && !f.generated && !f.toolsCalled.some((t) => FOLLOWUP_TOOLS.includes(t) || CHECKIN_TOOLS.includes(t))
+      ? {
+          stage: "followup_not_raised",
+          message: `[System: the follow-up on their ${f.followUpToRaise.toLowerCase()} check-in is due and has not been raised. Call ask_followup now, then give the same answer you just wrote and end with its one question as the last line.]`,
+        }
+      : null,
   // Weekly review: the snapshot is THIS week; judging last week without reading
   // it (seen 2026-08-27: this week's numbers quoted as last week's) is wrong.
   (f) =>

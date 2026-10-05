@@ -220,6 +220,17 @@ async function* runLoop(p: {
     assessedConditions: mode.assessedConditions,
     // Patient-wide, unlike the mode: a workout asked for in another thread is shaped by the same check-in.
     trainingGate: await encounterService.trainingGate(patientId, threadId).catch(() => null),
+    followed: (await encounterService.followed(patientId).catch(() => [])).map((e) => ({
+      id: e.id,
+      about: e.complaintTitle,
+      inTheirWords: e.complaintText,
+      day: e.followUp.day,
+      due: e.followUp.due,
+      nextDay: e.nextDay,
+      askedHere: !!e.awaiting && e.awaiting.threadId === threadId,
+      answeredToday: e.answeredToday,
+      raise: e.raise,
+    })),
   });
   const messages: ChatMessage[] = [{ role: "system", content: system }, ...toChatMessages(window.messages)];
 
@@ -272,6 +283,7 @@ async function* runLoop(p: {
             toolsCalled,
             proposed: proposedThisTurn,
             generated: generatedThisTurn,
+            followUpToRaise: p.proactive ? null : await encounterService.followed(patientId).then((rows) => rows.find((e) => e.raise)?.complaintTitle ?? null).catch(() => null),
             checkin: {
               inThread: checkin || mode.paused || mode.assessedConditions.length > 0 || toolsCalled.includes("start_checkin"),
               active: !!live && live.state.phase !== "ROUTE" && live.state.phase !== "CLOSED",

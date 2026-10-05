@@ -6,7 +6,7 @@ import { classify, DIAGNOSIS_DECLINE, PROMPT_VERSION as CLASSIFY_VERSION } from 
 import { fillSlot, sanitize, PROMPT_VERSION as SLOTFILL_VERSION } from "../llm/slotFill";
 import { escalationFor, NEUTRAL_CLOSE } from "../domain/escalation";
 import { ownDataBlocks } from "../domain/context";
-import { followUpFor, FollowUp, CheckInRecord } from "../domain/followUp";
+import { followUpAck, followUpAsk, followUpFor, followUpSlot, FollowUp, FOLLOW_UP_CHOICES, CheckInRecord, nextFollowUpDay } from "../domain/followUp";
 import { buildPatientSnapshot } from "../../agent/context/snapshot";
 import { resolveProtocol } from "../domain/protocols";
 import { applyAnswer, historyComplete, isSafetySlot, markAsked, nextStep, open, questionFor, shouldHalt } from "../domain/stateMachine";
@@ -124,7 +124,9 @@ export type CheckinThreadView = {
   id: string;
   about: string;
   /** active = interview in progress · paused = End tapped (answers kept) · assessed = ended with an assessment · halted = crisis stop · closed = finished elsewhere. */
-  state: "active" | "paused" | "assessed" | "halted" | "closed";
+  state: "active" | "paused" | "assessed" | "halted" | "closed" | "followup";
+  /** Set with state "followup": Ollie has asked how a finished check-in is now, and the three answers are the chips. */
+  followUp?: { day: number };
   progress: { covered: number; total: number };
   historyComplete: boolean;
   question: { slotKey: string; prompt: string; kind: string; options: { value: string; label: string }[] | null; range: [number, number] | null } | null;
@@ -318,24 +320,73 @@ class EncounterService {
    * Only finished interviews with a due follow-up, newest first.
    */
   async openEpisodes(patientId: string) {
+    return (await this.followed(patientId)).filter((e) => e.followUp.due || e.followUp.persistence);
+  }
+
+  /**
+   * Check-ins still being followed: OPEN, the interview over, and no warning
+   * sign matched (a matched sign already has its route — it is not asked
+   * "better or worse?" on day 2). An unfinished or paused interview is not
+   * followed up either: picking it back up is its next step. The dashboard
+   * row, Ollie's prompt section and the follow-up tools all read this.
+   */
+  async followed(patientId: string) {
     const rows = await prisma.encounter.findMany({
       where: { patientId, status: "OPEN" },
       orderBy: { createdAt: "desc" },
       take: 10,
       include: { checkIns: { orderBy: { createdAt: "desc" } } },
     });
-    return rows
-      .map((row) => {
-        const state = toState(row);
-        return {
-          id: row.id,
-          complaintTitle: resolveProtocol(state.complaintKey).title,
-          complaintText: row.complaintText,
-          startedAt: row.createdAt,
-          followUp: followUpFor(row.createdAt, row.checkIns as any),
-        };
-      })
-      .filter((e) => e.followUp.due || e.followUp.persistence);
+    const live = rows.filter((row) => !checkinModeFor(row).active && !((row.redFlags ?? []) as unknown[]).length);
+    if (!live.length) return [];
+    const since = new Date(Date.now() - 86400000);
+    const asked = await prisma.encounterEvent.findMany({
+      where: { encounterId: { in: live.map((r) => r.id) }, kind: "followup_asked" },
+      orderBy: { createdAt: "desc" },
+      select: { encounterId: true, payload: true, createdAt: true },
+    });
+    return live.map((row) => {
+      const followUp = followUpFor(row.createdAt, row.checkIns as any);
+      const asks = asked.filter((x) => x.encounterId === row.id);
+      const lastAsk = asks[0] && asks[0].createdAt >= since ? asks[0] : null;
+      const lastAnswer = row.checkIns[0]?.createdAt ?? null;
+      const slot = followUpSlot(followUp.day);
+      return {
+        id: row.id,
+        complaintTitle: resolveProtocol(row.complaintKey).title,
+        complaintText: row.complaintText,
+        startedAt: row.createdAt,
+        followUp,
+        nextDay: nextFollowUpDay(followUp.day),
+        /** Ollie asked within the last day and no answer has come since — and in which thread. */
+        awaiting: lastAsk && (!lastAnswer || lastAnswer < lastAsk.createdAt) ? { threadId: ((lastAsk.payload as any)?.threadId as string | null) ?? null } : null,
+        /** Answered within the last day: nothing to ask again today. */
+        answeredToday: !!lastAnswer && lastAnswer >= since,
+        /**
+         * Ollie brings it up by itself ONCE per scheduled day (2, 5, 10) — three
+         * unprompted questions per check-in at most. After that it waits to be
+         * asked (the dashboard row stays while it is due).
+         */
+        raise: followUp.due && slot !== null && !asks.some((x) => Number((x.payload as any)?.day) >= slot),
+      };
+    });
+  }
+
+  /** Ollie puts the follow-up question on the table in a thread: the app shows the three answers as chips there. */
+  async askFollowUp(patientId: string, id: string, threadId: string | null) {
+    const episode = (await this.followed(patientId)).find((e) => e.id === id);
+    if (!episode) return null;
+    await logEvent(id, "followup_asked", { threadId, day: episode.followUp.day });
+    return { ...episode, question: followUpAsk(episode.complaintTitle, episode.followUp.day) };
+  }
+
+  /** Record how it is now and return what may be said back (code-built — domain/followUp.ts). */
+  async recordFollowUp(patientId: string, id: string, trend: EncounterTrend, note?: string, timeZone?: string) {
+    const episode = (await this.followed(patientId)).find((e) => e.id === id);
+    if (!episode) return null;
+    await this.checkIn(patientId, id, trend, note);
+    const checkIns = await prisma.encounterCheckIn.findMany({ where: { encounterId: id }, orderBy: { createdAt: "desc" } });
+    return { id, about: episode.complaintTitle, complaintText: episode.complaintText, ack: followUpAck(episode.startedAt, checkIns as any, new Date(), timeZone) };
   }
 
   async history(patientId: string, id: string) {
@@ -482,6 +533,22 @@ class EncounterService {
   async threadView(patientId: string, threadId: string | null): Promise<CheckinThreadView | null> {
     if (!threadId) return null;
     const row = await prisma.encounter.findFirst({ where: { patientId, threadId }, orderBy: { createdAt: "desc" } });
+    // A follow-up question asked in this thread and not answered yet shows its three answers —
+    // unless an interview is running or paused here, which keeps the screen.
+    if (!row || (!checkinModeFor(row).active && row.status !== "ABANDONED")) {
+      const awaiting = (await this.followed(patientId)).find((e) => e.awaiting?.threadId === threadId);
+      if (awaiting)
+        return {
+          id: awaiting.id,
+          about: awaiting.complaintTitle,
+          state: "followup",
+          followUp: { day: awaiting.followUp.day },
+          progress: { covered: 0, total: 0 },
+          historyComplete: false,
+          question: { slotKey: "followup", prompt: followUpAsk(awaiting.complaintTitle, awaiting.followUp.day), kind: "single", options: FOLLOW_UP_CHOICES.map((c) => ({ value: c.value, label: c.label })), range: null },
+          disclaimer: CHECKIN_DISCLAIMER,
+        };
+    }
     if (!row) return null;
     const state = toState(row);
     const protocol = resolveProtocol(state.complaintKey);

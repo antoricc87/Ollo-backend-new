@@ -84,4 +84,16 @@ describe("turnEndNudge", () => {
       expect(turnEndNudge(facts({ text: "Your check-in from earlier is on the summary card.", checkin: { inThread: true } }))).toBeNull();
     });
   });
+
+  it("a due follow-up is raised before the turn ends — but not over a card, an interview or one already asked", () => {
+    const due = { text: "You've had 520 kcal so far today.", followUpToRaise: "Back pain" };
+    expect(turnEndNudge(facts(due))?.stage).toBe("followup_not_raised");
+    expect(turnEndNudge(facts({ ...due, toolsCalled: ["ask_followup"] }))).toBeNull();
+    expect(turnEndNudge(facts({ ...due, toolsCalled: ["record_followup"] }))).toBeNull();
+    expect(turnEndNudge(facts({ ...due, proposed: true }))).toBeNull();
+    expect(turnEndNudge(facts({ ...due, generated: true }))).toBeNull();
+    expect(turnEndNudge(facts({ ...due, checkin: { active: true, inThread: true } }))).toBeNull();
+    expect(turnEndNudge(facts({ ...due, proactive: "weekly_review", usedTools: true }))).toBeNull();
+    expect(turnEndNudge(facts({ text: due.text, followUpToRaise: null }))).toBeNull();
+  });
 });

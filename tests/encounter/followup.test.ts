@@ -6,6 +6,10 @@ import {
   FOLLOW_UP_DAYS,
   PERSISTENCE_DAYS,
   CheckInRecord,
+  followUpAck,
+  followUpAsk,
+  nextFollowUpDay,
+  FOLLOW_UP_CHOICES,
 } from "../../src/services/encounter/domain/followUp";
 import { ownDataBlocks, renderOwnData } from "../../src/services/encounter/domain/context";
 import { handout } from "../../src/services/encounter/domain/summary";
@@ -135,5 +139,68 @@ describe("own-data context", () => {
     expect(text).toContain("ALREADY ON THEIR RECORD");
     expect(text.trim().endsWith("no diagnosis or triage decision has been made or implied.")).toBe(true);
     expect(lintOutput(text, { onRecordConditions: input.conditions })).toEqual([]);
+  });
+});
+
+describe("the follow-up as a conversation", () => {
+  it("names the next scheduled day, and none after the last", () => {
+    expect(nextFollowUpDay(2)).toBe(5);
+    expect(nextFollowUpDay(3)).toBe(5);
+    expect(nextFollowUpDay(4)).toBe(10); // an answer the day before covers day 5
+    expect(nextFollowUpDay(7)).toBe(10);
+    expect(nextFollowUpDay(10)).toBeNull();
+  });
+
+  it("an answer the day before a scheduled day counts for it", () => {
+    expect(followUpFor(ago(5), [{ day: 4, trend: "SAME", createdAt: ago(1) }]).due).toBe(false);
+    expect(followUpFor(ago(5), [{ day: 3, trend: "SAME", createdAt: ago(2) }]).due).toBe(true);
+  });
+
+  it("stops being due after the window", () => {
+    expect(followUpFor(ago(14), []).due).toBe(true);
+    expect(followUpFor(ago(15), []).due).toBe(false);
+  });
+
+  it("asks one neutral question and offers the three answers", () => {
+    expect(followUpAsk("Back pain", 5)).toBe("Day 5 of your back pain check-in — how is it now?");
+    expect(FOLLOW_UP_CHOICES.map((c) => c.label)).toEqual(["Better", "No different", "Worse"]);
+  });
+
+  it("says what was written down and when it asks next — a first 'better' gets no route and no count", () => {
+    const ack = followUpAck(ago(5), [{ day: 5, trend: "BETTER", createdAt: new Date() }]);
+    expect(ack.recorded).toBe("Written down for day 5: better.");
+    expect(ack.trajectory).toBeNull();
+    expect(ack.next).toMatch(/^I'll ask again on day 10 \(/);
+    expect(ack.offerRoute).toBe(false);
+    expect(ack.persistence).toBeNull();
+  });
+
+  it("offers a route when they say worse, and counts earlier reports", () => {
+    const ack = followUpAck(ago(5), [{ day: 5, trend: "WORSE", createdAt: new Date() }, { day: 2, trend: "BETTER", createdAt: ago(3) }]);
+    expect(ack.offerRoute).toBe(true);
+    expect(ack.trajectory).toMatch(/worse once, better once/);
+    expect(ack.persistence).toBeNull(); // one bad report is not persistence
+  });
+
+  it("carries the persistence line after two non-improving reports from day 5", () => {
+    const ack = followUpAck(ago(5), [{ day: 5, trend: "SAME", createdAt: new Date() }, { day: 2, trend: "SAME", createdAt: ago(3) }]);
+    expect(ack.persistence).not.toBeNull();
+    expect(ack.offerRoute).toBe(true);
+  });
+
+  it("says the schedule is over after the last day", () => {
+    const ack = followUpAck(ago(10), [{ day: 10, trend: "BETTER", createdAt: new Date() }]);
+    expect(ack.nextDay).toBeNull();
+    expect(ack.next).toMatch(/last scheduled follow-up/);
+  });
+
+  it("never says what a change means — every line passes the output linter", () => {
+    for (const trend of ["BETTER", "SAME", "WORSE"] as const)
+      for (const day of [2, 5, 10]) {
+        const ack = followUpAck(ago(day), [{ day, trend, createdAt: new Date() }, { day: 1, trend: "SAME", createdAt: ago(day - 1) }]);
+        const all = [followUpAsk("Back pain", day), ack.recorded, ack.trajectory, ack.persistence?.line, ack.persistence?.action, ack.next].filter(Boolean).join(" ");
+        expect(lintOutput(all)).toEqual([]);
+        expect(all).not.toMatch(/clearing|healing|recover|on track|good sign|nothing to worry|should (pass|settle|improve)/i);
+      }
   });
 });
