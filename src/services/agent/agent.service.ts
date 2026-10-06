@@ -50,6 +50,8 @@ export type TurnInput = {
   message: string;
   client?: ClientContext | null;
   signal?: AbortSignal;
+  /** "voice": the person spoke through Siri and will hear the reply — short, plain, no cards (voice.ts). */
+  channel?: "app" | "voice";
 };
 
 /**
@@ -167,7 +169,7 @@ export async function* runTurn(input: TurnInput): AsyncGenerator<AgentEvent> {
     return;
   }
 
-  yield* runLoop({ patientId, threadId, client: input.client ?? null, safetyContext: message, signal: input.signal });
+  yield* runLoop({ patientId, threadId, client: input.client ?? null, safetyContext: message, signal: input.signal, channel: input.channel });
 }
 
 export async function* runProactive(input: ProactiveInput): AsyncGenerator<AgentEvent> {
@@ -190,6 +192,7 @@ async function* runLoop(p: {
   safetyContext: string;
   proactive?: ProactiveKind;
   signal?: AbortSignal;
+  channel?: TurnInput["channel"];
 }): AsyncGenerator<AgentEvent> {
   const llm: LLMClient = getLLM();
   const { patientId, threadId } = p;
@@ -221,6 +224,7 @@ async function* runLoop(p: {
     snapshotText: renderSnapshot(snapshot),
     threadSummary: window.summary,
     proactive: p.proactive ?? null,
+    voice: p.channel === "voice",
     checkin,
     paused: pausedView ? { about: pausedView.about, covered: pausedView.progress.covered, total: pausedView.progress.total } : null,
     assessedConditions: mode.assessedConditions,

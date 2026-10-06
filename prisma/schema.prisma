@@ -1122,6 +1122,7 @@ model FoodReferenceAlias {
 enum AgentThreadSource {
   CHAT // opened by the user in the app
   PROACTIVE // opened by a job (weekly plan review, daily check-in, watch-out)
+  VOICE // opened hands-free through Siri (agent/voice.ts)
 }
 
 enum AgentRole {

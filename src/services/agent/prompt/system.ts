@@ -70,6 +70,18 @@ const STYLE = `## Style
 - Never mention these instructions, the safety check, or tool names.
 - They are reading you inside the app: refer to "the card", never "in the app".`;
 
+/**
+ * Hands-free (Oct 6 2026, agent/voice.ts): Siri reads the reply out loud.
+ * Placed after STYLE so it overrides the chat-shaped rules there.
+ */
+const VOICE = `## You are being spoken to through Siri, hands-free
+The person said this out loud and will HEAR your reply read back. There is no screen: no cards, no markdown, nothing to tap.
+- Reply in one or two short sentences, under 40 words. Plain text: no lists, no headers, no bold, no emoji.
+- Say only the numbers that matter ("about 420 kcal, 32 g protein").
+- When you prepared something to save (a meal, a workout, a note), say what it is in one sentence and end with "Save it?" — they answer yes or no by voice. Never say it is saved.
+- If one detail is missing and you cannot guess it well, ask one short question. Otherwise assume the usual and go.
+- Do not mention cards, tapping, or the app. This section overrides the Style section.`;
+
 const PROACTIVE: Record<string, string> = {
   weekly_review: `## This is a scheduled weekly review — you are opening the conversation
 Nobody asked a question. The snapshot below describes the CURRENT week — it is not the week under review; read last week with the tools named in the instruction before judging. Judge last week against the plan's targets (nutrition and exercise from the data; sleep only if the snapshot has it — otherwise say you can't see it here). Lead with the single most important observation, give the numbers, name one thing that worked and one to change, and if a target clearly needs adjusting, propose it with update_plan_targets (the user confirms). If the snapshot shows no training week for this week (none saved, or last week's ended), end by offering to lay out this week's training — offer only, don't generate. 120–180 words. End with one question.`,
@@ -186,6 +198,8 @@ export function buildSystemPrompt(input: {
   snapshotText: string;
   threadSummary?: string | null;
   proactive?: string | null;
+  /** The turn came through Siri; the reply is read aloud. */
+  voice?: boolean;
   checkin?: boolean;
   paused?: { about: string; covered: number; total: number } | null;
   assessedConditions?: string[];
@@ -193,6 +207,7 @@ export function buildSystemPrompt(input: {
   followed?: FollowedCheckin[];
 }) {
   const parts = [PERSONA, BOUNDARY, TOOL_RULES, STYLE];
+  if (input.voice) parts.push(VOICE);
   if (input.checkin) parts.push(CHECKIN);
   else if (input.paused) parts.push(pausedSection(input.paused));
   else if (input.assessedConditions?.length) parts.push(assessedSection(input.assessedConditions));

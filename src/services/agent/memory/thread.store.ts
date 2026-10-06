@@ -33,7 +33,7 @@ export const UNSUMMARIZED_CAP = 300;
 class ThreadStore {
   async create(
     patientId: string,
-    opts: { source?: "CHAT" | "PROACTIVE"; title?: string } = {}
+    opts: { source?: "CHAT" | "PROACTIVE" | "VOICE"; title?: string } = {}
   ) {
     return prisma.agentThread.create({
       data: {

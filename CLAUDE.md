@@ -873,6 +873,29 @@ fake-server test caught a half JSON returned as success). `JsonOptions.signal`
 added. Logs `[llm] slow …` (> 15 s, with first-chunk time) and `[llm]
 stalled …` — read Railway logs for these before guessing at a slow turn.
 
+### Hands-free through Siri (Oct 6 2026) — `agent/voice.ts`, `POST /api/agent/voice`
+
+"Hey Siri, tell Ollo …" — the app's App Intent (mobile
+`ios/OlloHealth/OllieVoiceIntent.swift`) posts the spoken text as
+`{text, client?}` and Siri READS the reply. Not streamed; Siri waits.
+Reply `{threadId, text, proposal}`:
+- Thread: `AgentThreadSource.VOICE`, one per stretch of talking —
+  `voiceThread()` continues the latest VOICE thread touched within
+  `VOICE_THREAD_WINDOW_MS` (30 min), else creates one. The app lists them as
+  "By voice".
+- `runTurn({channel: "voice"})` adds the prompt's VOICE section (after STYLE,
+  overrides it): one or two sentences, plain text, "Save it?" when a proposal
+  was prepared. `spoken()` then strips markdown, turns list items into
+  sentences and cuts at a sentence boundary at `SPOKEN_MAX_CHARS` (320; 700
+  for a red-flag answer) — a closing question always survives the cut.
+- `proposal` = the first card carrying `data.proposalId` (the proposal card,
+  or a preview card that was given the id). The intent asks "Save it?" and
+  calls the ordinary `/agent/proposals/:id/confirm|cancel`; a declined prompt
+  cancels, so nothing waits in the app. Nothing new server-side for that.
+- Measured locally (Oct 6): a meal-log turn ~10 s, a question ~2 s. How long
+  Siri waits for an intent is the open question — see mobile CLAUDE.md.
+- Tests: `tests/agent/voice.test.ts` (spoken, pendingProposal).
+
 ## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`
 
 "How much of it" as ONE coarse choice per meal (light | normal | hearty | lots)

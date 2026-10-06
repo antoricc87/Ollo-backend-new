@@ -12,6 +12,7 @@ import { speechToText, transcriptionPrompt } from "../../openAI/model/openai.mod
 import { z } from "zod";
 import { WatchWorkoutSummary } from "../../workouts/domain/workout.schema";
 import encounterService from "../../encounter/model/encounter.model";
+import { voiceThread, voiceTurn } from "../voice";
 
 const MAX_MESSAGE_CHARS = 4000;
 
@@ -356,6 +357,42 @@ class AgentHandler {
     } catch (error) {
       console.error("agent runProactive", error);
       return response.status(400).json(Util.error({}, "Error running check"));
+    }
+  }
+
+  /* -------------------------------- voice ------------------------------ */
+  /**
+   * One hands-free turn (Siri, see ../voice.ts). Body: `{ text, client? }`.
+   * Reply: `{ threadId, text, proposal }` — `text` is what Siri says;
+   * `proposal` (id, title, summary) is something Ollie prepared that the
+   * intent confirms or cancels through /agent/proposals/:id/{confirm,cancel}.
+   * Not streamed: Siri waits for the whole answer.
+   */
+  async voice(request: any, response: Response) {
+    const { id } = request.user;
+    const body = request.body ?? {};
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (!text) return response.status(400).json(Util.error({}, "text is required"));
+    if (text.length > MAX_MESSAGE_CHARS)
+      return response.status(400).json(Util.error({}, `text is longer than ${MAX_MESSAGE_CHARS} characters`));
+    const client = pickClientContext(body.client);
+    let threadId: string;
+    try {
+      threadId = await voiceThread(id);
+    } catch (error) {
+      console.error("agent voice thread", error);
+      return response.status(400).json(Util.error({}, "Error answering"));
+    }
+    const turn = liveTurns.start(id, body.turnId, threadId);
+    try {
+      const r = await voiceTurn({ patientId: id, threadId, text, client, signal: turn.signal });
+      if ("error" in r) return response.status(502).json(Util.error({ threadId }, r.error));
+      return response.status(200).json(Util.success(r, "Reply"));
+    } catch (error) {
+      console.error("agent voice", error);
+      return response.status(400).json(Util.error({}, "Error answering"));
+    } finally {
+      turn.finish();
     }
   }
 
