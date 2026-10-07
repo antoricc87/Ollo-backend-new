@@ -77,13 +77,22 @@ export const _setApnsSender = (s: Sender | null) => {
   sender = s ?? sendApns;
 };
 
-const payloadFor = (n: { id: string; kind: string; title: string; body: string; route: string | null; threadId: string | null }) => ({
-  aps: { alert: { title: n.title, body: n.body }, sound: "default", "thread-id": n.kind },
-  notificationId: n.id,
-  kind: n.kind,
-  ...(n.route ? { route: n.route } : {}),
-  ...(n.threadId ? { threadId: n.threadId } : {}),
-});
+/**
+ * The custom keys ride twice: at the top level (what any native reader sees)
+ * and under `body`, because expo-notifications on iOS exposes
+ * `userInfo["body"]` as `notification.request.content.data` for a REMOTE
+ * push (EXNotificationSerializer.m) — the tap handler read nothing until
+ * this was nested (found on the first phone test, Oct 7 2026).
+ */
+const payloadFor = (n: { id: string; kind: string; title: string; body: string; route: string | null; threadId: string | null }) => {
+  const data = {
+    notificationId: n.id,
+    kind: n.kind,
+    ...(n.route ? { route: n.route } : {}),
+    ...(n.threadId ? { threadId: n.threadId } : {}),
+  };
+  return { aps: { alert: { title: n.title, body: n.body }, sound: "default", "thread-id": n.kind }, ...data, body: data };
+};
 
 const otherEnv = (e: string): ApnsEnv => (e === "sandbox" ? "production" : "sandbox");
 

@@ -60,6 +60,8 @@ describe("deliver", () => {
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[0][0]).toMatchObject({ env: "production", topic: "com.ollohealth.ollo", deviceToken: "abc" });
     expect(send.mock.calls[0][0].payload).toMatchObject({ aps: { alert: { title: "Ollie", body: "Your weekly update" } }, route: "ollie?threadId=t1", notificationId: "n1" });
+    // expo-notifications (iOS) reads a remote push's data from userInfo.body
+    expect(send.mock.calls[0][0].payload.body).toEqual({ notificationId: "n1", kind: "weekly_update", route: "ollie?threadId=t1", threadId: "t1" });
     expect(mockPrisma.notification.update.mock.calls[0][0].data).toMatchObject({ status: "sent", apnsId: "apns-1" });
   });
 
