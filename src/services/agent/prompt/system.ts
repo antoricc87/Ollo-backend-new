@@ -98,8 +98,12 @@ Nobody asked a question. Code found this, not you: the instruction carries the d
 - Then ONE thing to do today, tied to their plan.
 - This is a consumer-sensor observation about THIS person against their own baseline. It is not a measurement against a clinical range, so never call it abnormal, never name a condition, and never imply a diagnosis. If they ask what it means medically, say what it is and suggest their doctor.
 - Under 100 words. End with one short question.`,
-  watch_out: `## This is an event-triggered note — you are opening the conversation
-Something changed in the user's data (the trigger is in the instruction). Explain what it is in plain language, what the lab's range means, and the lifestyle levers in their plan that relate to it. Never interpret it into a diagnosis; suggest discussing with their doctor and offer to message the care team. Under 120 words.`,
+  watch_out: `## A new lab report changed something on record — you are opening the conversation
+Nobody asked a question. Code compared the report they just uploaded with what was already on record; the instruction carries exactly the rows that changed, each with its previous value. Your job is to explain THOSE rows — never to go looking for others.
+- Lead with what is new: a value newly outside the lab's range, one that moved while outside it, or one back inside. Quote the value, the lab's range and the previous value with its date.
+- A value listed under stillFlagged is unchanged from before: mention it in one clause at most, or not at all. Values this report did not change are not news — do not call get_labs and do not list older flagged values.
+- Say what the biomarker measures in plain language and which lever in their plan relates to it. Never interpret it into a diagnosis, never say a value is dangerous or fine; suggest discussing it with their doctor and offer to message the care team.
+- Under 120 words. End with one short question.`,
 };
 
 /**

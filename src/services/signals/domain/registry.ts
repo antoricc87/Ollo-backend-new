@@ -1,12 +1,17 @@
 import { Detector } from "./types";
 import { recoveryDip, recoveryRestored, sleepDebt } from "./detectors/vitals";
 import { loggingStopped, proteinShort, trainingConsistent, trainingDrifting, trainingStopped, weightOffTrack } from "./detectors/habits";
+import { labsReport } from "./detectors/labs";
 
 /** Every detector that runs. Order here is irrelevant — ranking is by
  *  severity × weight (budget.ts), never by declaration order. */
 export const DETECTORS: Detector[] = [recoveryDip, recoveryRestored, sleepDebt, trainingStopped, trainingDrifting, trainingConsistent, loggingStopped, proteinShort, weightOffTrack];
 
-export const detectorBy = (key: string) => DETECTORS.find((d) => d.key === key) ?? null;
+/** Event-driven detectors: not run by the daily scan, but their episodes are
+ *  folded by it (to close them) and looked up by key like any other. */
+export const EVENT_DETECTORS: Detector[] = [labsReport];
+
+export const detectorBy = (key: string) => DETECTORS.find((d) => d.key === key) ?? EVENT_DETECTORS.find((d) => d.key === key) ?? null;
 
 /**
  * Pairs where the first firing makes the second meaningless rather than merely

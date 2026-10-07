@@ -1,4 +1,6 @@
 import { Response } from "express";
+import prisma from "../../../utility/prismaClient";
+import { runLabScanFor } from "../../signals/labs.service";
 import Util from "../../../utils/response";
 import threadStore from "../memory/thread.store";
 import memoryStore, { MEMORY_CATEGORIES, MemoryCategory } from "../memory/memory.store";
@@ -349,9 +351,16 @@ class AgentHandler {
     const { kind } = request.params;
     if (!["weekly_review", "watch_out", "plan_week"].includes(kind))
       return response.status(400).json(Util.error({}, "kind must be weekly_review | watch_out | plan_week"));
-    const reason = typeof request.body?.reason === "string" ? request.body.reason.slice(0, 200) : undefined;
     try {
-      const r = await runProactiveFor(id, kind, { reason, notify: request.body?.notify === true });
+      // watch_out is no longer a free-text prompt: it re-judges the newest lab
+      // report against the record and speaks only if that changed something.
+      if (kind === "watch_out") {
+        const newest = await prisma.labResultSummary.findFirst({ where: { patientSummary: { patientId: id } }, orderBy: { createdAt: "desc" }, select: { id: true } });
+        const r = newest ? await runLabScanFor(id, { reportIds: [newest.id], notify: request.body?.notify === true }) : { skipped: "no lab report" };
+        if ("skipped" in r) return response.status(502).json(Util.error({}, `Skipped: ${r.skipped}`));
+        return response.status(200).json(Util.success(r, r.fired ? "Done" : `Nothing to say: ${(r as { reason: string }).reason}`));
+      }
+      const r = await runProactiveFor(id, kind, { notify: request.body?.notify === true });
       if ("skipped" in r) return response.status(502).json(Util.error({ threadId: (r as any).threadId ?? null }, `Skipped: ${r.skipped}`));
       return response.status(200).json(Util.success(r, "Done"));
     } catch (error) {

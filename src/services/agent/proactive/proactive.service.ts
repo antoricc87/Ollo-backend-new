@@ -9,7 +9,8 @@ import { isoWeekRange, safeTz } from "../memory/dates";
  * Proactive runs: the same agent, opened by a job instead of a message.
  *   weekly_review  Monday morning — judge last week vs the plan, propose tweaks
  *   signal         a detector cleared its bar (services/signals) — explain it
- *   watch_out      event-driven — a new lab report / flagged reading
+ *   watch_out      event-driven — a new lab report changed something on record
+ *                  (services/signals/labs.service decides; was "every upload")
  *   plan_week      Sunday evening — lay out next week's training (a draft card)
  *
  * `daily_checkin` was retired on 2026-09-25 (ruling): it ran on the clock, so
@@ -87,25 +88,33 @@ const planWeekInstruction = (tz: string) => {
 export const signalInstruction = (finding: { detectorKey: string; label: string; severity: number; evidence: unknown; baseline: unknown }) =>
   `[A signal fired: ${finding.detectorKey} — ${finding.label}. Evidence: ${JSON.stringify(finding.evidence)}. Their usual/target: ${JSON.stringify(finding.baseline)}. Explain THIS and nothing else. Do not call tools to look for other findings.]`;
 
-export const watchOutInstruction = (reason: string) => `[Event: ${reason}. Use get_labs with flaggedOnly=true (or get_vitals) to see the exact values before writing.]`;
+/**
+ * A lab delta brings the rows that changed, with the previous value for each.
+ * The old version said "use get_labs flaggedOnly" — that tool reads the merged
+ * picture across EVERY report, so the note kept reciting values flagged years
+ * ago. Now the model gets exactly this report's news and nothing to go fetch.
+ */
+export const labsInstruction = (finding: { label: string; evidence: unknown; baseline: unknown }) =>
+  `[A new lab report changed something on record: ${finding.label}. The rows that changed, each with its previous value: ${JSON.stringify(finding.evidence)}. Prior reports: ${JSON.stringify(finding.baseline)}. Explain THESE rows and nothing else. Do not call get_labs — older values outside the range that this report did not change are not news.]`;
 
 /* ------------------------------- run + notify ---------------------------- */
 
 const TITLES: Record<ProactiveKind, string> = {
   weekly_review: "Your weekly review",
   signal: "Something changed",
-  watch_out: "Something new in your data",
+  watch_out: "Something new in your labs",
   plan_week: "Next week's training",
 };
 
-export async function runProactiveFor(patientId: string, kind: ProactiveKind, opts: { reason?: string; notify?: boolean; threadId?: string | null; instruction?: string; title?: string } = {}) {
+export async function runProactiveFor(patientId: string, kind: ProactiveKind, opts: { notify?: boolean; threadId?: string | null; instruction?: string; title?: string } = {}) {
   const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { timeZone: true, firstName: true } });
   if (!patient) return { skipped: "no patient" as const };
   const tz = safeTz(patient.timeZone);
   // A signal brings its own instruction (the detector's finding); the scheduled
   // kinds write theirs from the calendar.
   const instruction =
-    opts.instruction ?? (kind === "weekly_review" ? weeklyInstruction(tz) : kind === "plan_week" ? planWeekInstruction(tz) : watchOutInstruction(opts.reason ?? "new data"));
+    opts.instruction ?? (kind === "weekly_review" ? weeklyInstruction(tz) : kind === "plan_week" ? planWeekInstruction(tz) : null);
+  if (!instruction) throw new Error(`proactive ${kind} needs an instruction — the finding is written by code, never looked for by the model`);
   const title = opts.title ?? (kind === "weekly_review" ? `Weekly review · ${isoWeekRange(tz, moment().tz(tz).subtract(1, "week")).start}` : TITLES[kind]);
 
   const r = await runProactiveCollect({ patientId, kind, title, instruction, threadId: opts.threadId ?? null });
@@ -188,19 +197,4 @@ export async function runDue(kind: ScheduledKind) {
     }
   }
   return results;
-}
-
-/**
- * Event hook for other modules (lab upload, flagged readings). Fire-and-forget:
- * `void triggerWatchOut(patientId, "new lab report uploaded (3 values flagged)")`.
- */
-export async function triggerWatchOut(patientId: string, reason: string) {
-  try {
-    const pref = await getPreference(patientId);
-    if (!pref.proactiveEnabled || !pref.watchOutsEnabled) return { skipped: "disabled" as const };
-    return await runProactiveFor(patientId, "watch_out", { reason });
-  } catch (e) {
-    console.error("triggerWatchOut failed", e);
-    return { skipped: "failed" as const };
-  }
 }

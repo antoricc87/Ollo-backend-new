@@ -1,4 +1,4 @@
-import { triggerWatchOut } from "../../agent/proactive/proactive.service";
+import { onLabReport } from "../../signals/labs.service";
 import LabsJourneyService from "../../labs_journey/model/labsJourney.model";
 import { ObjectId } from "../../../utils/idValidation";
 import { Request, Response } from "express";
@@ -324,11 +324,12 @@ export class PatientHandler {
           labDataJSON,
           resolvedCollectedAt
         );
-        // Ollie: event-driven note about the new report (fire-and-forget, respects the user's preferences).
-        const flaggedCount = labDataJSON.labResults.filter((l: any) => l.isOutOfRange).length;
         // Labs journey: a new report resolves any open journey (fire-and-forget).
         void LabsJourneyService.markResulted(patientIdToUse).catch(() => undefined);
-        void triggerWatchOut(patientIdToUse, `new lab report uploaded on ${new Date().toISOString().slice(0, 10)} (${labDataJSON.labResults.length} values, ${flaggedCount} outside the reference range)`);
+        // Signals: what this report CHANGED against the record decides whether
+        // Ollie says anything (services/signals/labs.service) — debounced, so a
+        // batch of files is one note, and a duplicate upload is none.
+        onLabReport(patientIdToUse, report.id);
         const responsePayload = {
           ...labDataJSON,
           labReport: report.labReport,
