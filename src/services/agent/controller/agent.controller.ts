@@ -12,7 +12,7 @@ import { speechToText, transcriptionPrompt } from "../../openAI/model/openai.mod
 import { z } from "zod";
 import { WatchWorkoutSummary } from "../../workouts/domain/workout.schema";
 import encounterService from "../../encounter/model/encounter.model";
-import { voiceThread, voiceTurn } from "../voice";
+import { DICTATION_HINTS, voiceThread, voiceTurn } from "../voice";
 
 const MAX_MESSAGE_CHARS = 4000;
 
@@ -362,8 +362,10 @@ class AgentHandler {
 
   /* -------------------------------- voice ------------------------------ */
   /**
-   * One hands-free turn (Siri, see ../voice.ts). Body: `{ text, client? }`.
-   * Reply: `{ threadId, text, proposal }` — `text` is what Siri says;
+   * One hands-free turn (Siri, the watch — see ../voice.ts). Body: `{ text,
+   * client? }`, or `{ audio }` (a base64 m4a data URL, transcribed first with
+   * the default hints; `heard` in the reply is the transcript).
+   * Reply: `{ threadId, heard?, text, saved, proposal }` — `text` is what is read out;
    * `proposal` (id, title, summary) is something Ollie prepared that the
    * intent confirms or cancels through /agent/proposals/:id/{confirm,cancel}.
    * Not streamed: Siri waits for the whole answer.
@@ -371,8 +373,17 @@ class AgentHandler {
   async voice(request: any, response: Response) {
     const { id } = request.user;
     const body = request.body ?? {};
-    const text = typeof body.text === "string" ? body.text.trim() : "";
-    if (!text) return response.status(400).json(Util.error({}, "text is required"));
+    let text = typeof body.text === "string" ? body.text.trim() : "";
+    if (!text && typeof body.audio === "string" && body.audio) {
+      try {
+        text = (await speechToText(body.audio, { prompt: transcriptionPrompt(DICTATION_HINTS, ""), minBytes: 4000 })).trim();
+      } catch (error) {
+        console.error("agent voice transcription", error);
+        return response.status(400).json(Util.error({}, "Could not understand the recording"));
+      }
+      if (!text) return response.status(400).json(Util.error({}, "The recording was silent"));
+    }
+    if (!text) return response.status(400).json(Util.error({}, "text or audio is required"));
     if (text.length > MAX_MESSAGE_CHARS)
       return response.status(400).json(Util.error({}, `text is longer than ${MAX_MESSAGE_CHARS} characters`));
     const client = pickClientContext(body.client);
@@ -387,7 +398,7 @@ class AgentHandler {
     try {
       const r = await voiceTurn({ patientId: id, threadId, text, client, signal: turn.signal });
       if ("error" in r) return response.status(502).json(Util.error({ threadId }, r.error));
-      return response.status(200).json(Util.success(r, "Reply"));
+      return response.status(200).json(Util.success({ ...r, heard: body.audio ? text : undefined }, "Reply"));
     } catch (error) {
       console.error("agent voice", error);
       return response.status(400).json(Util.error({}, "Error answering"));
@@ -407,9 +418,10 @@ class AgentHandler {
   async transcribe(request: any, response: Response) {
     const audio = typeof request.body?.audio === "string" ? request.body.audio : "";
     if (!audio) return response.status(400).json(Util.error({}, "audio is required"));
-    const hints = Array.isArray(request.body?.hints)
+    const sent = Array.isArray(request.body?.hints)
       ? request.body.hints.filter((h: unknown): h is string => typeof h === "string" && !!h.trim()).map((h: string) => h.trim().slice(0, 40)).slice(0, 60)
       : [];
+    const hints = sent.length ? sent : DICTATION_HINTS;
     const previous = typeof request.body?.previous === "string" ? request.body.previous.slice(-2000) : "";
     try {
       // Segments can end on a short phrase ("thanks"), so accept ~0.5 s clips;

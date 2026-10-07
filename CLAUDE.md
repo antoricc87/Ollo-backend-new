@@ -907,8 +907,14 @@ Reply `{threadId, text, proposal}`:
   (plan changes, messages, bookings). The intent asks "Save it?" and calls
   the ordinary `/agent/proposals/:id/confirm|cancel`; a declined prompt
   cancels, so nothing waits in the app.
-- Measured locally (Oct 6): a meal-log turn ~10 s, a question ~2 s. How long
-  Siri waits for an intent is the open question — see mobile CLAUDE.md.
+- **Audio in (Oct 7 2026, the watch):** `{audio}` (base64 m4a data URL)
+  instead of `{text}` — transcribed first with the server-side
+  `DICTATION_HINTS` (voice.ts; the same list the phone sends, and
+  `/transcribe` falls back to it when a client sends none), `heard` in the
+  reply is the transcript. `saved` = a meal/workout was logged this turn, so
+  the client can offer Undo.
+- Measured locally (Oct 6–7): a meal-log turn 10–20 s (the analysis, not
+  transcription — whisper adds ~1 s), a question ~2 s, undo instant.
 - Tests: `tests/agent/voice.test.ts` (spoken, pendingProposal).
 
 ## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`

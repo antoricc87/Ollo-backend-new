@@ -25,6 +25,21 @@ import { UNDO_WINDOW_HOURS } from "./tools/undo.tools";
  *     so the intent can ask "Save it?" and confirm or cancel by voice.
  */
 
+/**
+ * Words people say to Ollie that general speech models get wrong — the
+ * spelling bias sent with every clip (same list as the phone's
+ * DICTATION_HINTS; a client that sends none, like the watch, gets these).
+ */
+export const DICTATION_HINTS = [
+  "Ollie", "HRV", "VO2 max", "Zone 2", "RPE", "A1C", "LDL", "HDL", "ApoB",
+  "creatine", "whey protein", "magnesium glycinate", "omega-3", "electrolytes",
+  "Greek yogurt", "cottage cheese", "overnight oats", "acai bowl", "poke bowl",
+  "quinoa", "edamame", "hummus", "falafel", "tzatziki", "kombucha", "kefir",
+  "matcha", "espresso", "cappuccino", "sourdough", "burrata", "prosciutto",
+  "bresaola", "Chipotle", "Sweetgreen", "Starbucks", "Trader Joe's",
+  "Romanian deadlift", "Bulgarian split squat",
+];
+
 /** A pause longer than this starts a new voice thread. */
 export const VOICE_THREAD_WINDOW_MS = 30 * 60 * 1000;
 
@@ -33,8 +48,12 @@ export const SPOKEN_MAX_CHARS = 320;
 
 export type VoiceReply = {
   threadId: string;
+  /** What the person said, when the request carried audio (the watch). */
+  heard?: string;
   /** What Siri says. */
   text: string;
+  /** A meal or workout was saved (or undone) this turn — the client can offer Undo. */
+  saved: boolean;
   /** Something Ollie prepared that the person must confirm — null when nothing is pending. */
   proposal: { id: string; title: string; summary: string } | null;
 };
@@ -104,10 +123,10 @@ export const isUndo = (text: string) =>
 /** The fast path for "undo": reverse the last voice-saved log and say so. */
 export async function voiceUndo(patientId: string, threadId: string): Promise<VoiceReply> {
   const last = await proposalStore.latestUndoable(patientId, UNDO_WINDOW_HOURS * 3600 * 1000);
-  if (!last) return { threadId, text: "There's nothing from the last day to undo.", proposal: null };
+  if (!last) return { threadId, text: "There's nothing from the last day to undo.", saved: false, proposal: null };
   const r = await proposalStore.undo(patientId, last.id);
-  if (r.status !== 200) return { threadId, text: `I couldn't undo that: ${r.error}`, proposal: null };
-  return { threadId, text: `Undone: ${r.undone}.`, proposal: null };
+  if (r.status !== 200) return { threadId, text: `I couldn't undo that: ${r.error}`, saved: false, proposal: null };
+  return { threadId, text: `Undone: ${r.undone}.`, saved: false, proposal: null };
 }
 
 /** The first card with a pending proposal behind it (the proposal card itself, or a preview card that carries the id). */
@@ -127,9 +146,10 @@ export async function voiceTurn(input: { patientId: string; threadId: string; te
   const r = await runTurnCollect({ patientId: input.patientId, threadId: input.threadId, message: input.text, client: input.client, signal: input.signal, channel: "voice" });
   if (!r.done) return { error: r.error ?? "Something went wrong" };
   const proposal = pendingProposal(r.done.cards);
+  const saved = r.done.cards.some((c) => c.type === "meal_logged" || c.type === "workout_logged");
   // An emergency answer is read in full; everything else is kept short.
   const limit = r.safety && r.safety.outcome === "red_flag" ? 700 : SPOKEN_MAX_CHARS;
   let text = spoken(r.done.text, limit);
   if (proposal && !text.endsWith("?")) text = `${text} Save it?`;
-  return { threadId: input.threadId, text, proposal };
+  return { threadId: input.threadId, text, saved, proposal };
 }
