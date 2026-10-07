@@ -184,6 +184,16 @@ export async function* runProactive(input: ProactiveInput): AsyncGenerator<Agent
 
 /* ================================ the loop ================================ */
 
+/**
+ * Hands-free (Oct 7 2026): on the voice channel these writes are saved the
+ * moment the tool prepares them — Siri's confirmation prompt needed a tap on
+ * screen, which defeats "phone in the pocket". The person hears what was
+ * logged and can say "undo" (voice.ts fast path, or the undo_last_log tool).
+ * Everything else (plan changes, messages, bookings) still comes back as a
+ * proposal the intent asks about.
+ */
+export const VOICE_AUTOSAVE_TOOLS = new Set(["log_meal", "log_workout", "undo_last_log"]);
+
 async function* runLoop(p: {
   patientId: string;
   threadId: string;
@@ -265,6 +275,7 @@ async function* runLoop(p: {
   /** Fixed copy a tool pinned for this turn (the crisis script). First one wins. */
   let pinned: string | null = null;
   let proposedThisTurn = false;
+  let savedThisTurn = false;
   // A generate tool (workout, meal plan, recipe…) renders a card of its own, so a
   // reply that talks about "the card" is honest — the claim guard must not fire.
   let generatedThisTurn = false;
@@ -291,6 +302,7 @@ async function* runLoop(p: {
             proactive: p.proactive ?? null,
             usedTools,
             toolsCalled,
+            saved: savedThisTurn,
             proposed: proposedThisTurn,
             generated: generatedThisTurn,
             followUpToRaise: p.proactive ? null : await encounterService.followed(patientId).then((rows) => rows.find((e) => e.raise)?.complaintTitle ?? null).catch(() => null),
@@ -335,14 +347,25 @@ async function* runLoop(p: {
         let modelResult: unknown = out.result;
         if (call.name === "assess_checkin") assessRejected = (out.result as any)?.rejected ? String((out.result as any).fix ?? "rejected") : null;
         if (out.ok && out.proposal) {
-          // Write tool: nothing happened yet. Park it for the user to confirm.
           const pr = await proposalStore.create(patientId, threadId, call.name, out.input, out.proposal);
-          const card: Card = { type: "proposal", title: pr.title, data: { proposalId: pr.id, toolName: call.name, summary: pr.summary, preview: pr.preview, expiresAt: pr.expiresAt.toISOString() } };
-          cards.push(card);
-          proposedThisTurn = true;
-          yield { type: "proposal", proposalId: pr.id, toolName: call.name, title: pr.title, summary: pr.summary, preview: pr.preview, expiresAt: pr.expiresAt.toISOString() };
-          yield { type: "card", card };
-          modelResult = { proposed: true, proposalId: pr.id, summary: pr.summary, preview: out.result, note: "NOT saved yet — the user must confirm the card. Tell them what you prepared and ask them to confirm; do not say it is logged/sent/booked." };
+          const auto = p.channel === "voice" && VOICE_AUTOSAVE_TOOLS.has(call.name) ? await proposalStore.confirm(patientId, pr.id, null, undefined, { auto: "voice" }) : null;
+          if (auto && auto.status === 200) {
+            // Voice: saved at once; the person hears it and can say "undo".
+            for (const card of auto.cards) {
+              cards.push(card);
+              yield { type: "card", card };
+            }
+            savedThisTurn = true;
+            modelResult = { saved: true, summary: pr.summary, result: auto.result, note: "SAVED — no confirmation needed. Say in one sentence what was logged (with the calories), then: say undo if that's wrong." };
+          } else {
+            // Write tool: nothing happened yet. Park it for the user to confirm.
+            const card: Card = { type: "proposal", title: pr.title, data: { proposalId: pr.id, toolName: call.name, summary: pr.summary, preview: pr.preview, expiresAt: pr.expiresAt.toISOString() } };
+            cards.push(card);
+            proposedThisTurn = true;
+            yield { type: "proposal", proposalId: pr.id, toolName: call.name, title: pr.title, summary: pr.summary, preview: pr.preview, expiresAt: pr.expiresAt.toISOString() };
+            yield { type: "card", card };
+            modelResult = { proposed: true, proposalId: pr.id, summary: pr.summary, preview: out.result, note: "NOT saved yet — the user must confirm the card. Tell them what you prepared and ask them to confirm; do not say it is logged/sent/booked." };
+          }
         }
         let content = JSON.stringify(modelResult);
         if (content.length > MAX_TOOL_RESULT_CHARS) content = content.slice(0, MAX_TOOL_RESULT_CHARS) + '…(truncated)"}';

@@ -1212,6 +1212,7 @@ enum AgentProposalStatus {
   CANCELLED
   EXPIRED
   FAILED
+  UNDONE // confirmed, then reversed by the tool's undo (voice "undo", undo_last_log)
 }
 
 /// A write the agent wants to make, awaiting the user's confirmation in the

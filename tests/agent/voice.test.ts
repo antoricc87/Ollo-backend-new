@@ -40,3 +40,14 @@ describe("pendingProposal", () => {
     expect(pendingProposal([{ type: "text", data: {} }])).toBeNull();
   });
 });
+
+import { isUndo } from "../../src/services/agent/voice";
+
+describe("isUndo", () => {
+  it.each(["undo", "Undo that", "undo it.", "cancel that", "that's wrong", "No, undo", "Ollie, undo that!", "scratch that", "delete it"])("takes %p as undo", (t) => {
+    expect(isUndo(t)).toBe(true);
+  });
+  it.each(["undo the eggs but keep the toast", "that's wrong, it was three eggs", "no", "undo my plan for Tuesday"])("leaves %p to the model", (t) => {
+    expect(isUndo(t)).toBe(false);
+  });
+});

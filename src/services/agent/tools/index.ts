@@ -16,6 +16,7 @@ import { getMealPlan, saveMealPlan } from "./mealplan.tools";
 import { editWorkoutPlan, generateWorkout, generateWorkoutPlan, moveWorkout, saveWorkoutPlan, updateTrainingProfile } from "./workoutplan.tools";
 import { askFollowup, assessCheckin, getCheckins, recordCheckin, recordFollowup, resumeCheckin, startCheckin } from "./checkin.tools";
 import { deleteFavorite, saveFavorite } from "./favorite.tools";
+import { undoLastLog } from "./undo.tools";
 
 /**
  * Everything the agent can do: read tools, memory tools, generation tools
@@ -66,7 +67,8 @@ export const registry = new ToolRegistry().register(
   editWorkoutPlan,
   saveWorkoutPlan,
   updateTrainingProfile,
-  moveWorkout
+  moveWorkout,
+  undoLastLog
 );
 
 export { ToolRegistry } from "./registry";

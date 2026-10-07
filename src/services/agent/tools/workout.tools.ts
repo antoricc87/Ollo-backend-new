@@ -314,6 +314,14 @@ export const logWorkout = defineTool({
     };
     return { result, cards: [{ type: "workout_logged", title: "Logged", data: result }] };
   },
+  /** A session logged as new is removed; one that completed a planned session goes back to planned. */
+  async undo(ctx, input, result: any) {
+    const subject = await ctx.resolveSubject(input.subjectId);
+    const id = String(result?.id ?? "");
+    const ok = result?.completedPlanned ? await WorkoutService.revertCompleted(subject.id, id) : await WorkoutService.softDelete(subject.id, id);
+    if (!ok) throw new Error("That workout is no longer there to remove");
+    return { undone: result?.completedPlanned ? `${result.title} is back to planned` : `${result?.title ?? "the workout"} removed` };
+  },
 });
 
 export const getWorkouts = defineTool({

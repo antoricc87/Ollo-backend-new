@@ -3,6 +3,8 @@ import threadStore from "./memory/thread.store";
 import { runTurnCollect } from "./agent.service";
 import type { ClientContext } from "./context/snapshot";
 import type { Card } from "./tools/registry";
+import proposalStore from "./memory/proposals.store";
+import { UNDO_WINDOW_HOURS } from "./tools/undo.tools";
 
 /**
  * Hands-free turns (Oct 6 2026): the person talks to Ollie through Siri —
@@ -15,9 +17,12 @@ import type { Card } from "./tools/registry";
  *   - the prompt asks for one or two spoken sentences, and `spoken()` makes
  *     sure of it — markdown stripped, cut at a sentence, a trailing question
  *     ("Save it?") never lost;
- *   - a proposal (log_meal, log_workout …) is returned as `proposal` so the
- *     Siri intent can ask "Save it?" and confirm or cancel it by voice
- *     through the usual /agent/proposals endpoints.
+ *   - meals and workouts are SAVED at once (VOICE_AUTOSAVE_TOOLS in
+ *     agent.service.ts) — Siri's own confirmation prompt wanted a tap — and
+ *     the reply ends with "say undo if that's wrong"; a bare "undo" is
+ *     handled here without the model (`isUndo`), anything wordier reaches
+ *     the undo_last_log tool. Other writes still come back as `proposal`
+ *     so the intent can ask "Save it?" and confirm or cancel by voice.
  */
 
 /** A pause longer than this starts a new voice thread. */
@@ -92,6 +97,19 @@ export function spoken(text: string, maxChars = SPOKEN_MAX_CHARS): string {
   return kept.join(" ");
 }
 
+/** "Undo" said plainly — reversed without a model turn. Anything longer goes to the model and its undo_last_log tool. */
+export const isUndo = (text: string) =>
+  /^(?:ollie[,!]?\s+)?(?:no[,!]?\s+)?(?:undo|undo (?:that|it|this|the last one)|cancel (?:that|it)|delete (?:that|it)|that'?s wrong|scratch that|remove (?:that|it))[.!]?$/i.test(text.trim());
+
+/** The fast path for "undo": reverse the last voice-saved log and say so. */
+export async function voiceUndo(patientId: string, threadId: string): Promise<VoiceReply> {
+  const last = await proposalStore.latestUndoable(patientId, UNDO_WINDOW_HOURS * 3600 * 1000);
+  if (!last) return { threadId, text: "There's nothing from the last day to undo.", proposal: null };
+  const r = await proposalStore.undo(patientId, last.id);
+  if (r.status !== 200) return { threadId, text: `I couldn't undo that: ${r.error}`, proposal: null };
+  return { threadId, text: `Undone: ${r.undone}.`, proposal: null };
+}
+
 /** The first card with a pending proposal behind it (the proposal card itself, or a preview card that carries the id). */
 export function pendingProposal(cards: Card[]): VoiceReply["proposal"] {
   for (const card of cards) {
@@ -105,6 +123,7 @@ export function pendingProposal(cards: Card[]): VoiceReply["proposal"] {
 
 /** One hands-free turn on `threadId` (from `voiceThread`). */
 export async function voiceTurn(input: { patientId: string; threadId: string; text: string; client: ClientContext | null; signal?: AbortSignal }): Promise<VoiceReply | { error: string }> {
+  if (isUndo(input.text)) return voiceUndo(input.patientId, input.threadId);
   const r = await runTurnCollect({ patientId: input.patientId, threadId: input.threadId, message: input.text, client: input.client, signal: input.signal, channel: "voice" });
   if (!r.done) return { error: r.error ?? "Something went wrong" };
   const proposal = pendingProposal(r.done.cards);

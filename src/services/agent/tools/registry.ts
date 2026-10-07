@@ -92,6 +92,12 @@ export type ToolDef<S extends ZodTypeAny = ZodTypeAny> = {
   cardRole?: "lookup" | "result";
   /** Apply user edits to a stored preview before commit (e.g. portion sizes). Must validate. */
   applyPreviewEdits?: (preview: unknown, edits: unknown) => unknown;
+  /**
+   * Reverse what `commit` did, given its stored input and result (Oct 7 2026).
+   * Returns one line saying what was removed. Lets the hands-free path save a
+   * meal or workout at once and offer "say undo" instead of a confirmation.
+   */
+  undo?: (ctx: ToolContext, input: z.infer<S>, result: unknown) => Promise<{ undone: string }>;
 };
 
 export const cardRoleOf = (tool: ToolDef | null) => tool?.cardRole ?? (tool?.risk === "read" ? "lookup" : "result");

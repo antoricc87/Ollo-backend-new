@@ -63,7 +63,7 @@ class ProposalStore {
    * `previewEdits` (optional) adjust the preview itself — portions on a meal —
    * via the tool's `applyPreviewEdits`; tools without it ignore them.
    */
-  async confirm(patientId: string, proposalId: string, edits?: Record<string, unknown> | null, previewEdits?: unknown) {
+  async confirm(patientId: string, proposalId: string, edits?: Record<string, unknown> | null, previewEdits?: unknown, opts: { auto?: "voice" } = {}) {
     const p = await this.get(patientId, proposalId);
     if (!p) return { status: 404 as const, error: "Proposal not found" };
     if (p.status !== "PENDING") return { status: 409 as const, error: `Proposal is ${p.status.toLowerCase()}` };
@@ -97,7 +97,7 @@ class ProposalStore {
       });
       if (p.threadId)
         await threadStore.append(p.threadId, [
-          { role: "SYSTEM", content: `[User confirmed "${p.title}" — ${p.toolName} result: ${JSON.stringify(out.result).slice(0, 600)}]`, meta: { proposalId: p.id } },
+          { role: "SYSTEM", content: `[${opts.auto ? "Saved at once (voice)" : "User confirmed"} "${p.title}" — ${p.toolName} result: ${JSON.stringify(out.result).slice(0, 600)}]`, meta: { proposalId: p.id } },
         ]);
       return { status: 200 as const, proposal: done, result: out.result, cards: out.cards ?? [] };
     } catch (e: any) {
@@ -106,6 +106,40 @@ class ProposalStore {
       await prisma.agentProposal.update({ where: { id: p.id }, data: { status: "FAILED", result: json({ error }) } });
       void audit(patientId, "error", { threadId: p.threadId, toolName: p.toolName, payload: { proposalId: p.id, stage: "commit", error } });
       return { status: 500 as const, error: `Could not complete: ${error}` };
+    }
+  }
+
+  /** The most recent confirmed write whose tool can reverse it (Oct 7 2026) — what "undo" means. */
+  async latestUndoable(patientId: string, withinMs: number) {
+    const undoable = registry.specs().filter((t) => !!registry.get(t.name)?.undo).map((t) => t.name);
+    if (!undoable.length) return null;
+    return prisma.agentProposal.findFirst({
+      where: { patientId, status: "CONFIRMED", toolName: { in: undoable }, confirmedAt: { gte: new Date(Date.now() - withinMs) } },
+      orderBy: { confirmedAt: "desc" },
+    });
+  }
+
+  /** Reverse a confirmed write through its tool's `undo`; the proposal becomes UNDONE. */
+  async undo(patientId: string, proposalId: string) {
+    const p = await this.get(patientId, proposalId);
+    if (!p) return { status: 404 as const, error: "Nothing to undo" };
+    if (p.status !== "CONFIRMED") return { status: 409 as const, error: p.status === "UNDONE" ? "That was already undone" : `Proposal is ${p.status.toLowerCase()}` };
+    const tool = registry.get(p.toolName);
+    if (!tool?.undo) return { status: 400 as const, error: `${p.title} cannot be undone from here` };
+    const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { timeZone: true } });
+    const tz = safeTz(patient?.timeZone);
+    const ctx: ToolContext = { patientId, threadId: p.threadId, timeZone: tz, today: dayKey(tz), resolveSubject: makeSubjectResolver(patientId) };
+    void audit(patientId, "tool_commit", { threadId: p.threadId, toolName: p.toolName, payload: { proposalId: p.id, undo: true } });
+    try {
+      const { undone } = await tool.undo(ctx, p.input, p.result);
+      await prisma.agentProposal.update({ where: { id: p.id }, data: { status: "UNDONE" } });
+      if (p.threadId) await threadStore.append(p.threadId, [{ role: "SYSTEM", content: `[User undid "${p.title}" — ${undone}]`, meta: { proposalId: p.id } }]);
+      return { status: 200 as const, undone, proposal: p };
+    } catch (e: any) {
+      const error = e?.message ?? String(e);
+      console.error(`agent undo ${p.toolName} failed`, e);
+      void audit(patientId, "error", { threadId: p.threadId, toolName: p.toolName, payload: { proposalId: p.id, stage: "undo", error } });
+      return { status: 500 as const, error: `Could not undo: ${error}` };
     }
   }
 

@@ -888,10 +888,25 @@ Reply `{threadId, text, proposal}`:
   was prepared. `spoken()` then strips markdown, turns list items into
   sentences and cuts at a sentence boundary at `SPOKEN_MAX_CHARS` (320; 700
   for a red-flag answer) — a closing question always survives the cut.
-- `proposal` = the first card carrying `data.proposalId` (the proposal card,
-  or a preview card that was given the id). The intent asks "Save it?" and
-  calls the ordinary `/agent/proposals/:id/confirm|cancel`; a declined prompt
-  cancels, so nothing waits in the app. Nothing new server-side for that.
+- **Saved at once, undo by voice (Oct 7 2026).** Siri's confirmation prompt
+  wanted a tap on screen, so on this channel `log_meal`, `log_workout` and
+  `undo_last_log` (`VOICE_AUTOSAVE_TOOLS`, agent.service.ts) are committed
+  the moment the tool prepares them (`proposalStore.confirm(..., {auto:
+  "voice"})`), the model is told `saved: true`, and the reply ends with "Say
+  undo if that's wrong". A bare "undo" / "that's wrong" / "cancel that"
+  (`isUndo`) is reversed without a model turn; wordier corrections reach the
+  `undo_last_log` tool (tools/undo.tools.ts, a normal confirm-gated write in
+  chat). Undo = the logging tool's own `undo(ctx, input, result)` (registry.ts:
+  log_meal deletes the entries it created, log_workout soft-deletes a new
+  session or `revertCompleted` puts a planned one back), run by
+  `proposalStore.undo` → status `UNDONE`; `latestUndoable` = last CONFIRMED
+  write with an undo within 24 h. turnChecks `claim_without_save` nudges a
+  reply that says logged/saved when no tool saved anything (the first voice
+  run did exactly that).
+- `proposal` = the first card carrying `data.proposalId` for everything else
+  (plan changes, messages, bookings). The intent asks "Save it?" and calls
+  the ordinary `/agent/proposals/:id/confirm|cancel`; a declined prompt
+  cancels, so nothing waits in the app.
 - Measured locally (Oct 6): a meal-log turn ~10 s, a question ~2 s. How long
   Siri waits for an intent is the open question — see mobile CLAUDE.md.
 - Tests: `tests/agent/voice.test.ts` (spoken, pendingProposal).

@@ -20,6 +20,8 @@ export type TurnFacts = {
   toolsCalled: string[];
   /** A write tool produced a proposal card this turn. */
   proposed: boolean;
+  /** A write was committed this turn (the voice channel saves meals and workouts at once). */
+  saved: boolean;
   /** A generate tool ran this turn (its card is real). */
   generated: boolean;
   /** A finished check-in has a follow-up due that Ollie has not raised yet for this scheduled day (what it is about). */
@@ -43,6 +45,9 @@ export type TurnNudge = { stage: string; message: string };
 /** Phrases that only make sense after a write tool produced a proposal card. */
 export const CLAIMS_CARD =
   /\b(prepar\w*|ready)\b[^.!?\n]{0,80}\b(card|entry|log|logged|confirm)\b|\bcard\b[^.!?\n]{0,60}\b(confirm|edit|review)\b|\byou'?ll see a card\b|\bconfirm\b[^.!?\n]{0,40}\b(in|on) the app\b|\breview and confirm\b|\btap confirm\b/i;
+
+/** The reply says something was saved. Only true after a commit this turn. */
+export const CLAIMS_SAVED = /\b(?:i'?ve|i have|i)\s+(?:logged|saved|recorded|added)\b|\b(?:is|was|been|got)\s+(?:logged|saved|recorded)\b|\blogged\s+(?:it|that|your|the)\b/i;
 
 const CHECKIN_TOOLS = ["start_checkin", "record_checkin", "assess_checkin", "resume_checkin"];
 
@@ -87,6 +92,18 @@ const CHECKS: ((f: TurnFacts) => TurnNudge | null)[] = [
           stage: "claim_without_proposal",
           message:
             "[System: your reply describes a card or asks the user to confirm, but nothing was prepared for them to confirm this turn. If they asked to log or send something, call the right tool now with their words verbatim (log_meal, log_workout, log_vital, message_care_team, book_appointment, update_plan_targets, save_workout_plan, update_training_profile, move_workout); otherwise answer plainly without claiming anything was prepared.]",
+        }
+      : null,
+
+  // "I've logged your snack" with no tool call (Oct 7 2026, first seen on the
+  // voice channel the moment the prompt said logs are saved at once): nothing
+  // was saved. The tool must run, or the reply must not claim it did.
+  (f) =>
+    !f.saved && !f.proposed && !f.proactive && CLAIMS_SAVED.test(f.text)
+      ? {
+          stage: "claim_without_save",
+          message:
+            "[System: your reply says something was logged or saved, but no tool saved anything this turn. If the user asked to log something, call log_meal or log_workout now with their words verbatim and then report what the tool returned; otherwise answer without claiming it was saved.]",
         }
       : null,
 

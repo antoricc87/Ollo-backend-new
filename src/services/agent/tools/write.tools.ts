@@ -299,6 +299,23 @@ export const logMeal = defineTool({
     const result = { logged, days, date: days.length === 1 ? days[0].date : undefined, totalCalories: logged.reduce((a, m) => a + (m.calories ?? 0), 0) };
     return { result, cards: [{ type: "meal_logged", title: "Logged", data: result }] };
   },
+  /** Removes every entry the commit created (daily totals are recomputed by the delete). */
+  async undo(ctx, input, result: any) {
+    const subject = await ctx.resolveSubject(input.subjectId);
+    const ids: string[] = (result?.days ?? []).flatMap((d: any) => (d.meals ?? []).map((m: any) => m.id)).filter(Boolean);
+    let removed = 0;
+    for (const id of ids) {
+      try {
+        await CaloriesService.deleteFoodEntry(subject.id, id);
+        removed++;
+      } catch (e) {
+        console.error("log_meal undo", id, e);
+      }
+    }
+    if (!removed) throw new Error("Those meals are no longer there to remove");
+    const kcal = Number(result?.totalCalories ?? 0);
+    return { undone: `${removed} meal${removed === 1 ? "" : "s"}${kcal ? ` (${Math.round(kcal)} kcal)` : ""} removed` };
+  },
 });
 
 /**

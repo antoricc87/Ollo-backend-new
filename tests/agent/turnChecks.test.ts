@@ -9,6 +9,7 @@ const facts = (over: Partial<Omit<TurnFacts, "checkin">> & { checkin?: Partial<T
   usedTools: false,
   toolsCalled: [],
   proposed: false,
+  saved: false,
   generated: false,
   ...over,
   checkin: { inThread: false, active: false, historyComplete: false, flagged: false, rejected: null, ...(over.checkin ?? {}) },
@@ -95,5 +96,17 @@ describe("turnEndNudge", () => {
     expect(turnEndNudge(facts({ ...due, checkin: { active: true, inThread: true } }))).toBeNull();
     expect(turnEndNudge(facts({ ...due, proactive: "weekly_review", usedTools: true }))).toBeNull();
     expect(turnEndNudge(facts({ text: due.text, followUpToRaise: null }))).toBeNull();
+  });
+});
+
+describe("claim_without_save", () => {
+  it("nudges a reply that says logged when no tool saved anything", () => {
+    expect(turnEndNudge(facts({ text: "I've logged your snack: a banana and a cappuccino, about 170 kcal.", userMessage: "I had a banana" }))?.stage).toBe("claim_without_save");
+  });
+  it("is silent once a write was saved this turn", () => {
+    expect(turnEndNudge(facts({ text: "Logged: a banana and a cappuccino, about 170 kcal. Say undo if that's wrong.", usedTools: true, toolsCalled: ["log_meal"], saved: true }))).toBeNull();
+  });
+  it("is silent when a proposal was prepared", () => {
+    expect(turnEndNudge(facts({ text: "Your snack is logged once you confirm the card.", usedTools: true, toolsCalled: ["log_meal"], proposed: true }))).toBeNull();
   });
 });

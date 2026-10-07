@@ -364,6 +364,15 @@ class WorkoutServiceImpl {
     });
   }
 
+  /** Undo a completion: the row is a planned session again (its sets keep what was entered, targets intact). */
+  async revertCompleted(patientId: string, id: string) {
+    const r = await prisma.workoutSession.updateMany({
+      where: { id, patientId, deletedAt: null, status: "COMPLETED" },
+      data: { status: "PLANNED", completedAt: null, description: null, rpe: null, notes: null, externalId: null, calories: null, metricsSource: null, avgHr: null, peakHr: null, lowHr: null, zoneSeconds: [] },
+    });
+    return r.count > 0;
+  }
+
   async softDelete(patientId: string, id: string) {
     const r = await prisma.workoutSession.updateMany({ where: { id, patientId, deletedAt: null }, data: { deletedAt: new Date() } });
     return r.count > 0;
