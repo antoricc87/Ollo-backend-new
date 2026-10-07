@@ -41,7 +41,6 @@
     "fhir": "^4.12.0",
     "fhir.js": "^0.0.22",
     "fhirclient": "^2.5.3",
-    "firebase-admin": "^12.7.0",
     "fluent-ffmpeg": "^2.1.3",
     "helmet": "^7.1.0",
     "ioredis": "^5.4.1",

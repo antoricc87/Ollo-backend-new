@@ -168,6 +168,8 @@ model Patient {
   encounters           Encounter[]           @relation("PatientEncounters")
   findings             Finding[]             @relation("PatientFindings")
   nightlyVitals        NightlyVitals[]       @relation("PatientNightlyVitals")
+  devices              Device[]
+  notifications        Notification[]
 }
 
 model DexcomToken {
@@ -1241,6 +1243,54 @@ model AgentProposal {
   @@index([threadId])
 }
 
+/// A phone that can receive pushes. One row per device token; a user may have
+/// several (phone + a second phone, Dev + standalone app). APNs tells us when a
+/// token dies (410) — `disabledAt` records it and the next registration revives it.
+model Device {
+  id         String    @id @default(uuid())
+  userId     String
+  user       Patient   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token      String    @unique // APNs device token, hex
+  platform   String    @default("ios")
+  bundleId   String // apns-topic: com.ollohealth.ollo or com.ollohealth.ollo.dev
+  apnsEnv    String    @default("production") // "production" | "sandbox" — corrected on BadDeviceToken
+  appVersion String?
+  lastSeenAt DateTime  @default(now())
+  disabledAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+/// The notification outbox AND delivery log. Every push is a row first; the
+/// sender sweep delivers queued rows whose `scheduledFor` has passed. Nothing
+/// talks to APNs directly. `kind` is a string on purpose: the catalogue is
+/// still being decided and must not need a migration per change.
+model Notification {
+  id               String    @id @default(uuid())
+  userId           String
+  user             Patient   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind             String
+  dedupeKey        String? // same key sent or queued the same day => duplicate
+  title            String
+  body             String
+  route            String? // in-app path the tap opens, e.g. "ollie?threadId=…"
+  threadId         String?
+  scheduledFor     DateTime  @default(now())
+  status           String    @default("queued") // queued | sent | suppressed | merged | failed
+  suppressedReason String? // quiet_hours | budget | toggle_off | duplicate | no_device | no_transport
+  error            String?
+  sentAt           DateTime?
+  apnsId           String?
+  openedAt         DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, scheduledFor])
+}
+
 /// Per-user switches for the agent's proactive runs. Absent row = defaults.
 model AgentPreference {
   id                  String    @id @default(uuid())
@@ -1326,35 +1376,35 @@ model WorkoutSession {
 }
 
 model WorkoutExercise {
-  id          String         @id @default(uuid())
-  sessionId   String
-  session     WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sortOrder   Int            @default(0)
-  exerciseKey String // canonical key (domain/exercise.catalog.ts) or "custom:<slug>"
-  name        String // display name as logged
-  muscleGroup String?
-  equipment   String?
-  notes       String?
-  loadNote    String? // planned: "same as last time +2.5 kg" / "a weight you could do 12 with"
+  id           String         @id @default(uuid())
+  sessionId    String
+  session      WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sortOrder    Int            @default(0)
+  exerciseKey  String // canonical key (domain/exercise.catalog.ts) or "custom:<slug>"
+  name         String // display name as logged
+  muscleGroup  String?
+  equipment    String?
+  notes        String?
+  loadNote     String? // planned: "same as last time +2.5 kg" / "a weight you could do 12 with"
   alternatives String[] // planned: catalog keys to swap in when kit is busy/missing
-  sets        WorkoutSet[]
+  sets         WorkoutSet[]
 
   @@index([sessionId])
   @@index([exerciseKey])
 }
 
 model WorkoutSet {
-  id          String          @id @default(uuid())
-  exerciseId  String
-  exercise    WorkoutExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
-  sortOrder   Int             @default(0)
-  reps        Int?
-  weightKg    Float?
-  durationSec Int?
-  distanceM   Float?
-  rpe         Float?
-  toFailure   Boolean         @default(false)
-  isWarmup    Boolean         @default(false)
+  id            String          @id @default(uuid())
+  exerciseId    String
+  exercise      WorkoutExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  sortOrder     Int             @default(0)
+  reps          Int?
+  weightKg      Float?
+  durationSec   Int?
+  distanceM     Float?
+  rpe           Float?
+  toFailure     Boolean         @default(false)
+  isWarmup      Boolean         @default(false)
   /// Prescription (planned sessions). reps/weightKg above stay the ACTUALS,
   /// null until the session is completed — so planned vs done needs no join.
   targetReps    Int?

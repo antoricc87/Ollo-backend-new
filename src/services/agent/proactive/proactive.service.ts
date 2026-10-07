@@ -1,7 +1,6 @@
 import moment from "moment-timezone";
 import prisma from "../../../utility/prismaClient";
-import { sendSingleNotification } from "../../../utils/push_notifications";
-import { pushEnabled } from "../../../config/firebaseAdmin";
+import { queueNotification } from "../../notifications/notifications.service";
 import { ProactiveKind, runProactiveCollect } from "../agent.service";
 import { audit } from "../memory/audit";
 import { isoWeekRange, safeTz } from "../memory/dates";
@@ -118,21 +117,24 @@ export async function runProactiveFor(patientId: string, kind: ProactiveKind, op
     return { skipped: "failed" as const, threadId: r.threadId, error: r.error };
   }
 
+  // The push is a row in the notification outbox (docs/notifications-plan.md);
+  // the sweep delivers it. Body wording and the policy gate come with the
+  // catalogue — until then the title alone, so no health detail reaches a lock screen.
   let notified = false;
-  if (opts.notify !== false && pushEnabled) {
-    const fcm = await prisma.userFCMToken.findUnique({ where: { userId: patientId } });
-    if (fcm?.FCMToken && fcm.isActive && !fcm.isDeleted) {
-      try {
-        const res = await sendSingleNotification({
-          token: fcm.FCMToken,
-          title: `Ollie · ${TITLES[kind]}`,
-          body: r.done.text.replace(/[*_#]/g, "").split("\n")[0].slice(0, 140),
-          data: { type: "agent_thread", threadId: r.threadId ?? "", kind },
-        });
-        notified = !!(res && (res as any).success);
-      } catch (e) {
-        console.error("proactive notify failed", e);
-      }
+  if (opts.notify !== false) {
+    try {
+      const row = await queueNotification({
+        userId: patientId,
+        kind,
+        title: "Ollie",
+        body: TITLES[kind],
+        route: r.threadId ? `ollie?threadId=${r.threadId}` : "ollie",
+        threadId: r.threadId ?? null,
+        dedupeKey: `${kind}:${r.threadId ?? "none"}`,
+      });
+      notified = row.status === "queued";
+    } catch (e) {
+      console.error("proactive notify failed", e);
     }
   }
   return { threadId: r.threadId, messageId: r.done.messageId, text: r.done.text, cards: r.done.cards, notified };

@@ -10,7 +10,6 @@ import PatientRoutes from "./services/patient/patient.routes";
 import OpenAiRoutes from "./services/openAI/openai.routes";
 import CaloriesRoutes from "./services/calories_tracker/calories.routes";
 import NutritionRoutes from "./services/nutrition/nutrition.routes";
-import FCMTokenRoutes from "./services/FCM_token/fcm_token.routes";
 import ExercisesRoutes from "./services/exercises_tracker/exercises.routes";
 import WeightRoutes from "./services/weight_tracker/weight.routes";
 import GlucoseRoutes from "./services/glucose_tracker/glucose.routes";
@@ -32,12 +31,9 @@ import EncounterRoutes from "./services/encounter/encounter.routes";
 import SignalsRoutes from "./services/signals/signals.routes";
 import "./services/agent/proactive/agent.worker";
 import { scheduleAgentProactiveTick } from "./services/agent/proactive/agent.scheduler";
-import "./workers/workers/notifications.worker";
-import {
-  scheduleBreakfastJobs,
-  scheduleDinnerJobs,
-  scheduleLunchJobs,
-} from "./workers/jobSchedulers/nutrition.scheduler";
+import NotificationsRoutes from "./services/notifications/notifications.routes";
+import { scheduleNotificationsSweep, startNotificationsWorker } from "./services/notifications/notifications.scheduler";
+import { removeLegacyRepeatables } from "./workers/config/jobQueque";
 require("dotenv").config();
 
 class Server {
@@ -100,7 +96,6 @@ class Server {
     new OpenAiRoutes(this.app).routesConfig();
     new CaloriesRoutes(this.app).routesConfig();
     new NutritionRoutes(this.app).routesConfig();
-    new FCMTokenRoutes(this.app).routesConfig();
     new ExercisesRoutes(this.app).routesConfig();
     new WeightRoutes(this.app).routesConfig();
     new GlucoseRoutes(this.app).routesConfig();
@@ -120,16 +115,17 @@ class Server {
     new MessagingRoutes(this.app).routesConfig();
     new EncounterRoutes(this.app).routesConfig();
     new SignalsRoutes(this.app).routesConfig();
+    new NotificationsRoutes(this.app).routesConfig();
   }
 
   startTheServer(callback?: (server: Server) => void) {
     this.appConfig();
     this.includeRoutes();
     if (process.env.NODE_ENV !== "development") {
-      scheduleBreakfastJobs();
-      scheduleLunchJobs();
-      scheduleDinnerJobs();
+      void removeLegacyRepeatables();
       scheduleAgentProactiveTick();
+      startNotificationsWorker();
+      scheduleNotificationsSweep();
     }
 
     // Railway (and most PaaS) inject PORT; NODE_SERVER_PORT covers local dev.

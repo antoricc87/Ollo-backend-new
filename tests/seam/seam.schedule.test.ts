@@ -8,13 +8,13 @@ const mockPrisma = {
   $transaction: jest.fn(),
 };
 jest.mock("../../src/utility/prismaClient", () => ({ __esModule: true, default: mockPrisma }));
-jest.mock("../../src/utils/push_notifications", () => ({ sendSingleNotification: jest.fn().mockResolvedValue({ success: true }) }));
+jest.mock("../../src/services/notifications/notifications.service", () => ({ queueNotification: jest.fn().mockResolvedValue({ status: "queued" }) }));
 jest.mock("../../src/services/agent/context/snapshot", () => ({ buildPatientSnapshot: jest.fn() }));
 jest.mock("../../src/services/patient/model/patient.model", () => ({ fetchCurrentLabs: jest.fn() }));
 jest.mock("../../src/services/labs_journey/model/labsJourney.model", () => ({ __esModule: true, default: { getRisk: jest.fn() } }));
 jest.mock("../../src/services/plan/model/plan.model", () => ({ __esModule: true, default: { getActivePlan: jest.fn() } }));
 const { SeamScheduleService, splitBookingDate } = require("../../src/services/seam/model/seam.model");
-const { sendSingleNotification } = require("../../src/utils/push_notifications");
+const { queueNotification } = require("../../src/services/notifications/notifications.service");
 
 describe("splitBookingDate", () => {
   it("reads the app's booking date shape", () => {
@@ -55,10 +55,9 @@ describe("setBookingStatus", () => {
     mockPrisma.booking.update.mockResolvedValueOnce({ id: "b1", status: "CONFIRMED" });
     mockPrisma.timeSlot.findFirst.mockResolvedValueOnce({ id: "s1" });
     mockPrisma.timeSlot.update.mockResolvedValueOnce({});
-    mockPrisma.userToken.findFirst.mockResolvedValueOnce({ token: "fcm" });
     await SeamScheduleService.setBookingStatus("cl-1", "b1", "CONFIRMED");
     expect(mockPrisma.booking.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "CONFIRMED", confirmed: true }) }));
     expect(mockPrisma.timeSlot.update).toHaveBeenCalledWith({ where: { id: "s1" }, data: { isBooked: true, isAvailable: false } });
-    expect(sendSingleNotification).toHaveBeenCalledWith(expect.objectContaining({ token: "fcm", title: "Appointment confirmed" }));
+    expect(queueNotification).toHaveBeenCalledWith(expect.objectContaining({ kind: "booking_confirmed", title: "Appointment confirmed" }));
   });
 });

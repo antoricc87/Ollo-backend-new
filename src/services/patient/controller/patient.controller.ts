@@ -5,7 +5,7 @@ import { Request, Response } from "express";
 import { UploadedFile } from "express-fileupload"; // Import UploadedFile if the package has types
 import prisma from "../../../utility/prismaClient";
 import { summarizePatientRecord } from "../../../utility/recordSummary";
-import { sendSingleNotification } from "../../../utils/push_notifications";
+import { queueNotification } from "../../notifications/notifications.service";
 import { parseLabPdf } from "../../../utils/redactPI";
 import {
   extractLabReport,
@@ -339,16 +339,18 @@ export class PatientHandler {
           reviewCount: labDataJSON.labResults.filter((l: any) => l.needsReview).length,
           extraction,
         };
-        if (patientId) {
-          const patientFCM = await prisma.userFCMToken.findUnique({
-            where: { userId: patientId },
-          });
-          const notificationData = {
-            title: `Your Lab Results Are Ready`,
-            body: `Hi there! Your recent lab results are now available in the app. Tap to review them.`,
-            token: patientFCM.FCMToken,
-          };
-          sendSingleNotification(notificationData);
+        // Outbox row (docs/notifications-plan.md). Only when the report was
+        // uploaded for someone else (a sub-account): the phone that uploaded
+        // its own report is already looking at it.
+        if (patientId && patientId !== id) {
+          void queueNotification({
+            userId: patientIdToUse,
+            kind: "lab_ready",
+            title: "Your lab report is ready",
+            body: "Open Ollo to see it.",
+            route: "mylabs",
+            dedupeKey: `lab_ready:${report.id}`,
+          }).catch((e) => console.warn("lab push failed", (e as Error)?.message));
         }
         return res
           .status(200)

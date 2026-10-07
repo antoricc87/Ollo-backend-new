@@ -1,5 +1,6 @@
 import { Worker } from "bullmq";
 import { AGENT_TICK_JOB } from "./agent.scheduler";
+import { AGENT_QUEUE, redisConnection } from "../../../workers/config/jobQueque";
 import { runDue } from "./proactive.service";
 import { runSignalScanDue } from "../../signals/signals.service";
 require("dotenv").config();
@@ -8,14 +9,14 @@ require("dotenv").config();
  * Processes the hourly tick: weekly reviews (Monday 08:00 local), the Sunday
  * planning run, then the signal scan for whoever's local clock is at 09:00.
  * The scan is what replaced the daily check-in on 2026-09-25 — it looks at the
- * data and usually says nothing. Runs alongside the meal-reminder worker on the
- * same queue; each worker ignores the other's jobs.
+ * data and usually says nothing. Owns the `agent-tick` queue: sharing one
+ * queue with another worker lost every tick that worker grabbed (Oct 2026).
  */
 if (process.env.NODE_ENV !== "development") {
   const worker = new Worker(
-    "taskQueue",
+    AGENT_QUEUE,
     async (job) => {
-      if (job.name !== AGENT_TICK_JOB) return; // meal reminders are handled by notifications.worker
+      if (job.name !== AGENT_TICK_JOB) return;
       const weekly = await runDue("weekly_review");
       const planWeek = await runDue("plan_week");
       const signals = await runSignalScanDue();
@@ -26,7 +27,7 @@ if (process.env.NODE_ENV !== "development") {
       return { weekly: weekly.length, planWeek: planWeek.length, signals };
     },
     {
-      connection: { host: process.env.REDIS_HOST, port: 6379, password: process.env.REDIS_PASSWORD },
+      connection: redisConnection,
       concurrency: 1,
     }
   );

@@ -16,8 +16,9 @@ analysis and lab extraction. Mobile app lives in `../healtcare-mobile-app-main`.
   `npx ts-node --transpile-only src/index.ts`. Server on port 5000.
 - Env lives in `.env` (dotenv). Schema changes: edit `prisma/schema.prisma`,
   `npx prisma db push` (MongoDB-style, no migrations dir), restart server.
-- `src/config/firebaseConfig.json` is a PLACEHOLDER (real service account not
-  committed); `firebaseAdmin.ts` fails soft — push notifications disabled.
+- Push = APNs direct (Oct 7 2026, see "Notifications" below). Without
+  `APNS_KEY_ID` / `APNS_TEAM_ID` / `APNS_KEY_P8` in `.env` every queued
+  notification is marked `failed · no_transport`; nothing else breaks.
 - Full `tsc` has ~7 pre-existing errors (lab_extraction `unknown` narrowing,
   @napi-rs/canvas Float16Array) — runtime uses transpile-only, don't block on them.
 
@@ -623,11 +624,17 @@ Slice 4 (done 2026-08-25) — proactive runs:
   `POST /api/agent/proactive/:kind {reason?, notify?}` runs one for the caller
   now (dev + "review my week" button).
 - BullMQ: `proactive/agent.scheduler.ts` adds one repeatable job
-  `agent-proactive-tick` (hourly at :05, same `taskQueue`); `proactive/
-  agent.worker.ts` handles only that job name and calls `runDue("weekly_
-  review")` then `runDue("daily_checkin")` sequentially (concurrency 1). Both
-  gated on `NODE_ENV !== "development"` like the meal reminders and registered
-  in `server.ts`. Redis must be reachable on Railway for this to fire.
+  `agent-proactive-tick` (hourly at :05) on its OWN queue `agent-tick`
+  (`workers/config/jobQueque.ts`); `proactive/agent.worker.ts` calls
+  `runDue("weekly_review")`, `runDue("plan_week")` then `runSignalScanDue()`
+  (concurrency 1). Gated on `NODE_ENV !== "development"` and registered in
+  `server.ts`. Redis must be reachable on Railway for this to fire.
+  **Oct 7 2026:** until then the tick shared `taskQueue` with the legacy
+  meal-reminder worker, and BullMQ gave the job to whichever worker polled
+  first — the meal worker logged "No config found for job name:
+  agent-proactive-tick" and completed it without running anything (every
+  tick in the visible Railway log window). One queue per worker now;
+  `removeLegacyRepeatables()` on boot deletes the old repeatables from Redis.
 - New write tool `update_plan_targets` (full target list + reason → proposal;
   commit = `PlanService.replaceTargets`, which also syncs macro limits).
 - `scripts/agent-proactive-smoke.ts` — live: weekly review (asserts it read
@@ -916,6 +923,56 @@ Reply `{threadId, text, proposal}`:
 - Measured locally (Oct 6–7): a meal-log turn 10–20 s (the analysis, not
   transcription — whisper adds ~1 s), a question ~2 s, undo instant.
 - Tests: `tests/agent/voice.test.ts` (spoken, pendingProposal).
+
+## Notifications (Oct 7 2026) — `src/services/notifications/`, plan `../docs/notifications-plan.md`
+
+Slices N0 + N1 of the plan: the TRANSPORT. Which notifications are sent,
+their wording and the policy gate (quiet hours, budget, merge) are NOT
+decided yet — do not add kinds or copy without the catalogue ruling.
+- **Every push is a row first.** `queueNotification({userId, kind, title,
+  body, route?, threadId?, scheduledFor?, dedupeKey?})` → `Notification`
+  (outbox + delivery log: status queued | sent | suppressed | merged |
+  failed, `suppressedReason` duplicate | no_device | no_transport | …,
+  `sentAt`, `apnsId`, `openedAt`). `kind` is a plain string on purpose.
+  `sendDue()` is the sweep (`notifications.scheduler.ts`: BullMQ queue
+  `notifications`, job `notifications-sweep` every minute, own worker);
+  `sendNow()` queues and delivers at once (events, the test route). Nothing
+  else may import the APNs client.
+- `apns/client.ts`: HTTP/2 + ES256 provider token (Node `http2` +
+  `jsonwebtoken`, no SDK). Env `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_KEY_P8`
+  (PEM with `\n` escapes or base64 of the .p8). `apnsConfigured()` false →
+  rows fail with `no_transport`. Topic = the device's bundle id;
+  `apns-collapse-id` = the row's dedupeKey; `thread-id` = kind.
+- `Device` (`devices.store.ts`): one row per APNs token, many per user;
+  `POST /api/devices {token, bundleId, appVersion}` on every app launch,
+  `DELETE /api/devices/:token` on logout, `GET /api/devices`. `apnsEnv` is
+  GUESSED from the bundle id (`.dev` → sandbox) and corrected by the sender:
+  a build signed with a development profile talks to SANDBOX even in Release
+  (both of the user's cable-installed apps do), so `400 BadDeviceToken` means
+  "other environment" → retried once, remembered on the row; bad on both →
+  disabled; `410 Unregistered` → `disabledAt`; re-registration revives.
+- Payload: `{aps:{alert:{title, body}, sound, "thread-id"}, notificationId,
+  kind, route?, threadId?}`. `route` is an in-app path WITHOUT scheme
+  ("ollie?threadId=…", "mylabs"); the app's `routeFor` whitelists the first
+  segment. **No PHI in title/body** — area at most, never a value, symptom,
+  food or clinician name (APNs is Apple's transport; the body sits on a lock
+  screen). Current callers send the title only: `runProactiveFor` (kind =
+  the proactive kind, dedupe `kind:threadId`), seam booking status
+  (`booking_confirmed|declined`) and clinician chat (`care_message`), lab
+  upload for a sub-account (`lab_ready`). All provisional until the catalogue.
+- Routes: `GET /api/notifications?limit=`, `POST /api/notifications/:id/opened`
+  (the app's tap receipt), `POST /api/notifications/test {title?, body?,
+  route?}` → a push to the CALLER's own devices now (left on in production:
+  it is how the transport is checked on a phone).
+- Deleted: `utils/push_notifications.ts`, `config/firebaseAdmin.ts` +
+  `firebase-admin`, `services/FCM_token/*` (`POST /api/FCM/handleFCMToken`),
+  `workers/jobSchedulers/nutrition.scheduler.ts` + `workers/notifications.worker.ts`
+  (10/15/19 "you haven't logged" FCM pushes for four hard-coded US zones —
+  never sent one in production), the seam pushes that read `prisma.userToken`
+  (the JWT table). `UserFCMToken` table stays until a deliberate drop.
+- Tests `tests/notifications/outbox.test.ts` (dedupe, env flip, 410,
+  no_device). Portal steps for the user: Push Notifications capability on
+  both App IDs, one APNs auth key (.p8) → Railway vars above.
 
 ## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`
 

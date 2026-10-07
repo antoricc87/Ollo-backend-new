@@ -125,7 +125,7 @@ export class SeamPatientService {
 
 import moment from "moment";
 import { AvailabilityReplace } from "../seam.schema";
-import { sendSingleNotification } from "../../../utils/push_notifications";
+import { queueNotification } from "../../notifications/notifications.service";
 
 const DAY_FMT = "MM-DD-YYYY";
 const BOOKING_DATE_RE = /^(\d{2}-\d{2}-\d{4})T(\d{2}:\d{2})/;
@@ -220,16 +220,15 @@ export class SeamScheduleService {
       if (slot) await prisma.timeSlot.update({ where: { id: slot.id }, data: status === "CONFIRMED" ? { isBooked: true, isAvailable: false } : { isBooked: false, isAvailable: true } }).catch(() => undefined);
     }
     try {
-      const token = await prisma.userToken.findFirst({ where: { userId: b.patientId, isActive: true, isDeleted: false }, select: { token: true } });
-      if (token?.token) {
-        const when = s ? moment(`${s.date} ${s.time}`, `${DAY_FMT} HH:mm`).format("ddd D MMM, HH:mm") : "";
-        await sendSingleNotification({
-          token: token.token,
-          title: status === "CONFIRMED" ? "Appointment confirmed" : "Appointment declined",
-          body: `Dr. ${b.clinician.lastName}${when ? ` · ${when}` : ""}${status === "CANCELED" && note ? ` — ${note}` : ""}`,
-          data: { type: "booking", bookingId: b.id, status },
-        });
-      }
+      const when = s ? moment(`${s.date} ${s.time}`, `${DAY_FMT} HH:mm`).format("ddd D MMM, HH:mm") : "";
+      await queueNotification({
+        userId: b.patientId,
+        kind: status === "CONFIRMED" ? "booking_confirmed" : "booking_declined",
+        title: status === "CONFIRMED" ? "Appointment confirmed" : "Appointment declined",
+        body: when ? `Your appointment${status === "CONFIRMED" ? " is set for" : " on"} ${when}.` : "Open Ollo for the details.",
+        route: "bookings",
+        dedupeKey: `booking:${b.id}:${status}`,
+      });
     } catch (e) {
       console.warn("seam: booking push failed", (e as Error)?.message);
     }
@@ -299,10 +298,13 @@ export class SeamMessagingService {
       return msg;
     });
     try {
-      const token = await prisma.userToken.findFirst({ where: { userId: c.patientId, isActive: true, isDeleted: false }, select: { token: true } });
-      if (token?.token) {
-        await sendSingleNotification({ token: token.token, title: `Dr. ${c.clinician.lastName} replied`, body: content.length > 120 ? `${content.slice(0, 117)}…` : content, data: { type: "chat", chatId: c.id } });
-      }
+      await queueNotification({
+        userId: c.patientId,
+        kind: "care_message",
+        title: "New message from your care team",
+        body: "Open Ollo to read it.",
+        route: `messages?chatId=${c.id}`,
+      });
     } catch (e) {
       console.warn("seam: chat push failed", (e as Error)?.message);
     }
