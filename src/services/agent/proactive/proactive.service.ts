@@ -72,7 +72,7 @@ const recentlyActive = async (patientId: string) => {
 
 const weeklyInstruction = (tz: string) => {
   const lastWeek = isoWeekRange(tz, moment().tz(tz).subtract(1, "week"));
-  return `[Weekly plan review for the week ${lastWeek.start} → ${lastWeek.end}. Use get_nutrition_summary, get_activity and get_workouts for that exact range (from=${lastWeek.start}, to=${lastWeek.end}) before judging. Compare against the plan targets. If a target should change, call update_plan_targets with the full new target list.]`;
+  return `[Weekly plan review for the week ${lastWeek.start} → ${lastWeek.end}. First call get_week_review (no arguments): it returns that week against the one before, row by row, and shows the review card. Only if you need detail the card does not carry, call get_nutrition_summary or get_workouts for that exact range (from=${lastWeek.start}, to=${lastWeek.end}). Compare against the plan targets. If a target should change, call update_plan_targets with the full new target list.]`;
 };
 
 const planWeekInstruction = (tz: string) => {

@@ -34,7 +34,8 @@ async function main() {
   assert(wt!.messages[0].role === "SYSTEM" && wt!.messages[0].content.startsWith("[Weekly plan review"));
   const toolsUsed = wt!.messages.filter((m) => m.role === "TOOL").map((m) => m.toolName);
   console.log("  tools:", toolsUsed.join(", "));
-  assert(toolsUsed.includes("get_nutrition_summary") || toolsUsed.includes("get_activity"), "review must read last week's data");
+  assert(toolsUsed.includes("get_week_review"), "review must read last week through get_week_review");
+  assert((w.cards ?? []).some((c: any) => c.type === "week_review"), "review card attached");
   const pref = await prisma.agentPreference.findUnique({ where: { patientId: pid } });
   assert(pref?.lastWeeklyReviewAt, "stamped");
 

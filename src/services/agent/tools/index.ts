@@ -17,6 +17,7 @@ import { getMealPlan, saveMealPlan } from "./mealplan.tools";
 import { editWorkout, editWorkoutPlan, generateWorkout, generateWorkoutPlan, moveWorkout, saveWorkoutPlan, updateTrainingProfile } from "./workoutplan.tools";
 import { askFollowup, assessCheckin, endCheckin, getCheckins, recordCheckin, recordFollowup, resumeCheckin, startCheckin } from "./checkin.tools";
 import { deleteFavorite, saveFavorite } from "./favorite.tools";
+import { getWeekReview } from "./review.tools";
 import { undoLastLog } from "./undo.tools";
 
 /**
@@ -33,13 +34,14 @@ export const registry = new ToolRegistry().register(
   getFavorites,
   getActivity,
   getWorkouts,
+  getWeekReview,
   getVitals,
   getLabs,
   getRecords,
   getCareTeam,
+  getInsurance,
   listSubaccounts,
   startCheckin,
-  getInsurance,
   recordCheckin,
   resumeCheckin,
   endCheckin,

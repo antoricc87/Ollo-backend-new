@@ -83,7 +83,7 @@ const CHECKS: ((f: TurnFacts) => TurnNudge | null)[] = [
     f.proactive === "weekly_review" && !f.usedTools
       ? {
           stage: "weekly_review_without_reads",
-          message: "[System: the snapshot describes the CURRENT week, not the week under review. Call get_nutrition_summary, get_activity and get_workouts for the exact range given in the review instruction, then write the review from those results.]",
+          message: "[System: the snapshot describes the CURRENT week, not the week under review. Call get_week_review (it reads last week and shows the review card), then write the review from its result.]",
         }
       : null,
 

@@ -1776,6 +1776,33 @@ the phone's chat screen can now be rebuilt on them. Plan: `../docs/physician-app
 Local key lives in `.env` (`SEAM_SERVICE_KEY`) and must equal the one in
 `Ollo-Clinician-Service/.env`. Not on Railway yet (physician app is local-only).
 
+## Weekly review card (Oct 2 2026) — `src/services/review/`
+
+The Monday review now carries a card (`week_review`, user mockup) built in
+code. `domain/weekReview.ts` `buildWeekReview()` (pure, 12 tests in
+`review/tests/`) turns one ISO week + the week before into rows — SLEEP,
+RECOV (HRV), TRAIN, KCAL, PROT, WT — each with AVG, VS LAST, one line under
+the name, and its coverage. The rule (user: never mislead when the data the
+person has to provide is missing): an average needs `MIN_DAYS` (5 of 7, user ruling Oct 4 2026) full
+days/nights; below that the row stays with `value: null` (the card prints a
+dash) and says how much was recorded; calories + protein collapse into ONE
+"Food log" row; a "vs last" needs BOTH weeks to have enough; a row is flagged
+(amber tag, max 2) and counts toward the title only with enough data; no
+nights on record at all → no sleep/HRV rows; no weigh-in → no weight row. A
+full food day = two meal types or more (the Health Score's rule); usual-day
+fills count. With food targets set but the food log missing, the title never
+gives a whole-week verdict. Strings are formatted server-side — the app does
+no arithmetic. `model/weekReview.model.ts` `weekReviewFor(patientId, monday,
+tz)` reads NightlyVitals (so this depends on the unpushed Signals commit),
+DailyFood, WorkoutSession, WeightEntry (shown in the unit last used) and the
+plan targets. Agent: `tools/review.tools.ts` `get_week_review {weekOf?}`
+(read, cardRole result; finished weeks only, default last week); the weekly
+instruction, the read-guard nudge and `PROACTIVE.weekly_review` now go
+through it (the card carries the table — the reply does not recite it, and
+never estimates a null row). `scripts/week-review.ts <email> [day] [--json]`
+prints it without the agent. `agent-proactive-smoke.ts` asserts the tool and
+the card (its daily_checkin block is stale since Sep 25 and will fail).
+
 ## Insurance — card, plan summary, estimates (Oct 8 2026) — `src/services/insurance/`
 
 The member's OWN record of their plan; no payer connection, nothing verified
