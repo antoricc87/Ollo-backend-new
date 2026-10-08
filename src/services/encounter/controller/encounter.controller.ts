@@ -40,6 +40,18 @@ class EncounterHandler {
     }
   }
 
+  async summary(request: any, response: Response) {
+    const { id } = request.user;
+    try {
+      const result = await EncounterService.summary(id, request.params.encounterId);
+      if (!result) return response.status(404).json(Util.error({}, "Check-in not found"));
+      return response.status(200).json(Util.success(result, "Check-in summary"));
+    } catch (error) {
+      console.error("Error loading check-in summary", error);
+      return response.status(400).json(Util.error({ error }, "Could not load the check-in"));
+    }
+  }
+
   async list(request: any, response: Response) {
     const { id } = request.user;
     const status = request.query?.status;

@@ -133,6 +133,10 @@ export type CheckinThreadView = {
   disclaimer: string;
 };
 
+/** One word for where a check-in stands — the same reading in the chat header, the list and the summary. */
+const recordState = (row: { status: string; phase: string }, assessed: boolean): CheckinThreadView["state"] =>
+  row.status === "CLOSED" ? "closed" : row.status === "ABANDONED" ? "paused" : checkinModeFor(row).active ? "active" : assessed ? "assessed" : "halted";
+
 const patientContext = async (patientId: string) => {
   const p = await prisma.patient.findUnique({ where: { id: patientId }, select: { firstName: true, dob: true, gender: true, timeZone: true } });
   return {
@@ -219,12 +223,23 @@ class EncounterService {
       take: 50,
       include: { checkIns: { orderBy: { createdAt: "desc" } } },
     });
+    const assessed = new Set(
+      (
+        await prisma.encounterEvent.findMany({
+          where: { encounterId: { in: rows.map((r) => r.id) }, kind: "assessment" },
+          select: { encounterId: true },
+          distinct: ["encounterId"],
+        })
+      ).map((e) => e.encounterId)
+    );
     return rows.map((row) => {
       const state = toState(row);
       const protocol = resolveProtocol(state.complaintKey);
       return {
         id: row.id,
         status: row.status,
+        state: recordState(row, assessed.has(row.id)),
+        threadId: row.threadId,
         complaintTitle: protocol.title,
         complaintText: row.complaintText,
         redFlagLevel: state.redFlags.some((f) => f.level === "EMERGENCY") ? "EMERGENCY" : state.redFlags.length ? "SEEK_CARE_NOW" : null,
@@ -233,6 +248,38 @@ class EncounterService {
         followUp: followUpFor(row.createdAt, row.checkIns as any),
       };
     });
+  }
+
+  /**
+   * One check-in as a record to look back at: the latest assessment exactly as
+   * it was stored (never rebuilt — what they were told is what they see), the
+   * matched criteria, what they answered, and the chat thread it happened in.
+   */
+  async summary(patientId: string, id: string) {
+    const row = await prisma.encounter.findFirst({
+      where: { id, patientId },
+      include: { checkIns: { orderBy: { createdAt: "desc" } } },
+    });
+    if (!row) return null;
+    const state = toState(row);
+    const protocol = resolveProtocol(state.complaintKey);
+    const ctx = await patientContext(patientId);
+    const last = await prisma.encounterEvent.findFirst({ where: { encounterId: id, kind: "assessment" }, orderBy: { seq: "desc" } });
+    const recordedState = recordState(row, !!last);
+    return {
+      id: row.id,
+      about: protocol.title,
+      complaintText: row.complaintText,
+      state: recordedState,
+      threadId: row.threadId,
+      createdAt: row.createdAt,
+      assessedAt: last?.createdAt ?? null,
+      assessment: last ? { checkinId: row.id, about: protocol.title, ...(last.payload as any) } : null,
+      // Inside an assessment the escalation is already part of the card.
+      escalation: last ? null : escalationFor(state.redFlags, ctx.region),
+      recap: recapLines(state, protocol),
+      followUp: recordedState === "active" || recordedState === "paused" ? null : followUpFor(row.createdAt, row.checkIns as any),
+    };
   }
 
   /**
@@ -594,7 +641,7 @@ class EncounterService {
     return {
       id: row.id,
       about: protocol.title,
-      state: row.status === "CLOSED" ? "closed" : row.status === "ABANDONED" ? "paused" : active ? "active" : assessed ? "assessed" : "halted",
+      state: recordState(row, !!assessed),
       progress: { covered: required.filter((s) => answered(s.key) || state.askedKeys.indexOf(s.key) >= 0).length, total: required.length },
       historyComplete: historyComplete(state, protocol),
       question:
