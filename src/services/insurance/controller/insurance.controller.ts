@@ -5,6 +5,7 @@ import Util from "../../../utils/response";
 import InsuranceService, { NotABenefitsSummary } from "../model/insurance.model";
 import { SERVICE_KEYS, type EstimateInput } from "../domain/benefits";
 import { extractCard } from "../extract/extractCard";
+import { renderPdfPages } from "../../lab_extraction/pdfRender";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const optional = (max: number) => z.string().trim().max(max).nullable().transform((s) => (s ? s : null));
@@ -32,7 +33,9 @@ const EstimateBody = z.object({
   deductiblePaidUsd: z.number().min(0).nullable().optional(),
 });
 
-const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
+// What the model reads as is. HEIC is not among them; the app sends JPEG.
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_CARD_PDF_PAGES = 2;
 const MAX_CARD_BYTES = 12 * 1024 * 1024;
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -66,15 +69,23 @@ class InsuranceHandler {
     }
   }
 
-  /** Read a card photo (`front`, optional `back`). Returns the fields for the member to check; saves nothing. */
+  /** Read a card photo or PDF (`front`, optional `back`). Returns the fields for the member to check; saves nothing. */
   async readCard(request: any, response: Response) {
     if (!consented(request)) return noConsent(response);
     const images = [one(request.files?.front), one(request.files?.back)].filter((f): f is UploadedFile => !!f);
     if (!images.length) return response.status(400).json(Util.error({}, "No photo uploaded"));
-    if (images.some((f) => !IMAGE_TYPES.has(f.mimetype) || f.size > MAX_CARD_BYTES))
-      return response.status(400).json(Util.error({}, "The photo must be a JPEG or PNG under 12 MB"));
+    if (images.some((f) => !(IMAGE_TYPES.has(f.mimetype) || f.mimetype === "application/pdf") || f.size > MAX_CARD_BYTES))
+      return response.status(400).json(Util.error({}, "The card must be a JPEG, PNG or PDF under 12 MB"));
     try {
-      const card = await extractCard(images.map((f) => ({ data: f.data, mimeType: f.mimetype })));
+      // A PDF (the digital card an insurer sends) is read as page images: front and back are usually its first two pages.
+      const pages = await Promise.all(
+        images.map(async (f) =>
+          f.mimetype === "application/pdf"
+            ? (await renderPdfPages(Buffer.from(f.data), { scale: 2, maxPages: MAX_CARD_PDF_PAGES })).map((p) => ({ data: p.png, mimeType: "image/png" }))
+            : [{ data: f.data, mimeType: f.mimetype }]
+        )
+      );
+      const card = await extractCard(pages.flat());
       if (!card.isInsuranceCard) return response.status(422).json(Util.error({ code: "not_a_card" }, "That does not look like an insurance card"));
       return response.status(200).json(Util.success(card, "Card read"));
     } catch (error) {

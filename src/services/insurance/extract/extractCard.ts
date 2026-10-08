@@ -43,7 +43,7 @@ export const extractCard = async (images: CardImage[], opts: { model?: string } 
       {
         role: "user",
         content: [
-          { type: "input_text", text: images.length > 1 ? "The front and back of one card." : "One side of the card." },
+          { type: "input_text", text: images.length > 1 ? "Images of one card (front, back, or pages of its PDF)." : "One image of the card." },
           ...images.map((i) => ({ type: "input_image", image_url: `data:${i.mimeType};base64,${i.data.toString("base64")}`, detail: "high" })),
         ] as any,
       },
@@ -52,7 +52,8 @@ export const extractCard = async (images: CardImage[], opts: { model?: string } 
   });
   const parsed = r.output_parsed as CardFields | null;
   if (!parsed) throw new Error("The card could not be read");
-  const clean = (s: string | null) => (s && s.trim() ? s.trim().slice(0, 80) : null);
+  // The model sometimes writes the word instead of leaving the field empty ("null" came back as a string on a non-card).
+  const clean = (s: string | null) => (s && s.trim() && !/^(null|none|n\/?a|unknown|not (printed|shown|available))$/i.test(s.trim()) ? s.trim().slice(0, 80) : null);
   return {
     ...parsed,
     insurer: clean(parsed.insurer),
