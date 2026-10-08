@@ -6,6 +6,7 @@ import { getVitals } from "./vitals.tools";
 import { getLabs } from "./labs.tools";
 import { getRecords } from "./records.tools";
 import { getCareTeam, listSubaccounts } from "./care.tools";
+import { getInsurance } from "./insurance.tools";
 import { forgetMemory, recallMemory, remember } from "./memory.tools";
 import { bookAppointment, logMeal, logVital, messageCareTeam } from "./write.tools";
 import { buildGroceryList, generateMealPlan, generateRecipe } from "./generation.tools";
@@ -38,6 +39,7 @@ export const registry = new ToolRegistry().register(
   getCareTeam,
   listSubaccounts,
   startCheckin,
+  getInsurance,
   recordCheckin,
   resumeCheckin,
   endCheckin,

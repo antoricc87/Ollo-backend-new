@@ -1,5 +1,6 @@
 import { LabJourneyReason, LabJourneyStatus, LabRoute } from "@prisma/client";
 import prisma from "../../../utility/prismaClient";
+import { allowsAnyPcpFor } from "../../insurance/model/insurance.model";
 import { getPatientById } from "../../patient/model/patient.model";
 import { buildPanel } from "../domain/screening.rules";
 import { ScreeningInfo, withCatalog } from "../domain/screening.catalog";
@@ -208,8 +209,7 @@ class LabsJourneyService {
     patientId: string,
     input: { provider: string; planType: string }
   ) {
-    const plan = input.planType.toUpperCase();
-    const allowsAnyPCP = /PPO|EPO|OUT OF POCKET|SELF/.test(plan);
+    const allowsAnyPCP = allowsAnyPcpFor(input.planType);
     const row = await prisma.patientInsurance.upsert({
       where: { patientId },
       update: { insuranceProvider: input.provider, planType: input.planType, allowsAnyPCP },

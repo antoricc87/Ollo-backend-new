@@ -1677,3 +1677,40 @@ Patient-token chat routes are BACK (`services/messaging/messaging.routes.ts`:
 the phone's chat screen can now be rebuilt on them. Plan: `../docs/physician-app-plan.md`. Tests: `tests/seam/`.
 Local key lives in `.env` (`SEAM_SERVICE_KEY`) and must equal the one in
 `Ollo-Clinician-Service/.env`. Not on Railway yet (physician app is local-only).
+
+## Insurance — card, plan summary, estimates (Oct 8 2026) — `src/services/insurance/`
+
+The member's OWN record of their plan; no payer connection, nothing verified
+with an insurer (a real clearinghouse was ruled out for now — an estimate is
+enough). `PatientInsurance` gained the card (`memberId`, `groupNumber`,
+`payerPhone`, rx fields), `benefits` Json (the extracted Summary of Benefits
+and Coverage), `deductiblePaidUsd` (member-entered) and `aiReadConsentAt`.
+- `domain/benefits.ts` (pure, `tests/benefits.test.ts`): the SBC's 30 standard
+  service rows, `normalizeBenefits` (a 0 the model put where nothing is
+  printed → null), `reviewBenefits` (every amount read back from its own
+  quote, every quote looked up in the PDF text; a flagged cell is shown as
+  "check" and never used for dollars), `estimate()` (exact only for a flat
+  copay; otherwise needs the provider's price and ranges over the deductible
+  unless the member entered what they have paid; capped at the out-of-pocket
+  limit), `headline()` and the one `ESTIMATE_CAVEAT`.
+- `extract/extractBenefits.ts` (PDF → layout text via the lab reader, scans via
+  page images; strict schema; own OpenAI client with a 180 s timeout — the meal
+  client's 20 s cut it off) and `extract/extractCard.ts` (photo → fields, never
+  stored). Model `INSURANCE_EXTRACTION_MODEL` (default the lab model).
+- Routes (patient token): `GET|PUT|DELETE /api/insurance`, `POST
+  /api/insurance/card/read` (returns fields, saves nothing), `POST|DELETE
+  /api/insurance/benefits`, `POST /api/insurance/estimate`. Both uploads need
+  `consent=true` (422 `consent_required`). `PUT /api/labs/insurance` writes the
+  same row.
+- Ollie: `get_insurance {service?, network?, priceUsd?}` (read, no card) + one
+  TOOL_RULES bullet. Rules from the legal review (`../docs/pre-launch-checklist.md`
+  §3): say "your plan's summary lists", never "covered" / "you will pay", never
+  a typical price, never compare or recommend plans, never a network status.
+  A tool schema must not use zod `.positive()` — it emits `exclusiveMinimum:
+  true`, OpenAI rejects the whole tool list and every turn fails.
+- Scripts: `scripts/insurance-benefits.ts <pdf> [--json]` (what would be
+  stored), `scripts/agent-insurance-smoke.ts <pdf>` (live, eval fixture; passes
+  Oct 8 on the CMS sample SBC: 30 rows, 0 to check). Only ONE summary has been
+  tried — collect real ones with hand-checked truth files before trusting it.
+- Not built: the practice reading this record (seam + PatientCoverage), a
+  confirm step for the extracted summary, Ollie card, snapshot line.

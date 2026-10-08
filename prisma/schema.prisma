@@ -905,6 +905,22 @@ model PatientInsurance {
   planType          String
   fullPlanName      String?
   allowsAnyPCP      Boolean
+  // The card (Oct 2026). Typed in or read off a photo; the photo itself is never stored.
+  memberId          String?
+  groupNumber       String?
+  payerPhone        String?
+  rxBin             String?
+  rxPcn             String?
+  rxGroup           String?
+  // The plan's Summary of Benefits and Coverage, extracted (insurance/domain/benefits.ts).
+  benefits          Json?
+  benefitsFileName  String?
+  benefitsUpdatedAt DateTime?
+  // What the member says they have paid toward the deductible this plan year (no payer link).
+  deductiblePaidUsd Float?
+  deductiblePaidAt  DateTime?
+  // When the member agreed to their card / summary being read by the AI provider (asked before every upload).
+  aiReadConsentAt   DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 }
