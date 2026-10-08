@@ -16,6 +16,11 @@ class EncounterHandler {
       return response.status(400).json(Util.error({}, "Tell me what's going on in a few words"));
     try {
       const result = await EncounterService.start(id, complaint);
+      // The same complaint is already on record: the screen opens that one instead of a duplicate (Oct 8 2026).
+      if ("existing" in result) {
+        const current = await EncounterService.get(id, result.existing.row.id);
+        return response.status(200).json(Util.success({ ...current, existing: true }, "Check-in already on record"));
+      }
       return response.status(200).json(Util.success(result, "Check-in started"));
     } catch (error) {
       console.error("Error starting check-in", error);

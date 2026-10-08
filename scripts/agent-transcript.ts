@@ -10,9 +10,14 @@
  *   npm run agent:transcript -- --last 3        only the last 3 turns
  *   npm run agent:transcript -- --full          do not shorten tool results / cards
  *   npm run agent:transcript -- --json          raw rows
+ *   npm run agent:transcript -- --railway …     the same, read from the PRODUCTION backend over its API
+ *                                               (your account there has the same id and JWT secret; audit rows unavailable)
  */
 import "dotenv/config";
+import jwt from "jsonwebtoken";
 import prisma from "../src/utility/prismaClient";
+
+const RAILWAY = process.env.RAILWAY_API_BASE ?? "https://ollo-backend-new-production.up.railway.app/api";
 
 const args = process.argv.slice(2);
 const flag = (k: string) => args.includes(k);
@@ -21,6 +26,7 @@ const arg = (k: string) => {
   return v && !v.startsWith("--") ? v : undefined;
 };
 const FULL = flag("--full");
+const REMOTE = flag("--railway");
 const RESULT_CAP = 900;
 const CARD_CAP = 500;
 
@@ -39,6 +45,41 @@ function pretty(content: string): string {
   } catch {
     return content;
   }
+}
+
+/** A short-lived token for the local account's id — Railway accepts it because the secret and the id are shared. */
+const remoteToken = async (email: string) => {
+  const p = await prisma.patient.findUnique({ where: { email }, select: { id: true } });
+  if (!p) throw new Error(`no local patient ${email} (the token is signed for the local account's id)`);
+  return jwt.sign({ user: { id: p.id } }, process.env.JWT_SECRET as string, { expiresIn: "10m" });
+};
+
+const remote = async (path: string, email: string) => {
+  const r = await fetch(`${RAILWAY}${path}`, { headers: { "access-token": await remoteToken(email) } });
+  if (!r.ok) throw new Error(`Railway ${path}: ${r.status}`);
+  const body: any = await r.json();
+  return body.result ?? body;
+};
+
+async function listRemote(email: string, limit: number) {
+  const data = await remote(`/agent/threads?limit=${limit}`, email);
+  const threads: any[] = data.threads ?? data;
+  for (const t of threads) console.log(`${t.id.slice(0, 8)}  ${t.lastMessageAt ? time(new Date(t.lastMessageAt)) : "—".padEnd(19)}  ${String(t.source).padEnd(9)}  ${email}  ${t.title ?? ""}`);
+}
+
+async function loadRemote(idPrefix: string | undefined, email: string) {
+  let id = idPrefix;
+  if (!id || id.length < 36) {
+    const data = await remote(`/agent/threads?limit=50`, email);
+    const threads: any[] = data.threads ?? data;
+    const hit = id ? threads.filter((t) => t.id.startsWith(id!)) : threads.filter((t) => t.lastMessageAt).slice(0, 1);
+    if (hit.length !== 1) throw new Error(hit.length ? `"${id}" matches more than one thread` : `no thread ${id ?? ""}`);
+    id = hit[0].id;
+  }
+  const t: any = await remote(`/agent/threads/${id}?tools=true`, email);
+  const thread = t.thread ?? t;
+  const rows = (thread.messages ?? t.messages ?? []).map((r: any) => ({ ...r, createdAt: new Date(r.createdAt) }));
+  return { thread, rows, audits: [] as any[], email };
 }
 
 async function list(email?: string, limit = 15) {
@@ -69,21 +110,28 @@ async function resolveThread(idPrefix?: string, email?: string) {
   return latest;
 }
 
-async function main() {
-  const email = arg("--email");
-  if (flag("--list")) return list(email, Number(arg("--list")) || 15);
-
-  const idPrefix = args.find((a, i) => !a.startsWith("--") && !["--email", "--last", "--list"].includes(args[i - 1]));
+async function loadLocal(idPrefix: string | undefined, email: string | undefined) {
   const thread = await resolveThread(idPrefix, email);
   const [patient, rows, audits] = await Promise.all([
     prisma.patient.findUnique({ where: { id: thread.patientId }, select: { email: true } }),
     prisma.agentMessage.findMany({ where: { threadId: thread.id }, orderBy: { seq: "asc" } }),
     prisma.agentAuditLog.findMany({ where: { threadId: thread.id }, orderBy: { createdAt: "asc" } }),
   ]);
+  return { thread, rows, audits, email: patient?.email ?? "?" };
+}
+
+async function main() {
+  const email = arg("--email") ?? (REMOTE ? "antoricciardelli@gmail.com" : undefined);
+  const idPrefix = args.find((a, i) => !a.startsWith("--") && !["--email", "--last", "--list"].includes(args[i - 1]));
+  if (flag("--list")) return REMOTE ? listRemote(email!, Number(arg("--list")) || 15) : list(email, Number(arg("--list")) || 15);
+
+  const loaded = REMOTE ? await loadRemote(idPrefix, email!) : await loadLocal(idPrefix, email);
+  const { thread, rows, audits } = loaded;
+  const patient = { email: loaded.email };
   if (flag("--json")) return console.log(JSON.stringify({ thread, rows, audits }, null, 2));
 
   // A turn = one USER row and everything up to the next one.
-  const turns: (typeof rows)[] = [];
+  const turns: any[][] = [];
   for (const r of rows) {
     if (r.role === "USER" || turns.length === 0) turns.push([]);
     turns[turns.length - 1].push(r);

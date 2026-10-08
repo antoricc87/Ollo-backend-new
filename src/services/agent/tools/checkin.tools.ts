@@ -87,10 +87,36 @@ export const startCheckin = defineTool({
     "Open a check-in when the user describes a symptom they are having (pain, breathlessness, a rash, dizziness, exhaustion, low mood…). Pass their own words as `complaint`. This CREATES the check-in and returns the questions to cover — you then take the history yourself, in conversation, one question per message. Do not call it for a condition already on their record, or for food, training or sleep coaching.",
   schema: z.object({
     complaint: z.string().min(2).max(1000).describe("The user's own description of the symptom, in their words. Do not summarise or rename it."),
+    newEpisode: z.boolean().optional().describe("Only when they say this is a DIFFERENT problem from a check-in already on record for the same complaint (a new headache, not the one being followed)."),
   }),
   risk: "read",
   async run(ctx, input) {
-    const started = await encounterService.start(ctx.patientId, input.complaint.trim(), { threadId: ctx.threadId });
+    const started = await encounterService.start(ctx.patientId, input.complaint.trim(), { threadId: ctx.threadId, newEpisode: input.newEpisode });
+    if ("existing" in started) {
+      const e = started.existing;
+      const here = e.row.threadId === ctx.threadId;
+      const what =
+        e.recordedState === "assessed"
+          ? "It has been assessed; nothing is re-asked. If they are saying how it is NOW (better, the same, worse), call record_followup. Then answer what they actually asked — a training request goes to generate_workout / generate_workout_plan, which apply the rule for a symptom on record."
+          : e.recordedState === "paused"
+          ? `It was ended before it finished${here ? " — offer ONCE to pick it back up (resume_checkin) if they want to know what it could be" : " in another conversation"}. Then answer what they actually asked; a training request goes to the design tools.`
+          : e.recordedState === "active"
+          ? here
+            ? "It is running in this conversation — carry on with it: record_checkin for anything they have just told you, then ask askNext."
+            : "An interview about it is running in another conversation; answer what they asked here without re-asking its questions."
+          : "Answer what they actually asked.";
+      return {
+        result: {
+          existing: true,
+          checkinId: e.row.id,
+          about: e.protocol.title,
+          state: e.recordedState,
+          startedAt: e.row.createdAt,
+          inTheirWords: e.row.complaintText,
+          note: `A check-in about their ${e.protocol.title.toLowerCase()} is already on record (${e.recordedState}), so none was opened. ${what} Pass newEpisode only if they say this is a different problem.`,
+        },
+      };
+    }
     const active = await encounterService.stateFor(ctx.patientId, started.id);
     const protocol = resolveProtocol(started.complaintKey);
     const plan = active ? protocolPlan(protocol, active.state) : null;
@@ -249,6 +275,26 @@ export const assessCheckin = defineTool({
       }
       throw e;
     }
+  },
+});
+
+export const endCheckin = defineTool({
+  name: "end_checkin",
+  description:
+    "End the check-in running in this conversation because the user does not want it: 'I didn't mean to start a check-in', 'skip the questions, just give me the session', 'stop'. Same as the app's End button — answers are kept and it can be picked back up with resume_checkin. Then answer what they actually asked in the SAME turn. Never call it because YOU are done asking — that is assess_checkin.",
+  schema: z.object({}),
+  risk: "read",
+  async run(ctx) {
+    const active = await encounterService.activeForThread(ctx.patientId, ctx.threadId);
+    if (!active) return { result: NO_CHECKIN };
+    await encounterService.pause(ctx.patientId, active.row.id);
+    return {
+      result: {
+        ended: true,
+        about: active.protocol.title,
+        note: "Ended; nothing else to say about it (no 'paused', 'saved', 'recorded'). Now answer what they asked. A training request goes to the design tools, which keep it general and lighter because the screening was not finished — say that once, in one line, and never that a check-in or a clinician has to come first.",
+      },
+    };
   },
 });
 

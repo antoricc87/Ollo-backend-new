@@ -80,6 +80,7 @@ const cautionReasons = (state: EncounterState, protocol: Protocol): string[] => 
 
 export const trainingGateFor = (
   input: { id: string; status: string; state: EncounterState; protocol: Protocol },
+  /** The latest assessment of THIS check-in, or null. An ended check-in may carry one too (ended after assessing). */
   lastAssessment: { possibilities?: { condition?: string | null }[] } | null = null
 ): TrainingGate => {
   const { state, protocol } = input;
@@ -93,7 +94,11 @@ export const trainingGateFor = (
     return { ...base, level: "hold", pending: false, reasons: state.redFlags.map((f) => f.criterion) };
   if (EXERTION_PROTOCOLS.indexOf(protocol.key) >= 0)
     return { ...base, level: "hold", pending: false, reasons: [`${protocol.title.toLowerCase()} and exertion is a question for a clinician`] };
-  // Paused (End tapped) or mid-interview: nothing has been screened to the end yet.
+  // Ended before it finished (End tapped, or "I don't want a check-in"): they declined the screening, so go
+  // carefully — a lighter general session, not a hold. Ruling Oct 8 2026, after an accidental second check-in
+  // the user ended by hand still blocked every session for a day.
+  if (input.status === "ABANDONED") return { ...base, level: "general", pending: false, reasons: ["the check-in was ended before it finished"] };
+  // Mid-interview: the next turn or two finish it, and the training question is answered right after.
   if (!lastAssessment || input.status !== "OPEN" || state.phase !== "ROUTE")
     return { ...base, level: "hold", pending: true, reasons: ["the check-in is not finished"] };
   const reasons = cautionReasons(state, protocol);

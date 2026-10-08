@@ -379,6 +379,36 @@ Ruling (user): the answers decide, in code.
   silently after 14 days or when the check-in is closed; the week card shows
   no caution line (needs a mockup).
 
+### A symptom on record is not a new symptom (Oct 8 2026)
+
+Device, Oct 7: the assessed back-pain check-in was being followed (day 3
+recorded two hours earlier in the same thread); "I still have pain in my lower
+back, so the session should be…" opened a SECOND back-pain check-in, "I didn't
+mean to start a check-in" changed nothing (the model had no way to end one),
+and after the user ended it by hand the next session was still held, because
+a paused check-in counted as unfinished. Three fixes, his go-ahead:
+- `EncounterService.existingFor(patientId, complaintKey)`: an OPEN/ABANDONED
+  check-in with the same complaint in the last `GATE_DAYS` → `start()` returns
+  `{existing}` instead of creating one (`newEpisode: true` overrides; never
+  for `general_unwell`). `start_checkin` hands the model which one it is and
+  what to do (assessed → record_followup if they say how it is now, then the
+  actual request; paused → offer resume once; active elsewhere → answer here).
+  The stepped screen's POST `/api/encounters` returns the existing one with
+  `existing: true`.
+- `end_checkin` tool = the app's End button from the chat ("I don't want a
+  check-in"): pauses, answers kept, then the actual request in the SAME turn.
+- Gate: ABANDONED → **general** ("the check-in was ended before it finished"),
+  not hold — declining the screening earns a lighter session, not a block.
+  Red flags and exertion protocols still hold. Like an unfinished one, an
+  ended check-in shapes training only in its own thread.
+- Prompt: a symptom already named in "Training with a check-in on record" /
+  "Check-ins being followed" is not re-interviewed; the paused section allows
+  a training request through the tools.
+- Evals `symptom_on_record_no_second_checkin`, `checkin_declined_still_helped`.
+- Seen in the same thread, not fixed: a one-tap Log it confirmed while the
+  reply was still being written, so the reply still said "please confirm";
+  a start_checkin turn cost 69k input tokens.
+
 ### One question on the table, and words that match the tools (Oct 4 2026)
 
 Same device conversation: six turns for what was said in two — onset asked

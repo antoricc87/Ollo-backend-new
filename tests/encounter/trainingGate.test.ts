@@ -61,11 +61,18 @@ describe("trainingGateFor", () => {
     }
   });
 
-  it("hold (pending): the interview is still running, or was paused with End", () => {
+  it("hold (pending): the interview is still running", () => {
     expect(trainingGateFor(enc("back_pain", mildBack, { phase: "HISTORY" }), null)).toMatchObject({ level: "hold", pending: true });
-    expect(trainingGateFor(enc("back_pain", mildBack, { phase: "HISTORY" }, "ABANDONED"), null)).toMatchObject({ level: "hold", pending: true });
     // A new answer after an assessment reopens the interview — and the hold.
     expect(trainingGateFor(enc("back_pain", mildBack, { phase: "HISTORY" }), assessment)).toMatchObject({ level: "hold", pending: true });
+  });
+
+  /* Ruling Oct 8 2026: an accidental second check-in, ended by hand, still blocked every session for a day. */
+  it("ended before it finished: go carefully, not a hold — unless a warning sign matched", () => {
+    expect(trainingGateFor(enc("back_pain", mildBack, { phase: "HISTORY" }, "ABANDONED"), null)).toMatchObject({ level: "general", pending: false, reasons: ["the check-in was ended before it finished"] });
+    const flag = { ruleId: "back.weakness", level: "SEEK_CARE_NOW" as const, criterion: "Back pain with new leg weakness", source: { org: "NICE", year: 2025 } };
+    expect(trainingGateFor(enc("back_pain", mildBack, { phase: "HISTORY", redFlags: [flag] }, "ABANDONED"), null).level).toBe("hold");
+    expect(trainingGateFor(enc("chest_discomfort", {}, { phase: "HISTORY" }, "ABANDONED"), null).level).toBe("hold");
   });
 
   it("a crisis halt (ROUTE with no assessment) never opens training", () => {

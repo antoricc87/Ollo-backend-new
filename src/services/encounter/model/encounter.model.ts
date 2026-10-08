@@ -147,10 +147,33 @@ const patientContext = async (patientId: string) => {
 
 class EncounterService {
   /** Opens a check-in from the patient's own words. The text prescan runs before any question. */
-  async start(patientId: string, complaintText: string, opts: { threadId?: string | null } = {}) {
+  /**
+   * The check-in already on record for this complaint, if one is: open,
+   * assessed or ended in the last GATE_DAYS. Seen Oct 7 2026: "I still have
+   * pain in my lower back, so make the session…" opened a SECOND back-pain
+   * check-in two hours after the day-3 follow-up of the first, and the new
+   * one then held every training request. A symptom on record is followed
+   * up, not re-interviewed.
+   */
+  async existingFor(patientId: string, complaintKey: string) {
+    const since = new Date(Date.now() - GATE_DAYS * 86400000);
+    const row = await prisma.encounter.findFirst({
+      where: { patientId, complaintKey, status: { in: ["OPEN", "ABANDONED"] }, updatedAt: { gte: since } },
+      orderBy: { updatedAt: "desc" },
+    });
+    if (!row) return null;
+    const assessed = await prisma.encounterEvent.findFirst({ where: { encounterId: row.id, kind: "assessment" }, select: { id: true } });
+    const recordedState: CheckinThreadView["state"] = row.status === "ABANDONED" ? "paused" : checkinModeFor(row).active ? "active" : assessed ? "assessed" : "halted";
+    return { row, state: toState(row), protocol: resolveProtocol(row.complaintKey), recordedState };
+  }
+
+  async start(patientId: string, complaintText: string, opts: { threadId?: string | null; newEpisode?: boolean } = {}) {
     const ctx = await patientContext(patientId);
     const { complaintKey, askingForDiagnosis } = await classify(getLLM(), complaintText);
     const protocol = resolveProtocol(complaintKey);
+    // general_unwell is a catch-all, not a complaint — two of those may well be different things.
+    const existing = !opts.newEpisode && protocol.key !== "general_unwell" ? await this.existingFor(patientId, protocol.key) : null;
+    if (existing) return { existing };
     const state = open(emptyState(protocol.key, complaintText.trim(), protocol.version), protocol);
 
     const row = await prisma.encounter.create({
@@ -421,8 +444,8 @@ class EncounterService {
           const state = toState(row);
           const last = assessments.find((a) => a.encounterId === row.id);
           const gate = trainingGateFor({ id: row.id, status: row.status, state, protocol: resolveProtocol(state.complaintKey) }, (last?.payload as any) ?? null);
-          // An unfinished interview established nothing: it holds training only in the conversation it is running in.
-          return gate.pending && row.threadId !== threadId ? null : gate;
+          // An unfinished or ended interview established nothing: it shapes training only in the conversation it ran in.
+          return (gate.pending || row.status === "ABANDONED") && row.threadId !== threadId ? null : gate;
         })
         .filter((g): g is TrainingGate => !!g)
     );

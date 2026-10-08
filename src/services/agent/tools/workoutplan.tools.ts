@@ -196,7 +196,7 @@ const heldResult = (gate: TrainingGate) => ({
     about: gate.about,
     reasons: gate.reasons,
     note: gate.pending
-      ? `No session is designed while the check-in about their ${gate.about.toLowerCase()} is unfinished. Say so in one line and carry on with it (or offer once to pick it back up if it was paused) — the training question is answered straight after. Do NOT say a clinician has to clear them first: finishing the check-in is the next step.`
+      ? `No session is designed while the check-in about their ${gate.about.toLowerCase()} is still being taken in this conversation. Say so in one line and carry on with it — the training question is answered straight after. If they say they don't want the check-in, call end_checkin and then call this tool again. Do NOT say a clinician has to clear them first.`
       : `No session is designed: ${gate.reasons.join("; ")}. Say that plainly in one or two lines, without softening, and offer what you can do — the summary for a clinician, a message to the care team, a booking. Do not describe exercises in your own words instead.`,
   },
 });
