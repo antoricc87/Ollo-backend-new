@@ -138,5 +138,6 @@ export const labsReport: Detector = {
   weight: 1.5,
   resolveAfterDays: 0,
   cooldownDays: 0,
+  against: "rule",
   run: () => null,
 };

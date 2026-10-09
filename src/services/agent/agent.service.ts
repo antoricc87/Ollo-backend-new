@@ -178,6 +178,7 @@ export async function* runProactive(input: ProactiveInput): AsyncGenerator<Agent
   if (!thread) thread = await threadStore.create(patientId, { source: "PROACTIVE", title: input.title });
   const threadId = thread.id;
   yield { type: "thread", threadId };
+  await threadStore.markUnseen(threadId);
   await threadStore.append(threadId, [{ role: "SYSTEM", content: input.instruction, meta: { proactive: input.kind } }]);
   yield* runLoop({ patientId, threadId, client: null, safetyContext: `(scheduled ${input.kind.replace("_", " ")} — no user message)`, proactive: input.kind, signal: input.signal });
 }

@@ -3,6 +3,7 @@ import { decide, ESCALATION_STEP, WEEKLY_BUDGET } from "../domain/budget";
 import { loggingStopped } from "../domain/detectors/habits";
 import { applyDay } from "../domain/episodes";
 import { Candidate, SignalInput } from "../domain/types";
+import { foodDays } from "../model/foodDays";
 import { replay } from "../replay/replay";
 import { synthetic } from "../replay/synthetic";
 
@@ -75,7 +76,8 @@ describe("severity stays on a shared scale", () => {
   /** The second bug the smoke test found: an unbounded score let a month of
    *  silence outrank every real clinical signal on the shared scale forever. */
   it("caps a long logging gap instead of letting it grow without limit", () => {
-    const short = loggingStopped.run(input(dayRange(4, false)));
+    // dayRange ends on today, which never counts — one more row than the gap.
+    const short = loggingStopped.run(input(dayRange(5, false)));
     const endless = loggingStopped.run(input(dayRange(200, false)));
     expect(short?.severity).toBeCloseTo(4 / 3, 2);
     expect(endless?.severity).toBe(4);
@@ -83,6 +85,53 @@ describe("severity stays on a shared scale", () => {
 
   it("says nothing before the gap reaches its bar", () => {
     expect(loggingStopped.run(input(dayRange(2, false)))).toBeNull();
+  });
+
+  /** The scan runs at 09:00: today is empty for nearly everyone, and two
+   *  missed days plus this morning read as "3 days". */
+  it("does not count the unfinished today as a missed day", () => {
+    expect(loggingStopped.run(input(dayRange(3, false)))).toBeNull();
+    expect(loggingStopped.run(input(dayRange(4, false)))?.evidence).toMatchObject({ daysWithNoMealLogged: 3 });
+  });
+
+  it("stays quiet once something is logged today", () => {
+    const days = dayRange(6, false);
+    days[days.length - 1] = { ...days[days.length - 1], logged: true };
+    expect(loggingStopped.run(input(days))).toBeNull();
+  });
+});
+
+describe("food days", () => {
+  const entry = { calories: 400, proteins: 30 };
+
+  /** Oct 8 2026: the app stores "YYYY-MM-DDT00:00:00.000+00:00"; matched as a
+   *  whole string no app-logged day was ever found, and the note said 50 days. */
+  it("finds a day whatever shape its date was stored in", () => {
+    const days = foodDays(
+      [
+        { date: "2026-10-05", foodEntries: [entry] },
+        { date: "2026-10-07T00:00:00.000+00:00", foodEntries: [entry, entry] },
+      ],
+      "2026-10-04",
+      "2026-10-08"
+    );
+    expect(days.map((d) => d.date)).toEqual(["2026-10-04", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"]);
+    expect(days.map((d) => d.logged)).toEqual([false, true, false, true, false]);
+    expect(days[3]).toMatchObject({ calories: 800, proteinG: 60 });
+  });
+
+  it("reads a row with no entries as nothing logged, and sums two rows for one day", () => {
+    const days = foodDays(
+      [
+        { date: "2026-10-06T00:00:00.000+00:00", foodEntries: [] },
+        { date: "2026-10-07", foodEntries: [entry] },
+        { date: "2026-10-07T00:00:00.000+00:00", foodEntries: [entry] },
+      ],
+      "2026-10-06",
+      "2026-10-07"
+    );
+    expect(days[0].logged).toBe(false);
+    expect(days[1].calories).toBe(800);
   });
 });
 

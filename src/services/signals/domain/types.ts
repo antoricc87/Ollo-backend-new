@@ -89,6 +89,8 @@ export type SignalInput = {
   openFindings: { detectorKey: string; firstDetectedAt: string; peakSeverity: number }[];
 };
 
+export type Yardstick = "usual" | "plan" | "rule";
+
 export type Detector = {
   key: string;
   /** Bump when the RULE changes, so old findings stay interpretable. */
@@ -101,6 +103,11 @@ export type Detector = {
   resolveAfterDays: number;
   /** Days after a notification before this key may interrupt again. */
   cooldownDays: number;
+  /** What `baseline` IS, so the note never dresses one up as another: this
+   *  person's own usual, their plan's target, or a fixed rule that is the same
+   *  for everyone (a rule read as a habit produced "you typically go about 3
+   *  days between logs"). */
+  against: Yardstick;
   run: (input: SignalInput) => Candidate | null;
 };
 

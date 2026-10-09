@@ -24,6 +24,7 @@ export const trainingStopped: Detector = {
   weight: 1,
   resolveAfterDays: 1,
   cooldownDays: 14,
+  against: "plan",
   run: ({ workouts, plan, today }: SignalInput): Candidate | null => {
     const target = plan?.sessionsPerWeek ?? 0;
     if (target < 2) return null;
@@ -56,6 +57,7 @@ export const trainingDrifting: Detector = {
   weight: 0.9,
   resolveAfterDays: 7,
   cooldownDays: 21,
+  against: "plan",
   run: ({ workouts, plan, today }: SignalInput): Candidate | null => {
     const target = plan?.sessionsPerWeek ?? 0;
     if (target < 2) return null;
@@ -90,6 +92,7 @@ export const trainingConsistent: Detector = {
   weight: 0.7,
   resolveAfterDays: 7,
   cooldownDays: 42,
+  against: "plan",
   run: ({ workouts, plan, today }: SignalInput): Candidate | null => {
     const target = plan?.sessionsPerWeek ?? 0;
     if (target < 2) return null;
@@ -112,7 +115,7 @@ export const trainingConsistent: Detector = {
 };
 
 /**
- * LOGGING STOPPED — three days with nothing logged. This one is about the APP,
+ * LOGGING STOPPED — three FINISHED days with nothing logged. This one is about the APP,
  * not the body: it says the data went dark, so the tone must stay away from
  * anything that sounds like a health claim, and every other nutrition detector
  * has to stand down while it is true (you cannot be short of protein on days
@@ -122,25 +125,30 @@ const GAP_DAYS = 3;
 
 export const loggingStopped: Detector = {
   key: "logging.stopped",
-  version: 1,
+  version: 2,
   weight: 0.8,
   resolveAfterDays: 1,
   cooldownDays: 7,
+  against: "rule",
   run: ({ days }: SignalInput): Candidate | null => {
+    // Today is still being lived — the scan runs in the morning, before anyone
+    // has eaten — so an empty today is not a missed day. Only finished days count.
+    const finished = days.slice(0, -1);
+    if (days[days.length - 1]?.logged) return null;
     let streak = 0;
-    for (let i = days.length - 1; i >= 0 && !days[i].logged; i--) streak += 1;
+    for (let i = finished.length - 1; i >= 0 && !finished[i].logged; i--) streak += 1;
     if (streak < GAP_DAYS) return null;
     return {
       detectorKey: "logging.stopped",
-      detectorVersion: 1,
+      detectorVersion: 2,
       direction: "CONCERN",
       // Capped like `training.stopped`: a month of silence and a year of it are
       // the same message, and an unbounded score would outrank every real
       // clinical signal on the shared scale forever.
       severity: round(Math.min(streak / GAP_DAYS, 4)),
-      evidence: { consecutiveDaysUnlogged: streak, lastLogged: days.filter((d) => d.logged).pop()?.date ?? null },
+      evidence: { daysWithNoMealLogged: streak, lastMealLoggedOn: days.filter((d) => d.logged).pop()?.date ?? null },
       baseline: { gapDays: GAP_DAYS },
-      label: `nothing logged for ${streak} days`,
+      label: `no meals logged for ${streak} days`,
     };
   },
 };
@@ -161,6 +169,7 @@ export const proteinShort: Detector = {
   weight: 0.9,
   resolveAfterDays: 4,
   cooldownDays: 14,
+  against: "plan",
   run: ({ days, plan }: SignalInput): Candidate | null => {
     const target = plan?.proteinG ?? null;
     if (!target) return null;
@@ -193,6 +202,7 @@ export const weightOffTrack: Detector = {
   weight: 1,
   resolveAfterDays: 7,
   cooldownDays: 21,
+  against: "plan",
   run: ({ weights, plan, today }: SignalInput): Candidate | null => {
     const target = plan?.weightRateKgPerWeek ?? null;
     if (target == null || target === 0) return null;

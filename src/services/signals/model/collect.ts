@@ -2,6 +2,7 @@ import moment from "moment-timezone";
 import prisma from "../../../utility/prismaClient";
 import { NightRow } from "../domain/baseline";
 import { DayRow, PlanTargets, SignalInput, WorkoutRow } from "../domain/types";
+import { foodDays } from "./foodDays";
 
 /**
  * One read of everything the detectors need, so nine detectors do not make
@@ -37,10 +38,13 @@ export const planTargetsFor = async (patientId: string): Promise<PlanTargets | n
 export const collect = async (patientId: string, today: string, timeZone: string, lookbackDays = LOOKBACK_DAYS): Promise<SignalInput> => {
   const from = moment.tz(today, timeZone).subtract(lookbackDays, "days").format("YYYY-MM-DD");
   const fromDate = moment.tz(from, timeZone).startOf("day").toDate();
+  // DailyFood.date is a longer string that STARTS with the local day, so the
+  // upper bound is the day after: "…-09T00:00…" sorts above a bare "…-09".
+  const dayAfter = moment.tz(today, timeZone).add(1, "day").format("YYYY-MM-DD");
 
   const [vitals, dailyFoods, sessions, weightTracker, plan, open] = await Promise.all([
     prisma.nightlyVitals.findMany({ where: { patientId, date: { gte: from, lte: today } }, orderBy: { date: "asc" } }),
-    prisma.dailyFood.findMany({ where: { userId: patientId, date: { gte: from, lte: today } }, include: { foodEntries: { select: { calories: true, proteins: true } } } }),
+    prisma.dailyFood.findMany({ where: { userId: patientId, date: { gte: from, lt: dayAfter } }, include: { foodEntries: { select: { calories: true, proteins: true } } } }),
     prisma.workoutSession.findMany({ where: { patientId, startedAt: { gte: fromDate } }, select: { startedAt: true, plannedFor: true, status: true, durationSec: true } }),
     prisma.weightTracker.findUnique({ where: { userId: patientId }, include: { weightEntries: true } }).catch(() => null),
     planTargetsFor(patientId),
@@ -57,24 +61,7 @@ export const collect = async (patientId: string, today: string, timeZone: string
     wristTempC: v.wristTempC,
   }));
 
-  /**
-   * A day with no DailyFood row and a day with an empty one both mean "nothing
-   * logged" — so the series is built from the calendar, not from the rows, or
-   * a gap would simply be absent and `logging.stopped` could never see it.
-   */
-  const byDate = new Map(dailyFoods.map((d) => [d.date, d]));
-  const days: DayRow[] = [];
-  for (let cursor = moment.tz(from, timeZone); cursor.format("YYYY-MM-DD") <= today; cursor.add(1, "day")) {
-    const date = cursor.format("YYYY-MM-DD");
-    const row = byDate.get(date);
-    const entries = row?.foodEntries ?? [];
-    days.push({
-      date,
-      logged: entries.length > 0,
-      calories: entries.length ? entries.reduce((acc, e) => acc + (e.calories ?? 0), 0) : null,
-      proteinG: entries.length ? entries.reduce((acc, e) => acc + (e.proteins ?? 0), 0) : null,
-    });
-  }
+  const days: DayRow[] = foodDays(dailyFoods, from, today);
 
   const workouts: WorkoutRow[] = sessions.map((s) => ({
     // A planned session keeps its slot in startedAt but owns its local day in

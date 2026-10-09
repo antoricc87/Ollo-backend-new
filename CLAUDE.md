@@ -1004,6 +1004,33 @@ decided yet — do not add kinds or copy without the catalogue ruling.
   no_device). Portal steps for the user: Push Notifications capability on
   both App IDs, one APNs auth key (.p8) → Railway vars above.
 
+## Signals: the logging note and note read-state (Oct 9 2026)
+
+Device: "you haven't logged any meals for 50 days … you typically go about 3
+days between logs", one day after a logged meal; and the note stayed on the
+dashboard after it was opened.
+- **Food-log days are matched on the first ten characters of `DailyFood.date`**
+  (`signals/model/foodDays.ts`, pure, tested). `collect.ts` matched the whole
+  string, so every app-logged day ("YYYY-MM-DDT00:00:00.000+00:00") read as
+  empty and only bare-date seed rows counted. Any new reader of DailyFood must
+  do the same (range `gte from, lt dayAfter`, key `date.slice(0, 10)`).
+- `logging.stopped` v2: an empty TODAY is not a missed day (the scan runs at
+  09:00); only finished days count. Evidence keys name the subject
+  (`daysWithNoMealLogged`, `lastMealLoggedOn`) — "nothing logged" was read as
+  meals AND workouts.
+- `Detector.against` usual | plan | rule says what `baseline` is.
+  `signalInstruction` hands the model a usual or a plan target, labelled, and
+  NOTHING for a fixed rule (shown `{gapDays: 3}` it wrote a habit; told it was
+  a rule it explained the rule).
+- **A note is a thread; "new" is read-state on it.** `AgentThread.seenAt`
+  (additive), set only by `POST /api/agent/threads/:id/seen` (the app calls it
+  when it opens a PROACTIVE thread; a GET never marks — the transcript reader
+  uses GET), cleared when a proactive run writes into the thread again.
+  `threadStore.listForApp` adds `announce` per thread = the one rule the
+  dashboard row reads: PROACTIVE, unopened, under `ANNOUNCE_DAYS` (7), and not
+  a signal note whose Finding has RESOLVED. Opened notes stay in history.
+  Tests `tests/agent/noteAnnounce.test.ts`.
+
 ## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`
 
 "How much of it" as ONE coarse choice per meal (light | normal | hearty | lots)

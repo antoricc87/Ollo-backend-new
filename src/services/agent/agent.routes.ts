@@ -14,6 +14,7 @@ export default class Routes {
     this.app.get("/api/agent/threads", verifyToken, agentApi.listThreads);
     this.app.post("/api/agent/threads", verifyToken, agentApi.createThread);
     this.app.get("/api/agent/threads/:threadId", verifyToken, agentApi.getThread);
+    this.app.post("/api/agent/threads/:threadId/seen", verifyToken, agentApi.markThreadSeen);
     this.app.put("/api/agent/threads/:threadId", verifyToken, agentApi.renameThread);
     this.app.delete("/api/agent/threads/:threadId", verifyToken, agentApi.deleteThread);
 

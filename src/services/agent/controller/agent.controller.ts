@@ -49,7 +49,7 @@ class AgentHandler {
   async listThreads(request: any, response: Response) {
     const { id } = request.user;
     try {
-      const threads = await threadStore.list(id, {
+      const threads = await threadStore.listForApp(id, {
         includeArchived: request.query?.archived === "true",
       });
       return response.status(200).json(Util.success(threads, "Threads"));
@@ -88,6 +88,21 @@ class AgentHandler {
     } catch (error) {
       console.error("agent getThread", error);
       return response.status(400).json(Util.error({}, "Error fetching thread"));
+    }
+  }
+
+  /** The app opened a note from Ollie — stop announcing it. A plain read never does this. */
+  async markThreadSeen(request: any, response: Response) {
+    const { id } = request.user;
+    const { threadId } = request.params;
+    try {
+      const thread = await threadStore.get(id, threadId);
+      if (!thread) return response.status(404).json(Util.error({}, "Thread not found"));
+      await threadStore.markSeen(id, threadId);
+      return response.status(200).json(Util.success({ threadId, seen: true }, "Seen"));
+    } catch (error) {
+      console.error("agent markThreadSeen", error);
+      return response.status(400).json(Util.error({}, "Error marking thread seen"));
     }
   }
 

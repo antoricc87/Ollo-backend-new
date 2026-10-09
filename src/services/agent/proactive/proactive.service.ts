@@ -4,6 +4,7 @@ import { queueNotification } from "../../notifications/notifications.service";
 import { ProactiveKind, runProactiveCollect } from "../agent.service";
 import { audit } from "../memory/audit";
 import { isoWeekRange, safeTz } from "../memory/dates";
+import type { Yardstick } from "../../signals/domain/types";
 
 /**
  * Proactive runs: the same agent, opened by a job instead of a message.
@@ -85,8 +86,18 @@ const planWeekInstruction = (tz: string) => {
  * explaining a result, not looking for one — so the numbers are handed to it
  * rather than left to a tool call that might return something else.
  */
-export const signalInstruction = (finding: { detectorKey: string; label: string; severity: number; evidence: unknown; baseline: unknown }) =>
-  `[A signal fired: ${finding.detectorKey} — ${finding.label}. Evidence: ${JSON.stringify(finding.evidence)}. Their usual/target: ${JSON.stringify(finding.baseline)}. Explain THIS and nothing else. Do not call tools to look for other findings.]`;
+/** A fixed rule (the same for everyone) is NOT handed over: shown a "3", the
+ *  model wrote "you typically go about 3 days between logs", and told it was a
+ *  rule it explained the rule. What it cannot see it cannot misdescribe. */
+const yardstick = (against: Yardstick, baseline: unknown) =>
+  against === "usual"
+    ? ` Their own usual: ${JSON.stringify(baseline)}.`
+    : against === "plan"
+      ? ` Their plan's target (a target, not what they usually do): ${JSON.stringify(baseline)}.`
+      : "";
+
+export const signalInstruction = (finding: { detectorKey: string; label: string; severity: number; evidence: unknown; baseline: unknown; against: Yardstick }) =>
+  `[A signal fired: ${finding.detectorKey} — ${finding.label}. Evidence: ${JSON.stringify(finding.evidence)}.${yardstick(finding.against, finding.baseline)} Explain THIS and nothing else. Do not call tools to look for other findings.]`;
 
 /**
  * A lab delta brings the rows that changed, with the previous value for each.
