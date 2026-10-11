@@ -1698,3 +1698,25 @@ model Finding {
   @@index([patientId, detectorKey, firstDetectedAt])
   @@index([patientId, notifiedAt])
 }
+
+// Landing-page waitlist (ollo-health.com). Public, unauthenticated signups —
+// deliberately holds NO health data and no link to Patient.
+model WaitlistEntry {
+  id        String         @id @default(uuid())
+  /// Trimmed + lower-cased before insert, so the unique index catches repeats.
+  email     String         @unique
+  /// Which form it came from ("hero", "closing") or a campaign tag.
+  source    String?
+  status    WaitlistStatus @default(WAITING)
+  invitedAt DateTime?
+  createdAt DateTime       @default(now())
+
+  @@index([status, createdAt])
+}
+
+enum WaitlistStatus {
+  WAITING
+  INVITED
+  JOINED
+  UNSUBSCRIBED
+}

@@ -1714,3 +1714,14 @@ and Coverage), `deductiblePaidUsd` (member-entered) and `aiReadConsentAt`.
   tried — collect real ones with hand-checked truth files before trusting it.
 - Not built: the practice reading this record (seam + PatientCoverage), a
   confirm step for the extracted summary, Ollie card, snapshot line.
+
+## Landing-page waitlist (Oct 2026) — `src/services/waitlist/`
+
+`POST /api/waitlist {email, source?}` — PUBLIC (no token), for ollo-health.com.
+Table `WaitlistEntry` (email unique, lower-cased; `source`; `status`
+WAITING|INVITED|JOINED|UNSUBSCRIBED; `invitedAt`). Holds NO health data and no
+link to `Patient` — keep it that way. Same 200 for new and duplicate emails
+(no membership oracle). In-memory per-IP limit 5/10 min (single instance; move
+to Redis if scaled out). New signups email `WAITLIST_NOTIFY_TO` (default
+info@ollo-health.com) via `utils/emailService` (non-fatal). Browser origins
+come from the CORS allow-list in `config/app-config.ts`.

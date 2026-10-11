@@ -33,6 +33,7 @@ import SignalsRoutes from "./services/signals/signals.routes";
 import "./services/agent/proactive/agent.worker";
 import { scheduleAgentProactiveTick } from "./services/agent/proactive/agent.scheduler";
 import NotificationsRoutes from "./services/notifications/notifications.routes";
+import WaitlistRoutes from "./services/waitlist/waitlist.routes";
 import { scheduleNotificationsSweep, startNotificationsWorker } from "./services/notifications/notifications.scheduler";
 import { removeLegacyRepeatables } from "./workers/config/jobQueque";
 require("dotenv").config();
@@ -118,6 +119,7 @@ class Server {
     new EncounterRoutes(this.app).routesConfig();
     new SignalsRoutes(this.app).routesConfig();
     new NotificationsRoutes(this.app).routesConfig();
+    new WaitlistRoutes(this.app).routesConfig();
   }
 
   startTheServer(callback?: (server: Server) => void) {
