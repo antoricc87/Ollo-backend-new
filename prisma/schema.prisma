@@ -1167,6 +1167,10 @@ model AgentThread {
   summary        String? // rolling summary of turns older than the verbatim window
   summarizedUpTo Int? // highest message seq folded into `summary`
   lastMessageAt  DateTime?
+  /// PROACTIVE threads: when the person opened the note. Null = not seen yet,
+  /// which is what the dashboard announces. A new proactive run on a reused
+  /// thread clears it. Set only by the explicit `seen` route — never by a read.
+  seenAt         DateTime?
   archivedAt     DateTime?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt

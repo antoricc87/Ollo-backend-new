@@ -1,4 +1,6 @@
 import { Response } from "express";
+import prisma from "../../../utility/prismaClient";
+import { runLabScanFor } from "../../signals/labs.service";
 import Util from "../../../utils/response";
 import threadStore from "../memory/thread.store";
 import memoryStore, { MEMORY_CATEGORIES, MemoryCategory } from "../memory/memory.store";
@@ -47,7 +49,7 @@ class AgentHandler {
   async listThreads(request: any, response: Response) {
     const { id } = request.user;
     try {
-      const threads = await threadStore.list(id, {
+      const threads = await threadStore.listForApp(id, {
         includeArchived: request.query?.archived === "true",
       });
       return response.status(200).json(Util.success(threads, "Threads"));
@@ -86,6 +88,21 @@ class AgentHandler {
     } catch (error) {
       console.error("agent getThread", error);
       return response.status(400).json(Util.error({}, "Error fetching thread"));
+    }
+  }
+
+  /** The app opened a note from Ollie — stop announcing it. A plain read never does this. */
+  async markThreadSeen(request: any, response: Response) {
+    const { id } = request.user;
+    const { threadId } = request.params;
+    try {
+      const thread = await threadStore.get(id, threadId);
+      if (!thread) return response.status(404).json(Util.error({}, "Thread not found"));
+      await threadStore.markSeen(id, threadId);
+      return response.status(200).json(Util.success({ threadId, seen: true }, "Seen"));
+    } catch (error) {
+      console.error("agent markThreadSeen", error);
+      return response.status(400).json(Util.error({}, "Error marking thread seen"));
     }
   }
 
@@ -349,9 +366,16 @@ class AgentHandler {
     const { kind } = request.params;
     if (!["weekly_review", "watch_out", "plan_week"].includes(kind))
       return response.status(400).json(Util.error({}, "kind must be weekly_review | watch_out | plan_week"));
-    const reason = typeof request.body?.reason === "string" ? request.body.reason.slice(0, 200) : undefined;
     try {
-      const r = await runProactiveFor(id, kind, { reason, notify: request.body?.notify === true });
+      // watch_out is no longer a free-text prompt: it re-judges the newest lab
+      // report against the record and speaks only if that changed something.
+      if (kind === "watch_out") {
+        const newest = await prisma.labResultSummary.findFirst({ where: { patientSummary: { patientId: id } }, orderBy: { createdAt: "desc" }, select: { id: true } });
+        const r = newest ? await runLabScanFor(id, { reportIds: [newest.id], notify: request.body?.notify === true }) : { skipped: "no lab report" };
+        if ("skipped" in r) return response.status(502).json(Util.error({}, `Skipped: ${r.skipped}`));
+        return response.status(200).json(Util.success(r, r.fired ? "Done" : `Nothing to say: ${(r as { reason: string }).reason}`));
+      }
+      const r = await runProactiveFor(id, kind, { notify: request.body?.notify === true });
       if ("skipped" in r) return response.status(502).json(Util.error({ threadId: (r as any).threadId ?? null }, `Skipped: ${r.skipped}`));
       return response.status(200).json(Util.success(r, "Done"));
     } catch (error) {

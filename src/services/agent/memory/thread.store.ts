@@ -30,6 +30,12 @@ export const VERBATIM_WINDOW = 24;
 /** Hard cap on rows loaded per turn (tool rows included). */
 export const UNSUMMARIZED_CAP = 300;
 
+/** How long an unopened note keeps being announced. */
+export const ANNOUNCE_DAYS = 7;
+
+export const isUnseenNote = (t: { source: string; seenAt: Date | null; lastMessageAt: Date | null }, now = Date.now()) =>
+  t.source === "PROACTIVE" && !t.seenAt && !!t.lastMessageAt && now - t.lastMessageAt.getTime() < ANNOUNCE_DAYS * 86_400_000;
+
 class ThreadStore {
   async create(
     patientId: string,
@@ -58,6 +64,36 @@ class ThreadStore {
       orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
       take: opts.limit ?? 30,
     });
+  }
+
+  /**
+   * The history list, with `announce` on each row: the ONE rule for "Ollie has
+   * something new for you" (the dashboard row reads it and decides nothing).
+   * A note is announced while it is a PROACTIVE thread nobody has opened, is
+   * under `ANNOUNCE_DAYS` old, and is still true — a signal note whose episode
+   * has since resolved ("nothing logged for 3 days", then they logged) is
+   * history, not news. It stays in the list either way: the note is the record
+   * of what Ollie said, and the place to answer it.
+   */
+  async listForApp(patientId: string, opts: { limit?: number; includeArchived?: boolean } = {}) {
+    const threads = await this.list(patientId, opts);
+    const fresh = threads.filter((t) => isUnseenNote(t)).map((t) => t.id);
+    const resolved = fresh.length
+      ? await prisma.finding.findMany({ where: { patientId, threadId: { in: fresh }, status: "RESOLVED" }, select: { threadId: true } })
+      : [];
+    const over = new Set(resolved.map((f) => f.threadId));
+    return threads.map((t) => ({ ...t, announce: isUnseenNote(t) && !over.has(t.id) }));
+  }
+
+  /** The person opened the note. Idempotent; the first opening is the one kept. */
+  async markSeen(patientId: string, threadId: string) {
+    const r = await prisma.agentThread.updateMany({ where: { id: threadId, patientId, seenAt: null }, data: { seenAt: new Date() } });
+    return r.count > 0;
+  }
+
+  /** A proactive run wrote into a thread that was already opened: it is news again. */
+  async markUnseen(threadId: string) {
+    await prisma.agentThread.updateMany({ where: { id: threadId, seenAt: { not: null } }, data: { seenAt: null } });
   }
 
   /** Full transcript for the app's history view (USER/ASSISTANT rows only by default). */

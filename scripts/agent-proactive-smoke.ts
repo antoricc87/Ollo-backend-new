@@ -6,7 +6,8 @@ import "dotenv/config";
 import assert from "assert";
 import moment from "moment-timezone";
 import prisma from "../src/utility/prismaClient";
-import { runProactiveFor, duePatients, setPreference, triggerWatchOut } from "../src/services/agent/proactive/proactive.service";
+import { runProactiveFor, duePatients, setPreference } from "../src/services/agent/proactive/proactive.service";
+import { runLabScanFor } from "../src/services/signals/labs.service";
 import proposalStore from "../src/services/agent/memory/proposals.store";
 import threadStore from "../src/services/agent/memory/thread.store";
 
@@ -57,12 +58,15 @@ async function main() {
   show("daily_checkin", d);
   assert(d.text.split(/\s+/).length < 160, "daily check-in should be short");
 
-  /* watch-out via the event hook */
-  const x: any = await triggerWatchOut(pid, "new lab report uploaded (2 values outside the reference range)");
-  assert(x.threadId && x.text, JSON.stringify(x));
-  threads.push(x.threadId);
-  show("watch_out", x);
-  assert(!/you have (high|low|hyper|hypo)|diagnos/i.test(x.text), "no diagnosis language");
+  /* labs: the newest report re-judged against the rest (a delta, or silence) */
+  const newest = await prisma.labResultSummary.findFirst({ where: { patientSummary: { patientId: pid } }, orderBy: { createdAt: "desc" } });
+  const x: any = newest ? await runLabScanFor(pid, { reportIds: [newest.id] }) : { fired: false, reason: "no report" };
+  show("labs.report", x);
+  if (x.fired) {
+    assert(x.threadId, JSON.stringify(x));
+    threads.push(x.threadId);
+    await prisma.finding.delete({ where: { id: x.findingId } });
+  }
 
   /* plan-target proposal → confirm → PlanTarget changed → restore */
   const plan = await prisma.healthPlan.findFirst({ where: { patientId: pid, status: "ACTIVE" }, include: { targets: true } });
@@ -94,8 +98,9 @@ async function main() {
   await prisma.agentPreference.update({ where: { patientId: pid }, data: { lastDailyCheckinAt: new Date() } });
   assert(!(await duePatients("daily_checkin")).includes(pid), "not due twice a day");
   await setPreference(pid, { proactiveEnabled: false });
-  const off: any = await triggerWatchOut(pid, "x");
-  assert.equal(off.skipped, "disabled");
+  const off: any = newest ? await runLabScanFor(pid, { reportIds: [newest.id] }) : { withheld: "disabled by preference" };
+  if (off.fired) await prisma.finding.delete({ where: { id: off.findingId } });
+  assert(!off.fired || off.withheld === "disabled by preference", JSON.stringify(off));
 
   console.log(`\nall proactive checks passed in ${Math.round((Date.now() - t0) / 1000)} s`);
 

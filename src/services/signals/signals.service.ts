@@ -2,6 +2,7 @@ import moment from "moment-timezone";
 import prisma from "../../utility/prismaClient";
 import { safeTz } from "../agent/memory/dates";
 import { getPreference, runProactiveFor, signalInstruction, SIGNAL_SCAN_HOUR } from "../agent/proactive/proactive.service";
+import { detectorBy } from "./domain/registry";
 import { runDay } from "./domain/run";
 import { collect } from "./model/collect";
 import { markNotified, notifyState, openEpisodes, persistDay } from "./model/findings.store";
@@ -53,7 +54,7 @@ export const runScanFor = async (patientId: string, opts: { notify?: boolean } =
     const findingId = ids[candidate.detectorKey];
     try {
       const proactive = await runProactiveFor(patientId, "signal", {
-        instruction: signalInstruction({ detectorKey: candidate.detectorKey, label: candidate.label, severity: candidate.severity, evidence: candidate.evidence, baseline: candidate.baseline ?? null }),
+        instruction: signalInstruction({ detectorKey: candidate.detectorKey, label: candidate.label, severity: candidate.severity, evidence: candidate.evidence, baseline: candidate.baseline ?? null, against: detectorBy(candidate.detectorKey)?.against ?? "rule" }),
         title: candidate.direction === "POSITIVE" ? "Worth knowing" : "Something changed",
       });
       const threadId = "threadId" in proactive ? proactive.threadId ?? null : null;

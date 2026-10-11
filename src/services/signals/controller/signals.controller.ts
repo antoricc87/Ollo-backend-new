@@ -2,6 +2,7 @@ import { Response } from "express";
 import { z } from "zod";
 import Util from "../../../utils/response";
 import prisma from "../../../utility/prismaClient";
+import { describeFinding } from "../domain/describe";
 import { listFindings } from "../model/findings.store";
 import { runScanFor } from "../signals.service";
 
@@ -65,7 +66,8 @@ class SignalsHandler {
       limit: Math.min(Number(request.query?.limit ?? 50) || 50, 200),
       status: openOnly ? ["OPEN", "ONGOING"] : undefined,
     });
-    return response.json(Util.success({ findings }, "Findings"));
+    // `title` / `line`: the finding in words, built in code (domain/describe.ts) — the app prints them as given.
+    return response.json(Util.success({ findings: findings.map((f) => ({ ...f, ...describeFinding(f) })) }, "Findings"));
   };
 
   /**
