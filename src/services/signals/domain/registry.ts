@@ -1,15 +1,19 @@
-import { Detector } from "./types";
+import { Detector, SignalDomain } from "./types";
 import { recoveryDip, recoveryRestored, sleepDebt } from "./detectors/vitals";
 import { loggingStopped, proteinShort, trainingConsistent, trainingDrifting, trainingStopped, weightOffTrack } from "./detectors/habits";
 import { labsReport } from "./detectors/labs";
+import { weightChange } from "./detectors/weight";
 
 /** Every detector that runs. Order here is irrelevant — ranking is by
  *  severity × weight (budget.ts), never by declaration order. */
-export const DETECTORS: Detector[] = [recoveryDip, recoveryRestored, sleepDebt, trainingStopped, trainingDrifting, trainingConsistent, loggingStopped, proteinShort, weightOffTrack];
+export const DETECTORS: Detector[] = [recoveryDip, recoveryRestored, sleepDebt, trainingStopped, trainingDrifting, trainingConsistent, loggingStopped, proteinShort, weightOffTrack, weightChange];
 
 /** Event-driven detectors: not run by the daily scan, but their episodes are
  *  folded by it (to close them) and looked up by key like any other. */
 export const EVENT_DETECTORS: Detector[] = [labsReport];
+
+/** What a stored finding is about; a key no longer registered counts as a habit (never shown as a health signal by accident). */
+export const domainOf = (key: string): SignalDomain => (DETECTORS.find((d) => d.key === key) ?? EVENT_DETECTORS.find((d) => d.key === key))?.domain ?? "habit";
 
 export const detectorBy = (key: string) => DETECTORS.find((d) => d.key === key) ?? EVENT_DETECTORS.find((d) => d.key === key) ?? null;
 

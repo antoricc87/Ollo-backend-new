@@ -61,6 +61,7 @@ export const recoveryDip: Detector = {
   resolveAfterDays: 3,
   cooldownDays: 14,
   against: "usual",
+  domain: "health",
   run: ({ nights }: SignalInput): Candidate | null => {
     const hits = WATCHED.map((w) => ({ w, severity: runSeverity(nights, w) })).filter((h): h is { w: Watched; severity: number } => h.severity != null);
     if (!hits.length) return null;
@@ -96,6 +97,7 @@ export const recoveryRestored: Detector = {
   resolveAfterDays: 1,
   cooldownDays: 30,
   against: "usual",
+  domain: "health",
   run: ({ nights, openFindings }: SignalInput): Candidate | null => {
     const dip = openFindings.find((f) => f.detectorKey === "recovery.dip");
     if (!dip) return null;
@@ -136,6 +138,7 @@ export const sleepDebt: Detector = {
   resolveAfterDays: 3,
   cooldownDays: 10,
   against: "plan",
+  domain: "habit",
   run: ({ nights, plan }: SignalInput): Candidate | null => {
     const target = plan?.sleepMinutes ?? null;
     if (!target) return null;

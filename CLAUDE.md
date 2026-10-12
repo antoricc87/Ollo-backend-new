@@ -1068,6 +1068,21 @@ dashboard after it was opened.
   a signal note whose Finding has RESOLVED. Opened notes stay in history.
   Tests `tests/agent/noteAnnounce.test.ts`.
 
+## Signals: health findings vs habit findings (Oct 12 2026)
+
+Ruling: the app's Signals page lists check-ins plus what Ollo notices about the
+BODY — never habits. `Detector.domain` ("health" | "habit") says which:
+health = `recovery.dip`, `recovery.restored`, `labs.report`, `weight.change`;
+habit = training.*, `logging.stopped`, `nutrition.protein_short`, `sleep.debt`
+(against the plan's target) and `weight.off_track` (against the plan's pace).
+`registry.domainOf(key)` (unknown key → habit), `GET /signals/findings` adds
+`domain` per row and takes `?domain=health`. Habit findings still become notes
+and feed nothing else in the app. New detector `detectors/weight.ts`
+`weight.change`: 5% or more between the latest weigh-in (≤10 days old) and the
+earliest one 14–30 days before it, loss or gain, worded in the unit last used;
+it fires under a weight-loss plan too and says the plan aims for loss. The 5%
+bar is drafted — clinical review. Tests `signals/tests/weight.test.ts`.
+
 ## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`
 
 "How much of it" as ONE coarse choice per meal (light | normal | hearty | lots)

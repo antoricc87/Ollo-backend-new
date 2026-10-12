@@ -3,6 +3,7 @@ import { z } from "zod";
 import Util from "../../../utils/response";
 import prisma from "../../../utility/prismaClient";
 import { describeFinding } from "../domain/describe";
+import { domainOf } from "../domain/registry";
 import { listFindings } from "../model/findings.store";
 import { runScanFor } from "../signals.service";
 
@@ -62,10 +63,11 @@ class SignalsHandler {
     const patientId = request.user?.id;
     if (!patientId) return response.status(401).json(Util.error({}, "Unauthorized"));
     const openOnly = String(request.query?.open ?? "") === "true";
-    const findings = await listFindings(patientId, {
-      limit: Math.min(Number(request.query?.limit ?? 50) || 50, 200),
-      status: openOnly ? ["OPEN", "ONGOING"] : undefined,
-    });
+    const limit = Math.min(Number(request.query?.limit ?? 50) || 50, 200);
+    // `?domain=health` = what the Signals page lists: findings about the body, not about habits (registry `domainOf`).
+    const domain = request.query?.domain === "health" || request.query?.domain === "habit" ? (request.query.domain as string) : null;
+    const rows = await listFindings(patientId, { limit: domain ? 200 : limit, status: openOnly ? ["OPEN", "ONGOING"] : undefined });
+    const findings = rows.map((f) => ({ ...f, domain: domainOf(f.detectorKey) })).filter((f) => !domain || f.domain === domain).slice(0, limit);
     // `title` / `line`: the finding in words, built in code (domain/describe.ts) — the app prints them as given.
     return response.json(Util.success({ findings: findings.map((f) => ({ ...f, ...describeFinding(f) })) }, "Findings"));
   };
