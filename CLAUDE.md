@@ -459,6 +459,43 @@ chips matched at most one question and the rest had to be listed in text.
   by turn (second request acknowledged, no re-ask, one question each);
   `pain_checkin_mild_normal_training` asks "does it go away by itself?".
 
+### The body map (Oct 9 2026) — `domain/bodyRegions.ts`, `POST /encounters/:id/regions`
+
+The "where is it?" question as a figure to tap (user mockup: 41 regions on the
+front, 31 on the back, 62 keys — arms and shoulders share a key across views).
+- `bodyRegions.ts` (pure, `tests/encounter/bodyRegions.test.ts`): the region
+  KEYS and labels (sides are the PERSON's), and `bodyFor(protocolKey, slotKey)`
+  = which questions show the figure: chest / headache / abdominal / back /
+  rash `location` and joint `which_joints`, each with a starting view and a
+  focus (head · torso · full) so the cells are big enough. Never for a
+  complaint with no place. The geometry is the app's (`Ollo/docs/body-map/*.svg`
+  → mobile `functionalities/encounter/bodyMapPaths.ts`); a test checks both
+  sides carry the same keys.
+- `threadView().question.body` carries it (regions with labels), so the app
+  draws the figure instead of the chips for that question only.
+- The slots and their options are UNCHANGED (no protocol version bump). A tap
+  does not settle the question: `markRegions` stores the keys beside the answer
+  (`slots[<slotKey>_regions]`, event `regions {via: "bodymap"}`), then the app
+  sends the same places as WORDS — an ordinary message through `record_checkin`
+  like any chip — so one path still decides what was answered (an option when
+  the words fit one, their words otherwise).
+- `recapLines` (so the handout too) adds "Marked on the body diagram: …".
+- `askNext.how` tells the model a figure is on screen: one sentence, tap or
+  tell, no list of places.
+- Not done: no red-flag or gate rule reads a region; severity per region; the
+  stepped pages do not show the figure.
+
+### The model runs the interview and chooses the step (Oct 9 2026, user ruling)
+
+"Rely on the LLM's intelligence in running the check-in… evaluate the urgency and choose among the five options… everything about the patient factored in."
+- **Order:** warning signs → WHERE (`protocols.ts` `tail()` puts `WHERE_KEYS` first) → the rest of the protocol's standard questions. Those stay the minimum.
+- **Own follow-ups** (`domain/ownQuestions.ts`, pure): once `historyComplete`, the model asks up to `MAX_OWN_QUESTIONS` (4) questions of its own and records each with `record_checkin {followUps: [{question, answer}]}` → `slots.own_questions`, event `own_question`, printed by `recapLines` (so on the handout). `turnChecks` `checkin_complete_not_assessed` stands down while follow-ups are left and the reply is a question (`ownQuestionsLeft`).
+- **The next step is the model's call** among the five `NEXT_STEP_KINDS`, from everything heard and on record; "between two steps, the earlier one". A tripped rule still overrides upward. `assessment.ts` `BANNED` is UNCHANGED: the step is chosen, but "can wait / not urgent / within 48 hours" still cannot be written.
+- **The record is part of the history:** the prompt says to use conditions, medications, allergies, flagged labs, signals and nights for follow-ups and in `fits` ("On record: …", facts never conclusions). Snapshot gained `signals` (findings of the last 30 days via `describeFinding`) and `nights` (last 3 `NightlyVitals`); both are stripped from the clinician seam.
+- **Model:** `AGENT_CHECKIN_MODEL` (+ `AGENT_CHECKIN_EFFORT`, default medium) is used for turns in check-in mode; unset = the usual agent model. Chat Completions refuses tools + reasoning for gpt-5.4 and later, so `llm/openai.client.ts` sends those (and the pro models) through the Responses API: `needsResponses(model)`, `toResponsesInput`, and `asChatChunks`, which reads the Responses stream as chat chunks so `streamed()` and its watchdogs serve both (idle limit `AGENT_LLM_THINKING_IDLE_MS`, 120 s, while a reasoning model thinks). Stateless: reasoning items are not carried between calls. Verified with tools on gpt-5.5 and gpt-5.6-luna / sol / terra. Local `.env` uses gpt-5.6-luna. Railway needs the variable set to change anything in production.
+- A follow-up's QUESTION is read from Ollie's previous message (`questionAsked`) and only its answer comes from the model (`followUp: {answer}`): left to pair them itself, it stored the question it was about to ask against the previous answer.
+- Seen on gpt-5.6-luna (lower-right pain): 2 own questions, `SEE_SOMEONE_TODAY`, ~6 s a turn. Not yet covered by an eval scenario.
+
 ### Phase 2 — the follow-up loop and own-data context (2026-09-10)
 
 `domain/followUp.ts` (pure): `FOLLOW_UP_DAYS` [2, 5, 10]; `followUpFor()`
@@ -1348,6 +1385,40 @@ again. Rule now: a change to a drafted week touches only what was named.
 - Eval `week_draft_edit_keeps_the_rest` (draft → move → add → lengthen one;
   compares session bodies turn to turn). The caution path of the edit tool is
   covered by code sharing only — no eval runs an edit with a check-in on record.
+
+### Editing ONE drafted session, and two guards (Oct 12 2026) — `design/sessionEdit.ts`, `edit_workout`
+
+Device, Oct 11: "add pull-ups" to a single-session draft called `generate_workout`
+again and five of seven exercises, the sets and the warm-up came back different;
+the reply then said "Nothing has been logged or saved yet". Only week drafts had
+an edit path.
+- Tool `edit_workout {request, durationMin?, draftId?}` (risk generate): reads the
+  latest `workout` card of the thread (`findSessionCard`), designs against it as
+  `previous` (CHANGE_RULES), then CODE restores what the request did not touch
+  (`keepUntouched`: an exercise in both keeps its previous sets unless the request
+  names it or changes the whole dose — shorter, lighter, an hour; warm-up/cool-down
+  stay unless mentioned; title stays unless the focus changed) and states the
+  difference (`sessionChanges` / `changesLine`) for the reply. Same card type, new
+  draftId, `changedFrom`. Prompt routes every change to a session draft here.
+- `turnChecks` `claim_without_save`: after a generate tool, "I've added…" is not a
+  claim that something was saved (`CLAIMS_LOGGED` without "added") — that nudge was
+  what produced the "Nothing has been logged" reply.
+- `turnChecks` `plan_week_without_card`: the Sunday run described a split and said
+  "save it from the card" with NO tool call (prod, Oct 11) — nudged once to call
+  `generate_workout_plan`.
+- **Defaults come from the person, and nothing asks first** (`design/defaults.ts`,
+  pure, `tests/workouts/defaults.test.ts`; user ruling Oct 12): each setting falls
+  back said → training profile → their own completed sessions of the last eight
+  weeks (last place, median length of non-sport sessions, weekdays trained, lifting
+  count for experience) → plan (the kind of session) → fixed value (a gym, 45 min,
+  a general mixed session). `askDefaults` loads it for both design tools; the
+  `needsInfo` question is gone. What was assumed goes on the card's `assumptions`
+  and to the model as `assumed` ("mention in one clause, never ask"). A session the
+  person described in words gets no default focus. The snapshot's "profile not
+  set" line no longer tells the model to ask (it did, and it asked five things).
+  The user's production profile was `gym` and nothing else.
+- Tests `tests/workouts/sessionEdit.test.ts`, more cases in `tests/agent/turnChecks.test.ts`.
+  No eval scenario yet (a `workout_draft_edit_keeps_the_rest` like the week one is due).
 
 ## Labs journey (Aug 27 2026) — `src/services/labs_journey/`
 

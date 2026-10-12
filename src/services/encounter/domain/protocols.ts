@@ -61,8 +61,17 @@ const ANYTHING_ELSE: Slot = {
   required: false,
 };
 
-/** Every protocol ends the same way: severity, then a free-text catch-all. */
-const tail = (associated: Slot, extra: Slot[] = []): Slot[] => [ONSET, PATTERN, ...extra, associated, SEVERITY, ANYTHING_ELSE];
+/** The "where is it?" question of a protocol, when it has one (the body map answers it). */
+export const WHERE_KEYS = ["location", "which_joints"];
+const isWhere = (s: Slot) => WHERE_KEYS.indexOf(s.key) >= 0;
+
+/**
+ * Every protocol ends the same way: severity, then a free-text catch-all.
+ * WHERE comes first (user ruling Oct 9 2026): once the warning-sign question
+ * is settled, the place is the first thing asked, so every later question can
+ * be put about that place instead of about "it".
+ */
+const tail = (associated: Slot, extra: Slot[] = []): Slot[] => [...extra.filter(isWhere), ONSET, PATTERN, ...extra.filter((s) => !isWhere(s)), associated, SEVERITY, ANYTHING_ELSE];
 
 const associated = (prompt: string, ...values: string[]): Slot => ({
   key: "associated",

@@ -36,6 +36,8 @@ export type ChatOptions = {
   onTextDelta?: (delta: string) => void;
   maxOutputTokens?: number;
   model?: string;
+  /** Reasoning models only: how hard to think (default low). Ignored by the others. */
+  reasoningEffort?: "low" | "medium" | "high";
   signal?: AbortSignal;
 };
 

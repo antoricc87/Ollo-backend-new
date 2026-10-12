@@ -12,6 +12,8 @@ import { fmtDuration, fmtSets } from "../../workouts/domain/workout.metrics";
 import { EQUIPMENT, EXPERIENCE, FOCUS, PLACE, PlannedSessionInput, WEEKDAYS, WorkoutPlanInput, timeString } from "../../workouts/domain/workout.schema";
 import { asPrevious, buildBrief, DEFAULT_SESSION_MIN, designSession, designWeek, weekShapeIssues } from "../../workouts/design/workoutDesign.service";
 import { applyWeekEdits, dateOfDay, WeekEditError, type WeekEdit, type WeekSession } from "../../workouts/design/weekEdit";
+import { changesLine, keepUntouched, sessionChanges } from "../../workouts/design/sessionEdit";
+import { deriveDefaults, type Defaults, type DefaultsInput } from "../../workouts/design/defaults";
 import encounterService from "../../encounter/model/encounter.model";
 import { generalSessionLine, stopLine, type TrainingGate } from "../../encounter/domain/trainingGate";
 
@@ -177,13 +179,33 @@ export const savedWeekCard = (v: WorkoutPlanView, tz: string): Card => ({
 
 /* -------------------------------- helpers -------------------------------- */
 
-const askDefaults = async (patientId: string, input: { durationMin?: number; place?: any; equipment?: string[] }) => {
-  const profile = await TrainingProfileService.get(patientId);
-  const durationMin = input.durationMin ?? profile?.sessionMinutes ?? DEFAULT_SESSION_MIN;
-  const place = input.place ?? (profile?.place && profile.place !== "mixed" ? (profile.place as (typeof PLACE)[number]) : null);
-  const needsPlace = !profile && !input.place && !(input.equipment?.length);
-  return { profile, durationMin, place, needsPlace };
+/**
+ * Everything the person did not say, filled from them (design/defaults.ts):
+ * this request, then the training profile, then their own sessions of the last
+ * eight weeks, then their plan, then a fixed value. Never a question.
+ */
+const askDefaults = async (ctx: { patientId: string; today: string; timeZone: string }, stated: DefaultsInput["stated"]): Promise<{ profile: Awaited<ReturnType<typeof TrainingProfileService.get>>; defaults: Defaults }> => {
+  const from = moment.tz(ctx.today, "YYYY-MM-DD", ctx.timeZone).subtract(56, "days").toDate();
+  const [profile, plan, rows] = await Promise.all([
+    TrainingProfileService.get(ctx.patientId),
+    prisma.healthPlan.findFirst({ where: { patientId: ctx.patientId, status: "ACTIVE" }, orderBy: { createdAt: "desc" }, select: { outcome: true } }),
+    WorkoutService.list(ctx.patientId, { from, to: moment.tz(ctx.today, "YYYY-MM-DD", ctx.timeZone).endOf("day").toDate() }, { limit: 80 }).catch(() => []),
+  ]);
+  const history = rows.map((r: any) => ({
+    date: r.plannedFor ?? moment(r.startedAt).tz(ctx.timeZone).format("YYYY-MM-DD"),
+    durationMin: r.durationSec ? Math.round(r.durationSec / 60) : null,
+    place: r.place ?? null,
+    shape: activityByKey(r.activityKey).shape,
+    hasLifts: (r.exercises ?? []).some((e: any) => (e.sets ?? []).length > 0),
+  }));
+  return { profile, defaults: deriveDefaults({ stated, profile, plan, history }) };
 };
+
+/** What the model is told about values nobody stated. */
+const assumedNote = (assumed: string[]) =>
+  assumed.length
+    ? { assumed, assumedNote: "These were assumed, not said — the card lists them. Mention them in ONE clause. If they correct one, redo the design with it and offer to keep it with update_training_profile. Do not ask about them." }
+    : {};
 
 /**
  * A check-in on record decides what may be designed (encounter/domain/
@@ -204,14 +226,76 @@ const heldResult = (gate: TrainingGate) => ({
 const cautionNote = (gate: TrainingGate, what: "session" | "week") =>
   `This is a GENERAL, lighter ${what}${what === "session" ? " — the card says so and lists when to stop" : ""}. What is true and must come across: (1) say ONCE, in one line, that exercises aimed at their ${gate.about.toLowerCase()} are for a clinician or physiotherapist to choose; (2) describe the ${what} as what it is — never that it will help, relieve, treat or fix the ${gate.about.toLowerCase()}${gate.conditions.length ? `, and never as being for ${gate.conditions.join(" / ")}` : ""}; (3) if they asked for it "for" a condition, say plainly that you built the general version instead${what === "week" ? `; (4) end with when to stop: ${stopLine(gate) ?? "if it gets worse, stop and get seen"}` : ""}. You may offer once to keep their limitation, in their own words, in their training profile (update_training_profile).`;
 
+/** The latest single-session card of this conversation (edit_workout builds the next draft from it). */
+const findSessionCard = async (threadId: string | null, draftId?: string | null): Promise<any | null> => {
+  if (draftId && sessionDrafts.has(draftId)) return sessionDrafts.get(draftId)!.card;
+  if (!threadId) {
+    const newest = [...sessionDrafts.entries()].sort((x, y) => y[1].at - x[1].at)[0];
+    return !draftId && newest && Date.now() - newest[1].at < 30 * 60 * 1000 ? newest[1].card : null;
+  }
+  const rows = await prisma.agentMessage.findMany({ where: { threadId, role: "ASSISTANT" }, orderBy: { seq: "desc" }, take: 40, select: { cards: true } });
+  for (const r of rows) {
+    const cards = Array.isArray(r.cards) ? (r.cards as any[]) : [];
+    for (const c of [...cards].reverse()) {
+      if (c?.type !== "workout" || !c?.data?.session?.exercises?.length) continue;
+      if (draftId && c.data.draftId !== draftId) continue;
+      return c.data;
+    }
+  }
+  return null;
+};
+
 /* --------------------------------- tools --------------------------------- */
+
+export const editWorkout = defineTool({
+  name: "edit_workout",
+  description:
+    "Change the ONE session draft already on the table in this conversation: add, remove or swap an exercise, more or fewer sets, shorter or longer, lighter. Everything the request does not mention comes back exactly as it was — same exercises, sets, reps, rests, warm-up. Use this for EVERY change to a drafted session; never call generate_workout again for it (that designs a different session). Returns the same card with the change applied and a line saying exactly what changed.",
+  schema: z.object({
+    request: z.string().min(2).max(600).describe("What to change, in their words verbatim: 'add pull-ups', 'drop the curls', 'make it 45 minutes', 'swap the row for something with dumbbells'"),
+    durationMin: z.number().int().min(10).max(180).optional().describe("Only when they ask for a different length"),
+    draftId: z.string().optional().describe("The draft to change; default the latest session card in this conversation"),
+  }),
+  risk: "generate",
+  async run(ctx, input) {
+    const card = await findSessionCard(ctx.threadId, input.draftId);
+    if (!card) return { result: { error: "There is no session draft in this conversation to change. Design one with generate_workout first." } };
+    const previous = card.session as PlannedSessionInput;
+    const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
+    if (gate?.level === "hold") return heldResult(gate);
+    const caution = gate?.level === "general" ? gate : null;
+    const profile = await TrainingProfileService.get(ctx.patientId);
+    const brief = await buildBrief(ctx.patientId, { today: ctx.today, timeZone: ctx.timeZone, client: ctx.client });
+    const date = previous.plannedFor && previous.plannedFor >= ctx.today ? previous.plannedFor : ctx.today;
+    const designed = await designSession(
+      { durationMin: input.durationMin ?? previous.durationMin ?? DEFAULT_SESSION_MIN, focus: (previous.focus as any) ?? null, muscleGroups: previous.muscleGroups ?? [], place: (previous.place as any) ?? null, equipment: profile?.equipment ?? [], request: input.request as string, date, caution, previous: asPrevious(previous) },
+      brief
+    );
+    const session = keepUntouched(previous, designed.session, input.request as string);
+    const changes = sessionChanges(previous, session);
+    const draftId = randomUUID();
+    const cardData = { ...card, draftId, session, display: sessionDisplay(session), fit: designed.fit, assumptions: designed.assumptions, lastLoads: Object.fromEntries(session.exercises!.filter((e) => brief.lastLoads[e.exerciseKey]).map((e) => [e.exerciseKey, brief.lastLoads[e.exerciseKey]])), caution: caution ? { about: caution.about, stopIf: caution.stopIf } : null, changedFrom: card.draftId ?? null };
+    registerSessionDraft(draftId, session, cardData);
+    return {
+      result: {
+        draftId,
+        session: sessionLine(session),
+        changed: changesLine(changes),
+        fit: designed.fit.ok ? { ok: true } : { ok: false, issues: designed.fit.issues, note: "Say plainly what still misses; do not claim it fits." },
+        note: `What is true: ${changesLine(changes)}. Say that in one line — name what was added, removed or changed and that the rest is as it was. Do not re-list the whole session; the card shows it. Nothing is saved.`,
+        ...(caution ? { caution: cautionNote(caution, "session") } : {}),
+      },
+      cards: [{ type: "workout", title: session.title!, data: cardData }],
+    };
+  },
+});
 
 export const generateWorkout = defineTool({
   name: "generate_workout",
   description:
     "Design ONE training session for the user (gym or anywhere) from what they ask — length, focus (strength / hypertrophy / conditioning / mobility / endurance / mixed), muscle groups, place, equipment — using their profile, training profile, plan, the last 7 days and their own last loads. Returns a card with exercises, sets × reps, rest and a load from their history (never an invented weight); nothing is saved. Pass `date` (and `replaceSessionId`) to make it a swap for a day of their training week. Not for logging something they already did — that is log_workout.",
   schema: z.object({
-    durationMin: z.number().int().min(10).max(180).optional().describe("Whole session incl. warm-up; defaults to their training profile, else 45"),
+    durationMin: z.number().int().min(10).max(180).optional().describe("Whole session incl. warm-up. Only when they say a length — otherwise their profile, then their usual length, then 45"),
     focus: z.enum(FOCUS).optional(),
     muscleGroups: z.array(z.string().max(40)).max(6).optional().describe("As the user said them: 'upper body', 'legs', 'chest and back', 'core'"),
     place: z.enum(PLACE).optional(),
@@ -225,30 +309,26 @@ export const generateWorkout = defineTool({
   async run(ctx, input) {
     const subject = await ctx.resolveSubject(input.subjectId);
     if (!subject.isSelf) return { result: { error: "Workouts are designed for the account holder only for now." } };
-    const { profile, durationMin, place, needsPlace } = await askDefaults(ctx.patientId, input);
-    if (needsPlace)
-      return {
-        result: {
-          needsInfo: true,
-          question: "Ask ONE question: where they'll train and what they have (a gym, or home/outdoor with dumbbells, bands, a bar, or just bodyweight). Then call generate_workout again with place/equipment, and offer to remember it with update_training_profile.",
-        },
-      };
+    const { profile, defaults } = await askDefaults(ctx, { place: input.place ?? null, durationMin: input.durationMin ?? null, focus: input.focus ?? null, describesSession: !!(input.request?.trim() || input.muscleGroups?.length) });
+    const { durationMin, place } = defaults;
     const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
     if (gate?.level === "hold") return heldResult(gate);
     const caution = gate?.level === "general" ? gate : null;
     const date = input.date && input.date >= ctx.today ? input.date : ctx.today;
     const brief = await buildBrief(ctx.patientId, { today: ctx.today, timeZone: ctx.timeZone, client: ctx.client });
+    // The designer reads experience and usual days off the brief: give it the derived ones where the profile is silent.
+    brief.training = { ...(brief.training ?? { place, equipment: [], sessionMinutes: durationMin, preferredTime: null, limitations: null }), experience: defaults.experience, preferredDays: defaults.preferredDays } as any;
     let replaces: { id: string; title: string; date: string } | null = null;
     if (input.replaceSessionId) {
       const row = await WorkoutService.get(ctx.patientId, input.replaceSessionId);
       if (row && row.status === "PLANNED") replaces = { id: row.id, title: row.title ?? activityByKey(row.activityKey).label, date: row.plannedFor ?? date };
     }
-    const designed = await designSession({ durationMin, focus: input.focus ?? null, muscleGroups: input.muscleGroups ?? [], place, equipment: input.equipment ?? profile?.equipment ?? [], request: input.request ?? null, date: replaces?.date ?? date, caution }, brief);
+    const designed = await designSession({ durationMin, focus: defaults.focus, muscleGroups: input.muscleGroups ?? [], place, equipment: input.equipment ?? profile?.equipment ?? [], request: input.request ?? null, date: replaces?.date ?? date, caution }, brief);
     const draftId = randomUUID();
     const display = sessionDisplay(designed.session);
     const active = await WorkoutPlanService.getActive(ctx.patientId);
     const inWeek = !!active && designed.session.plannedFor! >= active.startDate && designed.session.plannedFor! <= active.endDate;
-    const cardData = { draftId, session: designed.session, display, fit: designed.fit, assumptions: designed.assumptions, slot: { date: designed.session.plannedFor, replaces, planId: inWeek ? active!.id : null, inWeek }, lastLoads: Object.fromEntries(designed.session.exercises!.filter((e) => brief.lastLoads[e.exerciseKey]).map((e) => [e.exerciseKey, brief.lastLoads[e.exerciseKey]])), timeZone: ctx.timeZone, caution: caution ? { about: caution.about, stopIf: caution.stopIf } : null };
+    const cardData = { draftId, session: designed.session, display, fit: designed.fit, assumptions: [...defaults.assumed, ...designed.assumptions], slot: { date: designed.session.plannedFor, replaces, planId: inWeek ? active!.id : null, inWeek }, lastLoads: Object.fromEntries(designed.session.exercises!.filter((e) => brief.lastLoads[e.exerciseKey]).map((e) => [e.exerciseKey, brief.lastLoads[e.exerciseKey]])), timeZone: ctx.timeZone, caution: caution ? { about: caution.about, stopIf: caution.stopIf } : null };
     registerSessionDraft(draftId, designed.session, cardData);
     return {
       result: {
@@ -259,6 +339,7 @@ export const generateWorkout = defineTool({
         assumptions: designed.assumptions,
         fit: designed.fit.ok ? { ok: true } : { ok: false, issues: designed.fit.issues, note: "Say plainly what still misses; do not claim it fits." },
         ...(caution ? { caution: cautionNote(caution, "session") } : {}),
+        ...assumedNote(defaults.assumed),
         cardActions: `The card has 'Log it as done' (when they've done it), 'Put in plan · ${moment.utc(designed.session.plannedFor!, "YYYY-MM-DD").format("ddd D")}' (writes it onto that day of their week — direct, no proposal) and 'Something else'. Nothing is saved and nothing needs confirming: it is a plan to do, not a log — never call log_workout for it unless they say they did it, and don't ask them to confirm. Keep your text to the highlights: the split, the one or two key lifts with their loads, and the why.`,
         design: { model: designed.model, latencyMs: designed.latencyMs },
       },
@@ -285,18 +366,15 @@ export const generateWorkoutPlan = defineTool({
   async run(ctx, input) {
     const subject = await ctx.resolveSubject(input.subjectId);
     if (!subject.isSelf) return { result: { error: "Training weeks are designed for the account holder only for now." } };
-    const { profile, durationMin, place, needsPlace } = await askDefaults(ctx.patientId, { durationMin: input.sessionMinutes, place: input.place });
-    if (needsPlace)
-      return {
-        result: {
-          needsInfo: true,
-          question: "Ask ONE question: where they'll train and what they have (a gym, or home/outdoor with dumbbells, bands, a bar, or just bodyweight). Then call generate_workout_plan again with place, and offer to remember it with update_training_profile.",
-        },
-      };
+    const { defaults } = await askDefaults(ctx, { place: input.place ?? null, durationMin: input.sessionMinutes ?? null, focus: input.focus ?? null, describesSession: !!input.request?.trim() });
+    const { durationMin, place } = defaults;
     const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
     if (gate?.level === "hold") return heldResult(gate);
     const caution = gate?.level === "general" ? gate : null;
     const brief = await buildBrief(ctx.patientId, { today: ctx.today, timeZone: ctx.timeZone, client: ctx.client });
+    brief.training = { ...(brief.training ?? { place, equipment: [], sessionMinutes: durationMin, preferredTime: null, limitations: null }), experience: defaults.experience, preferredDays: defaults.preferredDays } as any;
+    // A week has its own mix of sessions; only what they did not describe falls back, and "mixed" there means "the designer's split".
+    const weekAssumed = defaults.assumed.filter((a) => !/session/i.test(a));
     const sessionsPerWeek = input.sessionsPerWeek ?? brief.plan?.sessionsPerWeek ?? 3;
     const startDate = input.startDate && input.startDate >= ctx.today ? input.startDate : ctx.today;
     const week = await designWeek({ startDate, days: input.days, sessionsPerWeek: Math.min(sessionsPerWeek, input.days), sessionMinutes: durationMin, focus: input.focus ?? null, place, request: input.request ?? null, caution }, brief);
@@ -336,6 +414,7 @@ export const generateWorkoutPlan = defineTool({
         notes: week.notes,
         fit: week.fit.ok ? { ok: true } : { ok: false, issues: week.fit.issues, note: "Say plainly which days miss and why; offer to adjust. Do not claim it fits." },
         ...(caution ? { caution: cautionNote(caution, "week") } : {}),
+        ...assumedNote(weekAssumed),
         replaces: cardData.replaces,
         cardActions: "The card shows every day with its exercises, a 'Save this week' button and per-day Log/Swap once saved. Nothing is saved yet: if the user asks to save/keep/use it, call save_workout_plan with this draftId (a proposal they confirm) — otherwise mention once that the card has Save. Keep your text to the split, the days, and one highlight per session.",
         design: { model: week.model, latencyMs: week.latencyMs },

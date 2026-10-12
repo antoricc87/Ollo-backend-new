@@ -33,6 +33,8 @@ export type TurnFacts = {
     active: boolean;
     /** Every required question is covered. */
     historyComplete: boolean;
+    /** How many of its own follow-up questions Ollie may still ask (0 outside an interview). */
+    ownQuestionsLeft: number;
     /** A published warning sign matched — the turn's job is the escalation, not an assessment. */
     flagged: boolean;
     /** What assess_checkin said when it refused the assessment this turn, if it did. */
@@ -48,6 +50,9 @@ export const CLAIMS_CARD =
 
 /** The reply says something was saved. Only true after a commit this turn. */
 export const CLAIMS_SAVED = /\b(?:i'?ve|i have|i)\s+(?:logged|saved|recorded|added)\b|\b(?:is|was|been|got)\s+(?:logged|saved|recorded)\b|\blogged\s+(?:it|that|your|the)\b/i;
+
+/** The same without "added": after a design tool, "I've added pull-ups" describes the draft on the card, which is true. */
+const CLAIMS_LOGGED = /\b(?:i'?ve|i have|i)\s+(?:logged|saved|recorded)\b|\b(?:is|was|been|got)\s+(?:logged|saved|recorded)\b|\blogged\s+(?:it|that|your|the)\b/i;
 
 const CHECKIN_TOOLS = ["start_checkin", "record_checkin", "assess_checkin", "resume_checkin"];
 
@@ -82,6 +87,16 @@ const CHECKS: ((f: TurnFacts) => TurnNudge | null)[] = [
         }
       : null,
 
+  // Sunday planning: the note listed a split and said "save it from the card"
+  // with no tool called, so there was no card and nothing to save (Oct 11 2026).
+  (f) =>
+    f.proactive === "plan_week" && f.toolsCalled.indexOf("generate_workout_plan") < 0
+      ? {
+          stage: "plan_week_without_card",
+          message: "[System: you described next week's training without designing it, so there is no card and nothing the user can save. Call get_workouts for this week, then generate_workout_plan for next week, and write the note from its result.]",
+        }
+      : null,
+
   // A reply that talks about a card or asks for confirmation when no write tool
   // ran is a hallucinated proposal (seen 2026-08-27: "I've prepared a card to
   // log…" with tools=[]). Not after a generate tool: its card is real, and
@@ -99,7 +114,9 @@ const CHECKS: ((f: TurnFacts) => TurnNudge | null)[] = [
   // voice channel the moment the prompt said logs are saved at once): nothing
   // was saved. The tool must run, or the reply must not claim it did.
   (f) =>
-    !f.saved && !f.proposed && !f.proactive && CLAIMS_SAVED.test(f.text)
+    // Oct 11 2026: "I've added pull-ups to the session" after a design tool drew this nudge,
+    // and the reply became "Nothing has been logged or saved yet" — with no word on the pull-ups.
+    !f.saved && !f.proposed && !f.proactive && (f.generated ? CLAIMS_LOGGED : CLAIMS_SAVED).test(f.text)
       ? {
           stage: "claim_without_save",
           message:
@@ -114,6 +131,8 @@ const CHECKS: ((f: TurnFacts) => TurnNudge | null)[] = [
   (f) =>
     f.checkin.active &&
     f.checkin.historyComplete &&
+    // Asking one of its own follow-ups is not "ending the turn without the assessment" (Oct 9 2026).
+    !(f.checkin.ownQuestionsLeft > 0 && /\?/.test(f.text) && !ABOUT_ASSESSMENT.test(f.text)) &&
     !f.checkin.flagged &&
     !f.proactive &&
     f.toolsCalled.every((t) => CHECKIN_TOOLS.indexOf(t) >= 0) &&

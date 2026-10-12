@@ -1,3 +1,4 @@
+import { ownQuestionsLeft } from "../encounter/domain/ownQuestions";
 import prisma from "../../utility/prismaClient";
 import { buildPatientSnapshot, renderSnapshot, ClientContext, PatientSnapshot } from "./context/snapshot";
 import { getLLM } from "./llm/openai.client";
@@ -74,6 +75,8 @@ export type ProactiveInput = {
 };
 
 const MAX_STEPS = 8;
+const CHECKIN_MODEL = process.env.AGENT_CHECKIN_MODEL || "";
+const CHECKIN_EFFORT = (process.env.AGENT_CHECKIN_EFFORT || "medium") as "low" | "medium" | "high";
 const MAX_TOOL_RESULT_CHARS = 12_000;
 const SUMMARIZE_AFTER_ROWS = 8;
 
@@ -289,7 +292,9 @@ async function* runLoop(p: {
     while (steps < MAX_STEPS) {
       steps += 1;
       if (steps > 1) yield { type: "status", text: "Thinking" };
-      const res = await llm.chat({ messages, tools: registry.specs(), signal: p.signal });
+      // A check-in is the one conversation where the model takes a history and chooses a next step:
+      // it may run on a stronger, reasoning model (AGENT_CHECKIN_MODEL; unset = the usual one).
+      const res = await llm.chat({ messages, tools: registry.specs(), signal: p.signal, ...(checkin && CHECKIN_MODEL ? { model: CHECKIN_MODEL, reasoningEffort: CHECKIN_EFFORT } : {}) });
       usage = addUsage(usage, res.usage);
       model = res.model;
 
@@ -311,6 +316,7 @@ async function* runLoop(p: {
               inThread: checkin || mode.paused || mode.assessedConditions.length > 0 || toolsCalled.includes("start_checkin"),
               active: !!live && live.state.phase !== "ROUTE" && live.state.phase !== "CLOSED",
               historyComplete: !!live && historyComplete(live.state, live.protocol),
+              ownQuestionsLeft: live ? ownQuestionsLeft(live.state) : 0,
               flagged: !!live && live.state.redFlags.length > 0,
               rejected: assessRejected,
             },

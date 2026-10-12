@@ -12,7 +12,7 @@ const facts = (over: Partial<Omit<TurnFacts, "checkin">> & { checkin?: Partial<T
   saved: false,
   generated: false,
   ...over,
-  checkin: { inThread: false, active: false, historyComplete: false, flagged: false, rejected: null, ...(over.checkin ?? {}) },
+  checkin: { inThread: false, active: false, historyComplete: false, ownQuestionsLeft: 0, flagged: false, rejected: null, ...(over.checkin ?? {}) },
 });
 
 describe("turnEndNudge", () => {
@@ -52,6 +52,14 @@ describe("turnEndNudge", () => {
       expect(turnEndNudge(facts({ text: "That matches a published criterion…", usedTools: true, toolsCalled: ["record_checkin"], checkin: { ...live, flagged: true } }))).toBeNull();
       expect(turnEndNudge(facts({ text: "Your protein target is 120–150 g.", checkin: live }))).toBeNull();
       expect(turnEndNudge(facts({ text: "Here is what you ate today.", usedTools: true, toolsCalled: ["get_meals"], checkin: live }))).toBeNull();
+    });
+
+    /** Oct 9 2026: once the standard questions are covered Ollie asks a few of its own — a question is not a missing assessment. */
+    it("lets Ollie ask one of its own follow-ups, until they are used up", () => {
+      const asking = { text: "Does it hurt more when you walk or cough?", usedTools: true, toolsCalled: ["record_checkin"] };
+      expect(turnEndNudge(facts({ ...asking, checkin: { ...live, ownQuestionsLeft: 3 } }))).toBeNull();
+      expect(turnEndNudge(facts({ ...asking, checkin: { ...live, ownQuestionsLeft: 0 } }))?.stage).toBe("checkin_complete_not_assessed");
+      expect(turnEndNudge(facts({ text: "Here's what fits best — is that what you expected?", usedTools: true, toolsCalled: ["record_checkin"], checkin: { ...live, ownQuestionsLeft: 3 } }))?.stage).toBe("checkin_complete_not_assessed");
     });
 
     it("says nothing while questions are still open", () => {
@@ -108,5 +116,25 @@ describe("claim_without_save", () => {
   });
   it("is silent when a proposal was prepared", () => {
     expect(turnEndNudge(facts({ text: "Your snack is logged once you confirm the card.", usedTools: true, toolsCalled: ["log_meal"], proposed: true }))).toBeNull();
+  });
+});
+
+describe("Sunday planning must build the week it describes", () => {
+  /** Oct 11 2026: the note listed a split and said "save from the card" — no tool had run, so there was no card. */
+  it("nudges when no week was designed", () => {
+    expect(turnEndNudge(facts({ proactive: "plan_week", text: "Here's your draft split for next week… you can save it from the card." }))?.stage).toBe("plan_week_without_card");
+    expect(turnEndNudge(facts({ proactive: "plan_week", text: "Here's next week.", usedTools: true, toolsCalled: ["get_workouts"] }))?.stage).toBe("plan_week_without_card");
+  });
+  it("stays quiet once the plan tool ran", () => {
+    expect(turnEndNudge(facts({ proactive: "plan_week", text: "Here's next week — the card has Save.", usedTools: true, generated: true, toolsCalled: ["get_workouts", "generate_workout_plan"] }))).toBeNull();
+  });
+});
+
+describe("a change to a drafted session is not a claim that something was saved", () => {
+  it("lets 'I've added pull-ups' through after a design tool, but not 'I've logged it'", () => {
+    const edited = { usedTools: true, generated: true, toolsCalled: ["edit_workout"] };
+    expect(turnEndNudge(facts({ ...edited, text: "I've added pull-ups after the lat pulldown; the rest is as it was." }))).toBeNull();
+    expect(turnEndNudge(facts({ ...edited, text: "I've logged your session for today." }))?.stage).toBe("claim_without_save");
+    expect(turnEndNudge(facts({ text: "I've added that to your food log." }))?.stage).toBe("claim_without_save");
   });
 });

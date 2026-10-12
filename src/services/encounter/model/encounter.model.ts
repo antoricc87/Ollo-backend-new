@@ -1,3 +1,5 @@
+import { addOwnQuestions, OwnQuestion } from "../domain/ownQuestions";
+import { bodyFor, BodyQuestion, regionsKey, regionsLine, sanitizeRegions } from "../domain/bodyRegions";
 import { EncounterRoute, EncounterStatus, EncounterTrend } from "@prisma/client";
 import prisma from "../../../utility/prismaClient";
 import { getLLM } from "../../agent/llm/openai.client";
@@ -129,7 +131,8 @@ export type CheckinThreadView = {
   followUp?: { day: number };
   progress: { covered: number; total: number };
   historyComplete: boolean;
-  question: { slotKey: string; prompt: string; kind: string; options: { value: string; label: string }[] | null; range: [number, number] | null } | null;
+  /** `body`: this question also shows the tappable figure (domain/bodyRegions.ts). */
+  question: { slotKey: string; prompt: string; kind: string; options: { value: string; label: string }[] | null; range: [number, number] | null; body?: BodyQuestion | null } | null;
   disclaimer: string;
 };
 
@@ -332,6 +335,26 @@ class EncounterService {
     return { ...view({ ...row, phase: next.phase }, next, protocol, ctx.region), unplaced: false };
   }
 
+  /**
+   * The figure was tapped. Keeps WHICH regions beside the question's answer and
+   * logs it (`via: "bodymap"`) — it does not settle the question: the app then
+   * sends the same places as words, which go through `answer` like anything
+   * said or typed, so there is still one path that decides what was answered.
+   */
+  async markRegions(patientId: string, id: string, slotKey: string, input: unknown) {
+    const row = await prisma.encounter.findFirst({ where: { id, patientId } });
+    if (!row) return null;
+    if (row.status !== "OPEN") throw new Error("This check-in is closed");
+    const state = toState(row);
+    const protocol = resolveProtocol(state.complaintKey);
+    if (!bodyFor(protocol.key, slotKey)) throw new Error(`"${slotKey}" has no body figure in this check-in`);
+    const regions = sanitizeRegions(input);
+    if (!regions.length) throw new Error("No known region was sent");
+    await persist(id, { ...state, slots: { ...state.slots, [regionsKey(slotKey)]: regions } });
+    await logEvent(id, "regions", { slotKey, regions, via: "bodymap" }, slotKey);
+    return { id, slotKey, regions, text: regionsLine(regions) };
+  }
+
   /** The clinician handout. Built from the record, never model-generated. */
   async handout(patientId: string, id: string) {
     const row = await prisma.encounter.findFirst({ where: { id, patientId } });
@@ -523,6 +546,17 @@ class EncounterService {
    * the stepped flow's `answer` — sanitised, persisted, red-flagged, audited —
    * so a history taken in chat is the same record as one taken on screens.
    */
+  /** Ollie's own follow-up questions and what the person said (domain/ownQuestions.ts). */
+  async recordOwnQuestions(patientId: string, id: string, items: OwnQuestion[]) {
+    const row = await prisma.encounter.findFirst({ where: { id, patientId } });
+    if (!row || row.status !== "OPEN") return { added: 0 };
+    const { state, added } = addOwnQuestions(toState(row), items);
+    if (!added.length) return { added: 0 };
+    await persist(id, state);
+    for (const q of added) await logEvent(id, "own_question", q);
+    return { added: added.length };
+  }
+
   async recordAnswers(patientId: string, id: string, answers: { slotKey: string; value?: SlotValue; text?: string }[]) {
     const unplaced: string[] = [];
     let last: (EncounterView & { unplaced?: boolean }) | null = null;
@@ -646,7 +680,7 @@ class EncounterService {
       historyComplete: historyComplete(state, protocol),
       question:
         step && step.kind === "ask"
-          ? { slotKey: step.slot.key, prompt: step.slot.prompt, kind: step.slot.kind, options: step.slot.options ?? null, range: step.slot.range ?? null }
+          ? { slotKey: step.slot.key, prompt: step.slot.prompt, kind: step.slot.kind, options: step.slot.options ?? null, range: step.slot.range ?? null, body: bodyFor(protocol.key, step.slot.key) }
           : null,
       disclaimer: CHECKIN_DISCLAIMER,
     };

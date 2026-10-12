@@ -311,7 +311,7 @@ export const SCENARIOS: Scenario[] = [
       { message: "I've had a headache every afternoon for about a week now.", expect: { tools: ["start_checkin"], mustMatch: [/\?/] } },
       {
         message:
-          "None of those — no thunderclap, no fever or stiff neck, vision is fine, no weakness or confusion, no rash. It started about a week ago, comes and goes, both sides, builds through the afternoon. Maybe a 5 out of 10 at worst. I've been taking ibuprofen most days and I'm at a screen all day.",
+          "None of those — no thunderclap, no fever or stiff neck, vision is fine, no weakness or confusion, no rash. It started about a week ago, comes and goes, both sides, a dull pressure like a tight band that builds through the afternoon. Maybe a 5 out of 10 at worst. I've been taking ibuprofen most days and I'm at a screen all day.",
         expect: { tools: ["record_checkin"] },
       },
       {

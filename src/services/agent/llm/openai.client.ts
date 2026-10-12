@@ -26,6 +26,7 @@ const FAST_MODEL = process.env.AGENT_FAST_MODEL || "gpt-4.1-mini";
 const FIRST_CHUNK_MS = Number(process.env.AGENT_LLM_FIRST_CHUNK_MS || 45_000);
 const IDLE_MS = Number(process.env.AGENT_LLM_IDLE_MS || 30_000);
 const SLOW_LOG_MS = 15_000;
+const THINKING_IDLE_MS = Number(process.env.AGENT_LLM_THINKING_IDLE_MS || 120_000);
 
 class LLMStalled extends Error {
   constructor(readonly phase: "first_chunk" | "idle", readonly afterMs: number) {
@@ -36,8 +37,56 @@ class LLMStalled extends Error {
 const isReasoningModel = (model: string) => /^(o\d|gpt-5)/i.test(model) && !/chat/i.test(model);
 
 /** Chat Completions spells the reasoning knob `reasoning_effort`; others take temperature. */
-const sampling = (model: string, temperature: number) =>
-  isReasoningModel(model) ? { reasoning_effort: "low" as const } : { temperature };
+const sampling = (model: string, temperature: number, effort: "low" | "medium" | "high" = "low") =>
+  isReasoningModel(model) ? { reasoning_effort: effort } : { temperature };
+
+/**
+ * Chat Completions refuses function tools together with reasoning for gpt-5.4
+ * and later ("use /v1/responses"), and the pro models are Responses-only. Those
+ * go through the Responses API below; everything else stays where it was.
+ */
+const needsResponses = (model: string) => {
+  if (/-pro\b/i.test(model)) return true;
+  const m = /^gpt-(\d+)(?:\.(\d+))?/i.exec(model);
+  return !!m && (Number(m[1]) > 5 || (Number(m[1]) === 5 && Number(m[2] ?? 0) >= 4));
+};
+
+/** The conversation as Responses input items. Reasoning items are not carried between calls (stateless, `store: false`). */
+const toResponsesInput = (messages: ChatMessage[]): any[] => {
+  const out: any[] = [];
+  for (const m of messages) {
+    if (m.role === "system") out.push({ role: "developer", content: m.content });
+    else if (m.role === "user") out.push({ role: "user", content: m.content });
+    else if (m.role === "assistant") {
+      if (m.content) out.push({ role: "assistant", content: m.content });
+      for (const c of m.toolCalls ?? []) out.push({ type: "function_call", call_id: c.id, name: c.name, arguments: JSON.stringify(c.input ?? {}) });
+    } else out.push({ type: "function_call_output", call_id: m.toolCallId, output: m.content });
+  }
+  return out;
+};
+
+/**
+ * A Responses stream read as Chat Completions chunks, so one reader and one
+ * pair of watchdogs (`streamed`) serve both APIs. Every event becomes a chunk
+ * — the ones that carry nothing still prove the connection is alive.
+ */
+async function* asChatChunks(events: AsyncIterable<any>): AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk> {
+  let calls = 0;
+  for await (const ev of events) {
+    if (ev.type === "response.output_text.delta" && ev.delta) yield { choices: [{ index: 0, delta: { content: ev.delta } }] } as any;
+    else if (ev.type === "response.output_item.done" && ev.item?.type === "function_call")
+      yield { choices: [{ index: 0, delta: { tool_calls: [{ index: calls++, id: ev.item.call_id, function: { name: ev.item.name, arguments: ev.item.arguments ?? "" } }] } }] } as any;
+    else if (ev.type === "response.completed" || ev.type === "response.incomplete") {
+      const u = ev.response?.usage;
+      yield {
+        model: ev.response?.model,
+        usage: u ? { prompt_tokens: u.input_tokens, completion_tokens: u.output_tokens, total_tokens: u.total_tokens, prompt_tokens_details: { cached_tokens: u.input_tokens_details?.cached_tokens } } : undefined,
+        choices: [{ index: 0, delta: {}, finish_reason: calls ? "tool_calls" : ev.type === "response.incomplete" ? "length" : "stop" }],
+      } as any;
+    } else if (ev.type === "response.failed" || ev.type === "error") throw new Error(ev.response?.error?.message ?? ev.message ?? "OpenAI response failed");
+    else yield { choices: [] } as any;
+  }
+}
 
 const toOpenAI = (m: ChatMessage): ChatCompletionMessageParam => {
   switch (m.role) {
@@ -109,10 +158,35 @@ export class OpenAIClient implements LLMClient {
       messages: opts.messages.map(toOpenAI),
       ...(tools ? { tools, tool_choice: "auto" as const } : {}),
       ...(opts.maxOutputTokens ? { max_completion_tokens: opts.maxOutputTokens } : {}),
-      ...sampling(model, 0.3),
+      ...sampling(model, 0.3, opts.reasoningEffort),
     };
 
-    const out = await this.streamed("chat", model, opts.signal, !!opts.onTextDelta, (signal) => this.api.chat.completions.create({ ...base, stream: true, stream_options: { include_usage: true } }, { signal }), opts.onTextDelta);
+    const out = needsResponses(model)
+      ? await this.streamed(
+          "chat",
+          model,
+          opts.signal,
+          !!opts.onTextDelta,
+          async (signal) =>
+            asChatChunks(
+              (await this.api.responses.create(
+                {
+                  model,
+                  input: toResponsesInput(opts.messages),
+                  ...(opts.tools?.length ? { tools: opts.tools.map((t) => ({ type: "function" as const, name: t.name, description: t.description, parameters: t.parameters, strict: false })) } : {}),
+                  ...(opts.maxOutputTokens ? { max_output_tokens: opts.maxOutputTokens } : {}),
+                  reasoning: { effort: opts.reasoningEffort ?? "low" },
+                  store: false,
+                  stream: true,
+                } as any,
+                { signal }
+              )) as any
+            ),
+          opts.onTextDelta,
+          // A reasoning model thinks in silence before its first word; that is not a stall.
+          THINKING_IDLE_MS
+        )
+      : await this.streamed("chat", model, opts.signal, !!opts.onTextDelta, (signal) => this.api.chat.completions.create({ ...base, stream: true, stream_options: { include_usage: true } }, { signal }), opts.onTextDelta);
     return { text: out.text, toolCalls: out.toolCalls, finishReason: mapFinish(out.finish, out.toolCalls.length), usage: out.usage, model: out.model };
   }
 
@@ -151,7 +225,8 @@ export class OpenAIClient implements LLMClient {
     outer: AbortSignal | undefined,
     live: boolean,
     open: (signal: AbortSignal) => Promise<AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>>,
-    onTextDelta?: (delta: string) => void
+    onTextDelta?: (delta: string) => void,
+    idleMs: number = IDLE_MS
   ) {
     const t0 = Date.now();
     for (let attempt = 1; ; attempt++) {
@@ -181,7 +256,7 @@ export class OpenAIClient implements LLMClient {
         for await (const chunk of stream) {
           if (!received) firstChunkMs = Date.now() - t0;
           received = true;
-          arm(IDLE_MS, "idle");
+          arm(idleMs, "idle");
           if (chunk.usage) usage = usageOf(chunk.usage);
           if (chunk.model) modelName = chunk.model;
           const choice = chunk.choices?.[0];
