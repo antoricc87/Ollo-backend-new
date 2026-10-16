@@ -2,7 +2,8 @@ import moment from "moment-timezone";
 import { z } from "zod";
 import { dayString, defineTool } from "./registry";
 import { isoWeekRange } from "../memory/dates";
-import { weekReviewFor } from "../../review/model/weekReview.model";
+import { weekReviewFor, weekStatFor } from "../../review/model/weekReview.model";
+import { statLine } from "../../review/domain/weekStats";
 
 /**
  * The weekly review card. The numbers, the coverage of each row and the title
@@ -23,11 +24,19 @@ export const getWeekReview = defineTool({
     const asked = input.weekOf ? isoWeekRange(ctx.timeZone, moment.tz(input.weekOf, ctx.timeZone)) : lastWeek;
     // A week still running has nothing to average yet — review the last finished one.
     const week = asked.start >= thisWeek.start ? lastWeek : asked;
-    const review = await weekReviewFor(ctx.patientId, week.start, ctx.timeZone);
+    const [review, stat] = await Promise.all([weekReviewFor(ctx.patientId, week.start, ctx.timeZone), weekStatFor(ctx.patientId, week.start, ctx.timeZone).catch(() => null)]);
     return {
       result: {
         ...(week.start !== asked.start ? { note: `That week is not over yet — this is the last finished one (${week.start} → ${week.end}).` } : {}),
         ...review,
+        ...(stat
+          ? {
+              worthKnowing: {
+                fact: statLine(stat),
+                note: "A pattern code found in their own last four weeks, not on the card. Say it once, in one sentence, with both numbers and how many days each covers. It is a difference between two averages — never say one thing causes the other, never give advice from it.",
+              },
+            }
+          : {}),
         howToRead:
           "The card already shows this table — do not recite it. A row with value null was NOT recorded enough to average: say so plainly using its `sub` line, never estimate it, never judge it and never compare it with last week. A null delta means last week had too little to compare against. Averages cover logged days only. Rows that are absent (see notJudged) had no data source this week.",
       },

@@ -1,6 +1,7 @@
 import moment from "moment-timezone";
 import prisma from "../../../utility/prismaClient";
 import { queueNotification } from "../../notifications/notifications.service";
+import { SINGLE_LINES, type DeliveryMode } from "../../notifications/gate";
 import { ProactiveKind, runProactiveCollect } from "../agent.service";
 import { audit } from "../memory/audit";
 import { isoWeekRange, safeTz } from "../memory/dates";
@@ -115,6 +116,22 @@ const TITLES: Record<ProactiveKind, string> = {
   signal: "Something changed",
   watch_out: "Something new in your labs",
   plan_week: "Next week's training",
+  missed_session: "This week, adjusted",
+  lighter_today: "A lighter option for today",
+};
+
+/**
+ * How each kind's work is announced (ruling Oct 16 2026, the digest): most
+ * wait for the morning digest; a push of its own only for work that would be
+ * stale by then. The gate still applies quiet hours and the caps to those.
+ */
+export const DELIVERY: Record<ProactiveKind, DeliveryMode> = {
+  weekly_review: "digest",
+  signal: "digest",
+  missed_session: "digest",
+  plan_week: "now", // Sunday evening — the week starts before the next digest
+  watch_out: "now", // they just uploaded the report
+  lighter_today: "now", // today's session is today
 };
 
 export async function runProactiveFor(patientId: string, kind: ProactiveKind, opts: { notify?: boolean; threadId?: string | null; instruction?: string; title?: string } = {}) {
@@ -137,9 +154,9 @@ export async function runProactiveFor(patientId: string, kind: ProactiveKind, op
     return { skipped: "failed" as const, threadId: r.threadId, error: r.error };
   }
 
-  // The push is a row in the notification outbox (docs/notifications-plan.md);
-  // the sweep delivers it. Body wording and the policy gate come with the
-  // catalogue — until then the title alone, so no health detail reaches a lock screen.
+  // The push is a row in the notification outbox; the gate (notifications/gate.ts)
+  // holds it for the morning digest or lets it through. The words name the work
+  // done, never the finding, so no health detail reaches a lock screen.
   let notified = false;
   if (opts.notify !== false) {
     try {
@@ -147,12 +164,13 @@ export async function runProactiveFor(patientId: string, kind: ProactiveKind, op
         userId: patientId,
         kind,
         title: "Ollie",
-        body: TITLES[kind],
+        body: SINGLE_LINES[kind] ?? TITLES[kind],
         route: r.threadId ? `ollie?threadId=${r.threadId}` : "ollie",
         threadId: r.threadId ?? null,
         dedupeKey: `${kind}:${r.threadId ?? "none"}`,
+        mode: DELIVERY[kind],
       });
-      notified = row.status === "queued";
+      notified = row.status === "queued" || row.status === "held";
     } catch (e) {
       console.error("proactive notify failed", e);
     }

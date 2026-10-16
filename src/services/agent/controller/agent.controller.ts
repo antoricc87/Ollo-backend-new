@@ -1,4 +1,6 @@
 import { Response } from "express";
+import { runMissedSessionFor, runLighterTodayFor } from "../proactive/tasks";
+import { runDigestFor } from "../../notifications/digest";
 import prisma from "../../../utility/prismaClient";
 import { runLabScanFor } from "../../signals/labs.service";
 import Util from "../../../utils/response";
@@ -364,9 +366,15 @@ class AgentHandler {
   async runProactive(request: any, response: Response) {
     const { id } = request.user;
     const { kind } = request.params;
-    if (!["weekly_review", "watch_out", "plan_week"].includes(kind))
-      return response.status(400).json(Util.error({}, "kind must be weekly_review | watch_out | plan_week"));
+    if (!["weekly_review", "watch_out", "plan_week", "missed_session", "lighter_today", "digest"].includes(kind))
+      return response.status(400).json(Util.error({}, "kind must be weekly_review | watch_out | plan_week | missed_session | lighter_today | digest"));
     try {
+      // Background tasks decide for themselves whether there is work; the answer says why not.
+      if (kind === "missed_session" || kind === "lighter_today") {
+        const r = kind === "missed_session" ? await runMissedSessionFor(id) : await runLighterTodayFor(id);
+        return response.status(200).json(Util.success(r, r.ran ? "Done" : `Nothing to do: ${(r as { reason: string }).reason}`));
+      }
+      if (kind === "digest") return response.status(200).json(Util.success(await runDigestFor(id), "Digest run"));
       // watch_out is no longer a free-text prompt: it re-judges the newest lab
       // report against the record and speaks only if that changed something.
       if (kind === "watch_out") {

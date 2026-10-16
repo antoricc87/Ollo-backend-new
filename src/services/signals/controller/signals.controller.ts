@@ -6,6 +6,7 @@ import { describeFinding } from "../domain/describe";
 import { domainOf } from "../domain/registry";
 import { listFindings } from "../model/findings.store";
 import { runScanFor } from "../signals.service";
+import { runLighterTodayFor } from "../../agent/proactive/tasks";
 
 /**
  * Signals — patient-scoped. Identity ALWAYS from the verified token
@@ -55,6 +56,9 @@ class SignalsHandler {
       });
       written += 1;
     }
+    // Last night just arrived — the one moment the lighter-option task can
+    // know how they slept. Fire and forget: the upload never waits on Ollie.
+    if (written) void runLighterTodayFor(patientId).catch((e) => console.error("lighter_today failed", e));
     return response.json(Util.success({ written, skipped: parsed.data.nights.length - written }, "Nights saved"));
   };
 

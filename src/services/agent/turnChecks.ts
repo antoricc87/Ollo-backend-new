@@ -97,6 +97,24 @@ const CHECKS: ((f: TurnFacts) => TurnNudge | null)[] = [
         }
       : null,
 
+  // Background tasks (Oct 16 2026): the note exists to carry the work. A note
+  // that describes a move or a lighter session without making it is a promise
+  // with nothing behind it.
+  (f) =>
+    f.proactive === "missed_session" && f.toolsCalled.indexOf("move_workout") < 0
+      ? {
+          stage: "missed_session_without_move",
+          message: "[System: you described the move without preparing it, so there is nothing to confirm. Call move_workout with the sessionId and plannedFor from the instruction, then write the note from its result.]",
+        }
+      : null,
+  (f) =>
+    f.proactive === "lighter_today" && f.toolsCalled.indexOf("generate_workout") < 0
+      ? {
+          stage: "lighter_today_without_card",
+          message: "[System: you described a lighter session without designing it, so there is no card. Call generate_workout with the date, replaceSessionId, durationMin, focus and request from the instruction, then write the note from its result.]",
+        }
+      : null,
+
   // A reply that talks about a card or asks for confirmation when no write tool
   // ran is a hallucinated proposal (seen 2026-08-27: "I've prepared a card to
   // log…" with tools=[]). Not after a generate tool: its card is real, and

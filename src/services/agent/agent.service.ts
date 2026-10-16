@@ -61,7 +61,7 @@ export type TurnInput = {
  * made the notes feel like boring reports. Signals replace it — they fire only
  * when a detector clears its bar.
  */
-export type ProactiveKind = "weekly_review" | "signal" | "watch_out" | "plan_week";
+export type ProactiveKind = "weekly_review" | "signal" | "watch_out" | "plan_week" | "missed_session" | "lighter_today";
 
 export type ProactiveInput = {
   patientId: string;

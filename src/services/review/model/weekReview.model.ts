@@ -2,6 +2,8 @@ import moment from "moment-timezone";
 import prisma from "../../../utility/prismaClient";
 import { BASELINE_NIGHTS, baselineOf, STD_FLOOR } from "../../signals/domain/baseline";
 import { buildWeekReview, Range, WeekData, WeekReview } from "../domain/weekReview";
+import { pickStat, WINDOW_DAYS, weekStats, type WeekStat } from "../domain/weekStats";
+import { collect } from "../../signals/model/collect";
 
 /**
  * Reads one ISO week and the one before it, and hands them to the pure
@@ -99,4 +101,25 @@ export async function weekReviewFor(patientId: string, weekStart: string, timeZo
     hasNights: !!anyNight,
     weightUnit,
   });
+}
+
+/**
+ * The one number worth knowing (review/domain/weekStats.ts) for the four
+ * weeks ending `weekEnd`, never last week's again. Remembered in
+ * AgentPreference.taskRuns.week_stat as "<weekStart>|<key>": asked twice in
+ * the same week it gives the same answer; next week it moves on.
+ */
+export async function weekStatFor(patientId: string, weekStart: string, timeZone: string): Promise<WeekStat | null> {
+  const weekEnd = shift(weekStart, 6);
+  const input = await collect(patientId, weekEnd, timeZone, WINDOW_DAYS + 7);
+  const pref = await prisma.agentPreference.findUnique({ where: { patientId }, select: { taskRuns: true } });
+  const runs = (pref?.taskRuns ?? {}) as Record<string, string>;
+  const [week, key] = (runs.week_stat ?? "").split("|");
+  const stats = weekStats({ nights: input.nights, days: input.days, workouts: input.workouts, from: shift(weekEnd, -(WINDOW_DAYS - 1)), to: weekEnd });
+  const picked = week === weekStart ? (stats.find((s) => s.key === key) ?? null) : pickStat(stats, key || null);
+  if (picked && week !== weekStart) {
+    const next = { ...runs, week_stat: `${weekStart}|${picked.key}` };
+    await prisma.agentPreference.upsert({ where: { patientId }, create: { patientId, taskRuns: next }, update: { taskRuns: next } });
+  }
+  return picked;
 }

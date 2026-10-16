@@ -1324,6 +1324,9 @@ model AgentPreference {
   lastDailyCheckinAt  DateTime?
   lastWeeklyReviewAt  DateTime?
   lastPlanWeekAt      DateTime?
+  /// Background tasks (Oct 2026): what each one last acted on, so a rerun of
+  /// the same tick does not act twice — { missed_session: <session id>, lighter_today: "YYYY-MM-DD" }.
+  taskRuns            Json?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 }

@@ -1083,6 +1083,61 @@ earliest one 14–30 days before it, loss or gain, worded in the unit last used;
 it fires under a weight-loss plan too and says the plan aims for loss. The 5%
 bar is drafted — clinical review. Tests `signals/tests/weight.test.ts`.
 
+## Background tasks + the morning digest (Oct 16 2026)
+
+Ruling: Ollie does work unasked, leaves it READY in the app, and the push names
+the work done. "Go with the digest", first build = the gate + three tasks.
+Defaults taken without his answer (say so if asked): drafts only — every task
+ends in a proposal or a draft card, nothing is saved; a push names the work,
+never a symptom, finding or lab value.
+
+- **Gate** `notifications/gate.ts` (pure): Ollie's kinds (`AGENT_KINDS`) pass it
+  inside `queueNotification`; messages from people (bookings, care team) never
+  do. `mode: "digest"` → row `held`; `now` → pushed, but quiet hours
+  21:30–07:30 local move it to 07:30, and over `DAILY_CAP` 1 / `WEEKLY_CAP` 5
+  it is `held` instead (rides the next digest). `proactive.service DELIVERY`:
+  digest = weekly_review, signal, missed_session; now = plan_week (Sunday 18:00),
+  watch_out (just uploaded), lighter_today (today's session).
+- **Digest** `notifications/digest.ts`: the hourly tick, at 09:00 local, AFTER
+  the morning tasks and the signal scan: held rows whose note was already
+  opened drop out (`merged`/`seen`); the rest become ONE `digest` row (one item
+  → its own line, opens its note; several → "Ready for you: a, b and c.",
+  opens `ollie/ready`); held rows → `merged` / `digest:<id>`. The digest is
+  exempt from the daily cap (worst case 2 pushes a day), counts to the weekly.
+- **Task 1 — missed session → moved** `agent/proactive/tasks.ts
+  runMissedSessionFor`, pure rule `workouts/design/reschedule.ts`: yesterday's
+  day in the ACTIVE saved week is `missed` (nothing else trained that day) →
+  the earliest free day from today to the week's end, preferring rest on both
+  sides, else neighbours training different muscles (word overlap; untagged
+  overlaps all); none → silent. The agent calls `move_workout` (proposal).
+- **Task 2 — low recovery → lighter today** `runLighterTodayFor`, rule
+  `signals/domain/lastNight.ts`: runs on `POST /signals/nightly` (nights only
+  reach the server when the app opens — no clock can know last night), only if
+  today has a PLANNED session whose time has not passed, ≥25 min, not mobility,
+  nothing done today, and last night's HRV ≥1 SD below or sleeping HR ≥1 SD
+  above their usual (same baselines/cut-off as the readiness card's labels).
+  The agent calls `generate_workout` with `replaceSessionId`, ~70% length; the
+  original stays unless they tap Put in plan.
+- **Task 3 — one number worth knowing** `review/domain/weekStats.ts` +
+  `weekStatFor` (review model): 28 days, two groups of their own days (sleep
+  and HRV after training vs rest days, protein training vs rest days, calories
+  and sleep weekend vs weekdays), each with minimum days per group and a bar;
+  strongest one that was not last week's → `get_week_review` result
+  `worthKnowing`; the prompt says one sentence, never a cause or advice.
+- Idempotency: `AgentPreference.taskRuns` Json (additive column) —
+  `missed_session` = session id, `lighter_today` = date, `week_stat` =
+  "<weekStart>|<key>". Training tasks obey `planWeekEnabled`.
+- Prompt sections `missed_session` / `lighter_today` in `prompt/system.ts`;
+  turn guards `missed_session_without_move` / `lighter_today_without_card` (the
+  first local run DID describe the move without calling the tool — the guard
+  made it).
+- Dev: `POST /api/agent/proactive/{missed_session|lighter_today|digest}` runs it
+  for the caller and says why not. Tests `tests/agent/backgroundTasks.test.ts`.
+- Not built from the proposal: food tasks (week's meals + groceries, yesterday
+  filled in), screening → booking held, check-in follow-up, visit prep, monthly
+  report; HealthKit background delivery (would let task 2 run before the app
+  opens); per-area switches beyond `planWeekEnabled`.
+
 ## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`
 
 "How much of it" as ONE coarse choice per meal (light | normal | hearty | lots)
