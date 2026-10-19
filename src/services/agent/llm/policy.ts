@@ -42,7 +42,7 @@ export type Task =
   /** Checking a result against what was asked. */
   | "review";
 
-export type Tier = "default" | "fast";
+export type Tier = "default" | "fast" | "flex";
 export type Route = { model: string; effort: Effort; escalate: { model: string; effort: Effort } | null; tier: Tier };
 
 const LUNA = "gpt-6-luna";
@@ -101,8 +101,9 @@ export const route = (task: Task, env: Record<string, string | undefined> = proc
   if (escalate && NO_NONE.test(escalate.model) && escalate.effort === "none") escalate = { ...escalate, effort: "low" };
   // Sol and Astra refuse effort "none" (400, Oct 19 2026): never send it to them.
   if (NO_NONE.test(chosen.model) && chosen.effort === "none") chosen = { ...chosen, effort: "low" };
-  const tierEnv = env[`${key}_TIER`]?.trim();
-  const tier: Tier = tierEnv === "fast" || tierEnv === "default" ? tierEnv : base.tier ?? "default";
+  // LLM_TIER sets every task at once (tests run on "flex": half price, slower, fine when nobody waits).
+  const tierEnv = (env[`${key}_TIER`] ?? env.LLM_TIER)?.trim();
+  const tier: Tier = tierEnv === "fast" || tierEnv === "default" || tierEnv === "flex" ? tierEnv : base.tier ?? "default";
   return { model: chosen.model, effort: chosen.effort, escalate: escalate && escalate.model !== chosen.model ? escalate : null, tier };
 };
 
@@ -110,5 +111,5 @@ export const route = (task: Task, env: Record<string, string | undefined> = proc
 export const policyTable = (env: Record<string, string | undefined> = process.env) =>
   (Object.keys(DEFAULTS) as Task[]).map((t) => {
     const r = route(t, env);
-    return `${t}=${r.model}:${r.effort}${r.tier === "fast" ? "(fast)" : ""}${r.escalate ? `→${r.escalate.model}:${r.escalate.effort}` : ""}`;
+    return `${t}=${r.model}:${r.effort}${r.tier !== "default" ? `(${r.tier})` : ""}${r.escalate ? `→${r.escalate.model}:${r.escalate.effort}` : ""}`;
   });

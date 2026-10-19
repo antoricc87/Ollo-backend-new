@@ -28,6 +28,12 @@ const IDLE_MS = Number(process.env.AGENT_LLM_IDLE_MS || 30_000);
 const SLOW_LOG_MS = 15_000;
 const THINKING_IDLE_MS = Number(process.env.AGENT_LLM_THINKING_IDLE_MS || 120_000);
 
+/** OpenAI's "your prompt was flagged as potentially violating our usage policy" 400 — a refusal, not a bug in the request. */
+export const isFlaggedPrompt = (e: unknown) => {
+  const err = e as { status?: number; message?: string; code?: string };
+  return err?.status === 400 && /flagged as potentially violating|invalid_prompt/i.test(`${err.code ?? ""} ${err.message ?? ""}`);
+};
+
 class LLMStalled extends Error {
   constructor(readonly phase: "first_chunk" | "idle", readonly afterMs: number) {
     super(`OpenAI stream stalled (${phase === "first_chunk" ? "no response" : "no data"} for ${Math.round(afterMs / 1000)} s)`);
@@ -165,11 +171,12 @@ export class OpenAIClient implements LLMClient {
       ...(tools ? { tools, tool_choice: "auto" as const } : {}),
       ...(opts.maxOutputTokens ? { max_completion_tokens: opts.maxOutputTokens } : {}),
       ...sampling(model, 0.3, effort),
-      ...(r.tier === "fast" ? { service_tier: "fast" as any } : {}),
+      ...(r.tier !== "default" ? { service_tier: r.tier as any } : {}),
       ...(opts.cacheKey ? { prompt_cache_key: opts.cacheKey } : {}),
     };
 
-    const out = needsResponses(model)
+    const run = async () =>
+      needsResponses(model)
       ? await this.streamed(
           "chat",
           model,
@@ -184,7 +191,7 @@ export class OpenAIClient implements LLMClient {
                   ...(opts.tools?.length ? { tools: opts.tools.map((t) => ({ type: "function" as const, name: t.name, description: t.description, parameters: t.parameters, strict: false })) } : {}),
                   ...(opts.maxOutputTokens ? { max_output_tokens: opts.maxOutputTokens } : {}),
                   reasoning: { effort: effort as "low" },
-                  ...(r.tier === "fast" ? { service_tier: "fast" } : {}),
+                  ...(r.tier !== "default" ? { service_tier: r.tier } : {}),
                   ...(opts.cacheKey ? { prompt_cache_key: opts.cacheKey } : {}),
                   store: false,
                   stream: true,
@@ -197,6 +204,15 @@ export class OpenAIClient implements LLMClient {
           THINKING_IDLE_MS
         )
       : await this.streamed("chat", model, opts.signal, !!opts.onTextDelta, (signal) => this.api.chat.completions.create({ ...base, stream: true, stream_options: { include_usage: true } }, { signal }), opts.onTextDelta);
+    let out: Awaited<ReturnType<typeof run>>;
+    try {
+      out = await run();
+    } catch (e) {
+      // The same filter refusal as in json(): one more try before the turn fails (no text reached the user yet).
+      if (!isFlaggedPrompt(e) || opts.signal?.aborted) throw e;
+      console.warn(`[llm] ${opts.task ?? "converse"}: prompt refused by OpenAI's filter on ${model} → one retry`);
+      out = await run();
+    }
     return { text: out.text, toolCalls: out.toolCalls, finishReason: mapFinish(out.finish, out.toolCalls.length), usage: out.usage, model: out.model };
   }
 
@@ -227,7 +243,7 @@ export class OpenAIClient implements LLMClient {
               },
               stream: true,
               ...sampling(model, 0, effort),
-              ...(r.tier === "fast" ? { service_tier: "fast" as any } : {}),
+              ...(r.tier !== "default" ? { service_tier: r.tier as any } : {}),
             },
             { signal }
           ),
@@ -246,6 +262,14 @@ export class OpenAIClient implements LLMClient {
     try {
       first = await once(model, effort);
     } catch (e) {
+      // OpenAI's prompt filter sometimes refuses an ordinary request outright (seen Oct 19 2026: a meal
+      // suggestion with the same context passed on the next request). One more try — on the escalation
+      // model when the task has one — before the error surfaces.
+      if (isFlaggedPrompt(e)) {
+        const retry = escalate ?? { model, effort };
+        console.warn(`[llm] ${opts.task} ${opts.schemaName}: prompt refused by OpenAI's filter on ${model} → retry on ${retry.model}`);
+        return once(retry.model, retry.effort);
+      }
       if (!escalate || !(e instanceof SyntaxError || (e as any)?.name === "ZodError")) throw e;
       console.warn(`[llm] escalate ${opts.task} ${opts.schemaName}: ${model} gave no usable JSON (${(e as Error).message.slice(0, 120)}) → ${escalate.model}`);
       return once(escalate.model, escalate.effort);
