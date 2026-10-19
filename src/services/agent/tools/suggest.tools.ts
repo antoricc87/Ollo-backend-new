@@ -1,6 +1,5 @@
 import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
-import { withTheirWords } from "./registry";
 import { getLLM } from "../llm/openai.client";
 import { analyzeDesignedMeal, analyzeMeal } from "../../meal_analysis/mealAnalysis.service";
 import { FOOD_GROUPS, MEAL_TYPES } from "../../meal_analysis/mealAnalysis.schema";
@@ -110,7 +109,9 @@ export const suggestMeal = defineTool({
         mealType,
         aim: { calories: aimKcal, protein_g: aimProtein },
         today: { eatenKcal, eatenProtein_g: eatenProtein, kcalLeft, proteinLeft_g: proteinLeft, dailyTargets: t },
-        request: withTheirWords(input.request, ctx),
+        // Not their whole message: the food they already have arrives verbatim in `keep`, and with the full
+        // sentence beside it the designer re-planned that food as part of its own meal (Oct 19 2026).
+        request: input.request ?? null,
         ...(kept.length ? { kept: { foods: keptText, calories: keptKcal, protein_g: keptProtein }, aimForAdditions: { calories: Math.max(0, aimKcal - keptKcal), protein_g: Math.max(0, r0(aimProtein - keptProtein)) } } : {}),
         ...(planSlot ? { replacing: { name: planSlot.replaces, calories: planSlot.calories, protein_g: planSlot.proteins } } : {}),
         context,
