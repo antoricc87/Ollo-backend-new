@@ -152,6 +152,30 @@ export function favoriteMeal(
   return { meal, unmatched };
 }
 
+/**
+ * A meal they ALREADY LOGGED, eaten again ("the same as lunch", "same as yesterday's breakfast" — Oct 19
+ * 2026: the logger re-estimated "chicken salad with rice" at 810 kcal when lunch was logged at 520).
+ * The entry's stored ingredient rows are copied exactly like a saved meal's, with the same remove / add /
+ * portion handling; `rows` are its MealIngredient rows (or the one-item fallback for entries logged before
+ * ingredients were stored). The saved-meal tag is dropped: a copy is not a favourite. Pure.
+ */
+export const CopyRefSchema = FavoriteRefSchema.omit({ favoriteId: true }).extend({
+  entryId: z.string().min(1).describe("id of the logged meal to copy, from get_meals"),
+});
+export type CopyRef = z.infer<typeof CopyRefSchema>;
+
+export function copiedMeal(
+  entry: { id: string; description: string; mealType: string | null },
+  rows: any[],
+  ref: CopyRef,
+  today: string,
+  added: AnalyzedIngredient[] = []
+): { meal: BatchMeal; unmatched: string[] } {
+  const asStored: StoredFavorite = { id: entry.id, userId: "", description: entry.description, mealType: ref.mealType ?? entry.mealType ?? "SNACK", slot: null, ingredients: rows };
+  const { meal, unmatched } = favoriteMeal(asStored, { ...ref, favoriteId: entry.id, mealType: ref.mealType ?? (entry.mealType as FavoriteRef["mealType"]) ?? undefined }, today, added);
+  return { meal: { ...meal, favorite: null }, unmatched };
+}
+
 /** One line per saved meal for the agent snapshot: id, name, slot, kcal, ingredient names. */
 export function favoriteLine(f: { id: string; description: string; mealType: string; slot: string | null; calories: number | null; ingredients: { name: string }[] }): string {
   const slot = f.slot ? `usual ${f.slot.toLowerCase()}` : f.mealType.toLowerCase();

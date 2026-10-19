@@ -23,7 +23,8 @@ import { PORTION_STOPS, type AnalyzedIngredient } from "../../meal_analysis/meal
 import { glycemicLoad } from "../../meal_analysis/mealAnalysis.rules";
 import { DEFAULT_PORTION_STOP } from "../../meal_analysis/mealPortion";
 import { analyzeMeal } from "../../meal_analysis/mealAnalysis.service";
-import { favoriteMeal, FavoriteRefSchema, type FavoriteRef, type StoredFavorite } from "../../meal_analysis/mealFavorite";
+import { copiedMeal, CopyRefSchema, favoriteMeal, FavoriteRefSchema, type CopyRef, type FavoriteRef, type StoredFavorite } from "../../meal_analysis/mealFavorite";
+import { ingredientsFromFoodEntries } from "../../nutrition/model/favMealIngredients";
 import { FAV_MEAL_INCLUDE } from "../../nutrition/model/favMealIngredients";
 import CaloriesService from "../../calories_tracker/model/calories.model";
 import WeightService from "../../weight_tracker/model/weight.model";
@@ -114,9 +115,14 @@ const LogMealSchema = z
       .max(10)
       .optional()
       .describe("Saved meals the user named ('my usual breakfast', a saved meal's name) — one entry each, with what was different this time. Leave those meals OUT of `description`."),
+    copies: z
+      .array(CopyRefSchema)
+      .max(10)
+      .optional()
+      .describe("Meals they ALREADY LOGGED and ate again ('the same as lunch', 'same as yesterday's breakfast', 'same as last time'): the logged meal's id from get_meals, with the day / meal it is for now and what was different. Its logged numbers are copied as-is — never re-describe it. Leave it OUT of `description`."),
     subjectId: subjectField,
   })
-  .refine((v) => (v.description?.trim().length ?? 0) >= 3 || !!v.fill || !!v.favorites?.length, { message: "describe what was eaten, pass favorites, or pass fill" });
+  .refine((v) => (v.description?.trim().length ?? 0) >= 3 || !!v.fill || !!v.favorites?.length || !!v.copies?.length, { message: "describe what was eaten, pass favorites or copies, or pass fill" });
 
 type LogMealInput = z.infer<typeof LogMealSchema>;
 
@@ -151,6 +157,37 @@ async function expandFavorites(refs: FavoriteRef[], subjectId: string, today: st
   return { meals, notes };
 }
 
+/**
+ * Logged meals the agent named to copy, from their stored rows (copiedMeal). Only entries of this
+ * subject are read; unknown ids come back as notes — never guessed.
+ */
+async function expandCopies(refs: CopyRef[], subjectId: string, today: string) {
+  if (!refs.length) return { meals: [] as BatchMeal[], notes: [] as string[] };
+  const ids = [...new Set(refs.map((r) => r.entryId))];
+  const rows = await prisma.foodEntry.findMany({ where: { id: { in: ids }, dailyFood: { userId: subjectId } }, include: { ingredients: { orderBy: { sortOrder: "asc" } } } });
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const notes: string[] = [];
+  const meals: BatchMeal[] = [];
+  await Promise.all(
+    refs.map(async (ref) => {
+      const entry = byId.get(ref.entryId);
+      if (!entry) return void notes.push(`No logged meal with id ${ref.entryId} for them — call get_meals for the day and use one of its ids.`);
+      if (ref.date && ref.date > today) return void notes.push(`"${entry.description}": ${ref.date} is in the future.`);
+      const ingredientRows = ingredientsFromFoodEntries([entry as any]);
+      if (!ingredientRows.length) return void notes.push(`"${entry.description}" has nothing stored to copy — describe it instead.`);
+      const mealType = ref.mealType ?? entry.mealType ?? undefined;
+      const added = ref.add
+        ? (await analyzeMeal({ text: ref.add, mealTypeHint: mealType, todayLocal: today }, { patientId: subjectId })).meals.flatMap((m) => m.ingredients ?? [])
+        : [];
+      if (ref.add && !added.length) notes.push(`Couldn't identify any food in "${ref.add}" — ask what they added.`);
+      const { meal, unmatched } = copiedMeal(entry, ingredientRows, ref, today, added);
+      if (unmatched.length) notes.push(`"${entry.description}" has no ${unmatched.map((u) => `"${u}"`).join(", ")} to leave out — its ingredients: ${ingredientRows.map((i: any) => i.name).join(", ")}.`);
+      meals.push(meal);
+    })
+  );
+  return { meals, notes };
+}
+
 /** Analyse, date, de-duplicate and fill — shared by run and the no-preview commit path. */
 async function prepareMeals(ctx: ToolContext, input: LogMealInput, subjectId: string) {
   const text = input.description?.trim() ?? "";
@@ -167,18 +204,19 @@ async function prepareMeals(ctx: ToolContext, input: LogMealInput, subjectId: st
       : Promise.resolve([] as UsualDay[]),
     expandFavorites(input.favorites ?? [], subjectId, ctx.today),
   ]);
-  const named = [...analysis.meals, ...saved.meals];
+  const copied = await expandCopies(input.copies ?? [], subjectId, ctx.today);
+  const named = [...analysis.meals, ...saved.meals, ...copied.meals];
   const existing = await existingMealsByDay(subjectId, [...new Set([...named.map((m) => m.date), ...fillDays])]);
   const described = markDuplicates(named, existing);
   const fills = planFills(usual, fillDays, existing, described);
   const meals = [...described, ...fills].sort((a, b) => (a.date === b.date ? MEAL_ORDER[a.mealType] - MEAL_ORDER[b.mealType] : a.date < b.date ? -1 : 1));
-  return { analysis, usual, fillDays, fills, existing, meals, favoriteNotes: saved.notes, model: analysis.model || (saved.meals.length ? "saved-meal" : "") };
+  return { analysis, usual, fillDays, fills, existing, meals, favoriteNotes: [...saved.notes, ...copied.notes], model: analysis.model || (saved.meals.length ? "saved-meal" : copied.meals.length ? "copied" : "") };
 }
 
 export const logMeal = defineTool({
   name: "log_meal",
   description:
-    "Log food the user ate (their own or a family member's) — a single meal, several days ('yesterday I had…, Tuesday dinner was…'), or a catch-up over days they never logged. Pass the user's words verbatim in ONE call: foods, portions, brand names and every day/time reference. For a catch-up, `fill` puts their normal day on every empty slot in the window, so they only describe the days that were different. The tool analyses everything into dated meals with calories and macros and returns a PREVIEW the user confirms in the app (ticking meals or whole days on/off, editing portions) before anything is saved. Meals whose day it cannot pin down come back as heldBack: ask the user which day and call the tool again for those with `date` set. When they name a SAVED meal (snapshot 'saved meals': its name, an alias, or 'my usual <meal>' for one saved as usual), pass it in `favorites` instead of describing it — its stored numbers are logged as-is, with `remove` / `add` / `portion` for what was different this time; anything else they ate goes in `description` in the same call. Do not call it for hypothetical meals or meal ideas.",
+    "Log food the user ate (their own or a family member's) — a single meal, several days ('yesterday I had…, Tuesday dinner was…'), or a catch-up over days they never logged. Pass the user's words verbatim in ONE call: foods, portions, brand names and every day/time reference. For a catch-up, `fill` puts their normal day on every empty slot in the window, so they only describe the days that were different. The tool analyses everything into dated meals with calories and macros and returns a PREVIEW the user confirms in the app (ticking meals or whole days on/off, editing portions) before anything is saved. Meals whose day it cannot pin down come back as heldBack: ask the user which day and call the tool again for those with `date` set. When they name a SAVED meal (snapshot 'saved meals': its name, an alias, or 'my usual <meal>' for one saved as usual), pass it in `favorites` instead of describing it — its stored numbers are logged as-is, with `remove` / `add` / `portion` for what was different this time; anything else they ate goes in `description` in the same call. When they ate something they ALREADY LOGGED again ('the same as lunch', 'same as yesterday'), pass it in `copies` with its id from get_meals — copied as-is, same options. Do not call it for hypothetical meals or meal ideas.",
   schema: LogMealSchema,
   risk: "write",
   applyPreviewEdits: applyMealEdits,
