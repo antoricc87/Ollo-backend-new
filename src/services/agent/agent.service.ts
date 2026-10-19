@@ -305,6 +305,8 @@ async function* runLoop(p: {
   let usedTools = false;
   let nudged = false;
   const toolsCalled: string[] = [];
+  /** One question per reply (ToolOutcome.question). */
+  let askedThisTurn = false;
   let assessRejected: string | null = null;
 
   try {
@@ -398,6 +400,16 @@ async function* runLoop(p: {
             yield { type: "proposal", proposalId: pr.id, toolName: call.name, title: pr.title, summary: pr.summary, preview: pr.preview, expiresAt: pr.expiresAt.toISOString() };
             yield { type: "card", card };
             modelResult = { proposed: true, proposalId: pr.id, summary: pr.summary, preview: out.result, note: "NOT saved yet — the user must confirm the card. Tell them what you prepared and ask them to confirm; do not say it is logged/sent/booked." };
+          }
+        }
+        // A tool asking something back (ToolOutcome.question): one rule for every tool.
+        if (out.ok && out.question) {
+          const base = (modelResult && typeof modelResult === "object" ? modelResult : { result: modelResult }) as Record<string, unknown>;
+          if (p.proactive) modelResult = { ...base, note: "Nobody is there to answer a question on this run: take the likeliest reading, say it in one clause, and carry on." };
+          else if (askedThisTurn) modelResult = { ...base, note: `Another question is already being asked in this reply — do not ask this one now (${out.question.text}); it waits for their answer.` };
+          else {
+            askedThisTurn = true;
+            modelResult = { ...base, askThis: out.question.text, note: `Ask exactly this ONE question, in your own words and one sentence — nothing else for this part of the request. When they answer, ${out.question.resumeWith}` };
           }
         }
         let content = JSON.stringify(modelResult);

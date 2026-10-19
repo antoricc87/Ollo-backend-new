@@ -207,10 +207,10 @@ export const logWorkout = defineTool({
       );
       if (m.kind === "ambiguous")
         return {
-          result: {
-            needsChoice: true,
-            message: "Several watch workouts on that day could be this session — ask the user which one, then call log_workout again with watchExternalId.",
-            candidates: m.candidates.map((w) => ({ watchExternalId: w.externalId, label: watchLine(w, tz) })),
+          result: { needsChoice: true, candidates: m.candidates.map((w) => ({ watchExternalId: w.externalId, label: watchLine(w, tz) })) },
+          question: {
+            text: `Which of these watch workouts was it: ${m.candidates.map((w) => watchLine(w, tz)).join("; ")}?`,
+            resumeWith: "call log_workout again with that workout's watchExternalId from `candidates`.",
           },
         };
       if (m.kind !== "none") {

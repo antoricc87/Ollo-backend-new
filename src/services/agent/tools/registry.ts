@@ -63,6 +63,13 @@ export type ToolOutcome = {
    */
   facts?: string;
   /**
+   * R3 "Ask" (docs/ollie-request-handling-plan.md, Oct 2026): the ONE way a tool asks something back.
+   * The tool builds the question in code (`text`) and says how to carry on once it is answered
+   * (`resumeWith`); the loop handles it the same for every tool — Ollie asks exactly it, at most one
+   * question per turn, and on a proactive run (nobody to answer) the likeliest reading is taken instead.
+   */
+  question?: { text: string; resumeWith: string };
+  /**
    * A write the card's own button performs ("Log it"). Prepared here from the
    * exact numbers the card shows; the loop stores it as a pending proposal
    * WITHOUT a proposal card and stamps its id on `cards[card]` as

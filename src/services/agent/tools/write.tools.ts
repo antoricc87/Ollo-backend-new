@@ -188,6 +188,12 @@ async function expandCopies(refs: CopyRef[], subjectId: string, today: string) {
   return { meals, notes };
 }
 
+/** The day question for meals whose day the words did not pin down — asked back through ToolOutcome.question. */
+export const heldBackQuestion = (held: { name: string; whenSaid: string }[]) => ({
+  text: `Which day did you have ${held.map((h) => `the ${h.name.toLowerCase()}${h.whenSaid ? ` ("${h.whenSaid}")` : ""}`).join(" and ")}?`,
+  resumeWith: "call log_meal again for those meals only, with `date` set and the same description.",
+});
+
 /** Analyse, date, de-duplicate and fill — shared by run and the no-preview commit path. */
 async function prepareMeals(ctx: ToolContext, input: LogMealInput, subjectId: string) {
   const text = input.description?.trim() ?? "";
@@ -237,11 +243,8 @@ export const logMeal = defineTool({
 
     if (!meals.length) {
       return {
-        result: {
-          proposed: false,
-          heldBack: analysis.heldBack,
-          note: "Nothing proposed: I couldn't tell which day these were eaten. Ask the user which day, then call log_meal again with `date` set and the description below.",
-        },
+        result: { proposed: false, heldBack: analysis.heldBack },
+        question: heldBackQuestion(analysis.heldBack),
       };
     }
     const forWhom = subject.isSelf ? "" : ` for ${subject.name}`;
@@ -275,11 +278,12 @@ export const logMeal = defineTool({
             }
           : {}),
         ...(duplicates ? { note: `${duplicates} meal(s) look already logged for that slot and are unticked by default — mention it briefly; the user can tick them back.` } : {}),
-        ...(analysis.heldBack.length ? { heldBack: analysis.heldBack, heldBackNote: "Not in the card: I couldn't tell which day. Ask the user, then call log_meal again with `date` and the description given." } : {}),
-        ...(Object.keys(missing).length ? { missingSlots: missing, missingNote: "Slots with nothing logged or proposed. Ask about at most one, only if it seems useful; never invent meals." } : {}),
+        ...(analysis.heldBack.length ? { heldBack: analysis.heldBack, heldBackNote: "Not in the card: the day is the question asked back (askThis)." } : {}),
+        ...(Object.keys(missing).length ? { missingSlots: missing, missingNote: "Slots with nothing logged or proposed. You may offer to log one at the end — an offer, not a question that holds the log; never invent meals." } : {}),
         ...(favoriteNotes.length ? { savedMealNotes: favoriteNotes } : {}),
       },
       proposal: { title, summary, preview },
+      ...(analysis.heldBack.length ? { question: heldBackQuestion(analysis.heldBack) } : {}),
     };
   },
   async commit(ctx, input, rawPreview: any) {
