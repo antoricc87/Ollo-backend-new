@@ -1,3 +1,5 @@
+import type { Effort, Task } from "./policy";
+
 /**
  * Provider-neutral LLM surface used by the agent loop. Keep this small so a
  * second provider is a one-file adapter, not a rewrite.
@@ -35,9 +37,12 @@ export type ChatOptions = {
   /** Called with text deltas as they stream. Omit for a non-streaming call. */
   onTextDelta?: (delta: string) => void;
   maxOutputTokens?: number;
+  /** The kind of work (llm/policy.ts) — it picks the model and the thinking. Default "converse". */
+  task?: Task;
+  /** Only to compare models in an eval; production code names a task instead. */
   model?: string;
-  /** Reasoning models only: how hard to think (default low). Ignored by the others. */
-  reasoningEffort?: "low" | "medium" | "high";
+  /** Overrides the task's thinking level (reasoning models only). */
+  reasoningEffort?: Effort;
   signal?: AbortSignal;
 };
 
@@ -47,7 +52,18 @@ export type JsonOptions<T> = {
   /** JSON Schema the model must satisfy; the adapter parses and returns it. */
   schema: Record<string, unknown>;
   schemaName: string;
+  /** The kind of work (llm/policy.ts) — it picks the model, the thinking and the escalation. */
+  task: Task;
+  /** Only to compare models in an eval; production code names a task instead. */
   model?: string;
+  reasoningEffort?: Effort;
+  /** Images to read with the text (data: URLs or https), for extract_vision. */
+  images?: string[];
+  /**
+   * The caller's own check of the result: true, or why it fails. When it fails (or the reply is not
+   * valid JSON) and the task has an escalation model, the same call runs once more there.
+   */
+  accept?: (value: T) => true | string;
   parse?: (raw: unknown) => T;
   signal?: AbortSignal;
 };

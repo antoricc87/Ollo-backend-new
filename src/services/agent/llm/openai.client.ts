@@ -2,15 +2,15 @@ import "dotenv/config";
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { ChatMessage, ChatOptions, ChatResult, JsonOptions, LLMClient, ToolCallRequest, Usage } from "./types";
+import { policyTable, route, type Effort } from "./policy";
+
+export type { Effort } from "./policy";
 
 /**
- * OpenAI adapter (Chat Completions, streaming, function tools).
- *   AGENT_MODEL       orchestration model   (default gpt-4.1)
- *   AGENT_FAST_MODEL  classifier/summarizer (default gpt-4.1-mini)
+ * OpenAI adapter (Chat Completions / Responses, streaming, function tools).
+ * Which model runs is NOT decided here or by callers: every call names a task and llm/policy.ts
+ * resolves it (R1, Oct 19 2026).
  */
-
-const DEFAULT_MODEL = process.env.AGENT_MODEL || "gpt-4.1";
-const FAST_MODEL = process.env.AGENT_FAST_MODEL || "gpt-4.1-mini";
 
 /**
  * Deadlines (Sep 28 2026). The client had the SDK defaults — 10 min per
@@ -34,11 +34,11 @@ class LLMStalled extends Error {
   }
 }
 
-const isReasoningModel = (model: string) => /^(o\d|gpt-5)/i.test(model) && !/chat/i.test(model);
+export const isReasoningModel = (model: string) => /^(o\d|gpt-([5-9]|\d{2}))/i.test(model) && !/chat/i.test(model);
 
-/** Chat Completions spells the reasoning knob `reasoning_effort`; others take temperature. */
-const sampling = (model: string, temperature: number, effort: "low" | "medium" | "high" = "low") =>
-  isReasoningModel(model) ? { reasoning_effort: effort } : { temperature };
+/** Chat Completions spells the reasoning knob `reasoning_effort`; others take temperature. "none" is newer than the SDK's types. */
+const sampling = (model: string, temperature: number, effort: Effort = "low") =>
+  isReasoningModel(model) ? { reasoning_effort: effort as "low" } : { temperature };
 
 /**
  * Chat Completions refuses function tools together with reasoning for gpt-5.4
@@ -131,8 +131,12 @@ const usageOf = (u: OpenAI.CompletionUsage | null | undefined): Usage | null =>
     : null;
 
 export class OpenAIClient implements LLMClient {
-  readonly defaultModel = DEFAULT_MODEL;
-  readonly fastModel = FAST_MODEL;
+  get defaultModel() {
+    return route("converse").model;
+  }
+  get fastModel() {
+    return route("summarize").model;
+  }
   private client: OpenAI | null = null;
 
   private get api() {
@@ -146,7 +150,9 @@ export class OpenAIClient implements LLMClient {
   }
 
   async chat(opts: ChatOptions): Promise<ChatResult> {
-    const model = opts.model || this.defaultModel;
+    const r = route(opts.task ?? "converse");
+    const model = opts.model || r.model;
+    const effort = opts.reasoningEffort ?? r.effort;
     const tools: ChatCompletionTool[] | undefined = opts.tools?.length
       ? opts.tools.map((t) => ({
           type: "function",
@@ -158,7 +164,7 @@ export class OpenAIClient implements LLMClient {
       messages: opts.messages.map(toOpenAI),
       ...(tools ? { tools, tool_choice: "auto" as const } : {}),
       ...(opts.maxOutputTokens ? { max_completion_tokens: opts.maxOutputTokens } : {}),
-      ...sampling(model, 0.3, opts.reasoningEffort),
+      ...sampling(model, 0.3, effort),
     };
 
     const out = needsResponses(model)
@@ -175,7 +181,7 @@ export class OpenAIClient implements LLMClient {
                   input: toResponsesInput(opts.messages),
                   ...(opts.tools?.length ? { tools: opts.tools.map((t) => ({ type: "function" as const, name: t.name, description: t.description, parameters: t.parameters, strict: false })) } : {}),
                   ...(opts.maxOutputTokens ? { max_output_tokens: opts.maxOutputTokens } : {}),
-                  reasoning: { effort: opts.reasoningEffort ?? "low" },
+                  reasoning: { effort: effort as "low" },
                   store: false,
                   stream: true,
                 } as any,
@@ -191,27 +197,66 @@ export class OpenAIClient implements LLMClient {
   }
 
   async json<T = unknown>(opts: JsonOptions<T>): Promise<T> {
-    const model = opts.model || this.fastModel;
-    const out = await this.streamed(`json:${opts.schemaName}`, model, opts.signal, false, (signal) =>
-      this.api.chat.completions.create(
-        {
-          model,
-          messages: [
-            { role: "system", content: opts.system },
-            { role: "user", content: opts.user },
-          ],
-          response_format: {
-            type: "json_schema",
-            json_schema: { name: opts.schemaName, schema: opts.schema, strict: true },
-          },
-          stream: true,
-          ...sampling(model, 0),
-        },
-        { signal }
-      )
-    );
-    const parsed = JSON.parse(out.text || "{}");
-    return opts.parse ? opts.parse(parsed) : (parsed as T);
+    const r = route(opts.task);
+    const once = async (model: string, effort: Effort): Promise<T> => {
+      // A reasoning model thinks before its first token: give it the thinking allowance, not the 45 s hang limit.
+      const wait = isReasoningModel(model) && effort !== "none" ? THINKING_IDLE_MS : undefined;
+      const user: any = opts.images?.length
+        ? [{ type: "text", text: opts.user }, ...opts.images.map((url) => ({ type: "image_url", image_url: { url, detail: "high" } }))]
+        : opts.user;
+      const out = await this.streamed(
+        `json:${opts.schemaName}`,
+        model,
+        opts.signal,
+        false,
+        (signal) =>
+          this.api.chat.completions.create(
+            {
+              model,
+              messages: [
+                { role: "system", content: opts.system },
+                { role: "user", content: user },
+              ],
+              response_format: {
+                type: "json_schema",
+                json_schema: { name: opts.schemaName, schema: opts.schema, strict: true },
+              },
+              stream: true,
+              ...sampling(model, 0, effort),
+            },
+            { signal }
+          ),
+        undefined,
+        wait,
+        wait
+      );
+      const parsed = JSON.parse(out.text || "{}");
+      return opts.parse ? opts.parse(parsed) : (parsed as T);
+    };
+    const model = opts.model || r.model;
+    const effort = opts.reasoningEffort ?? r.effort;
+    // An explicit model is an eval comparing models: no escalation behind its back.
+    const escalate = opts.model ? null : r.escalate;
+    let first: T;
+    try {
+      first = await once(model, effort);
+    } catch (e) {
+      if (!escalate || !(e instanceof SyntaxError || (e as any)?.name === "ZodError")) throw e;
+      console.warn(`[llm] escalate ${opts.task} ${opts.schemaName}: ${model} gave no usable JSON (${(e as Error).message.slice(0, 120)}) → ${escalate.model}`);
+      return once(escalate.model, escalate.effort);
+    }
+    const verdict = opts.accept ? opts.accept(first) : true;
+    if (verdict === true || !escalate) return first;
+    console.warn(`[llm] escalate ${opts.task} ${opts.schemaName}: ${model} failed its check (${verdict.slice(0, 160)}) → ${escalate.model}`);
+    try {
+      const second = await once(escalate.model, escalate.effort);
+      const v2 = opts.accept!(second);
+      if (v2 !== true) console.warn(`[llm] escalated ${opts.task} ${opts.schemaName} still fails its check (${v2.slice(0, 160)})`);
+      return second;
+    } catch (e) {
+      console.warn(`[llm] escalation ${opts.task} ${opts.schemaName} failed, keeping ${model}'s result: ${(e as Error).message.slice(0, 160)}`);
+      return first;
+    }
   }
 
   /**
@@ -226,7 +271,8 @@ export class OpenAIClient implements LLMClient {
     live: boolean,
     open: (signal: AbortSignal) => Promise<AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>>,
     onTextDelta?: (delta: string) => void,
-    idleMs: number = IDLE_MS
+    idleMs: number = IDLE_MS,
+    firstMs: number = FIRST_CHUNK_MS
   ) {
     const t0 = Date.now();
     for (let attempt = 1; ; attempt++) {
@@ -244,7 +290,7 @@ export class OpenAIClient implements LLMClient {
           ctl.abort(stalled);
         }, ms);
       };
-      arm(FIRST_CHUNK_MS, "first_chunk");
+      arm(firstMs, "first_chunk");
       let firstChunkMs: number | null = null;
       try {
         const stream = await open(ctl.signal);
@@ -304,4 +350,10 @@ const mapFinish = (reason: string | null, toolCalls: number): ChatResult["finish
 };
 
 let singleton: LLMClient | null = null;
-export const getLLM = (): LLMClient => (singleton ??= new OpenAIClient());
+export const getLLM = (): LLMClient => {
+  if (!singleton) {
+    singleton = new OpenAIClient();
+    console.log(`[llm] policy ${policyTable().join(" · ")}`);
+  }
+  return singleton;
+};

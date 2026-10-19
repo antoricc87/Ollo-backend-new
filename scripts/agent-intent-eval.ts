@@ -145,6 +145,7 @@ async function runCase(patientId: string, c: Case) {
     user: JSON.stringify({ record: RECORD, messages: c.turns, ...(c.note ? { graderNote: c.note } : {}), lastTurn: { tools, results, cards, proposals, reply } }),
     schema: GRADE_OUT,
     schemaName: "intent_grade",
+    task: "review",
     model: JUDGE,
     reasoningEffort: "medium",
   });

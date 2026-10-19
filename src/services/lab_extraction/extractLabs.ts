@@ -10,6 +10,7 @@
  * legacy path stays reachable with LAB_EXTRACTION_ENGINE=legacy.
  */
 import OpenAI from "openai";
+import { route } from "../agent/llm/policy";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { extractPdfLayout, PdfLayout } from "./pdfLayout";
@@ -20,7 +21,9 @@ import { modelRequestParams } from "../meal_analysis/mealAnalysis.service";
 import { extractLabsVision } from "./extractLabsVision";
 import { buildLabReportSummary } from "./reportSummary";
 
-export const DEFAULT_LAB_MODEL = process.env.LAB_EXTRACTION_MODEL || "gpt-4.1";
+// Model and effort: agent/llm/policy.ts task "extract" (R1, Oct 19 2026; was gpt-4.1).
+export const DEFAULT_LAB_MODEL = route("extract").model;
+const LAB_EFFORT = route("extract").effort;
 
 let client: OpenAI | null = null;
 const getClient = () => {
@@ -140,7 +143,7 @@ export const extractLabReport = async (
   const model = ctx.model || DEFAULT_LAB_MODEL;
   const response = await getClient().responses.parse({
     model,
-    ...(modelRequestParams(model) as any),
+    ...(modelRequestParams(model, model === DEFAULT_LAB_MODEL ? LAB_EFFORT : undefined) as any),
     input: [
       { role: "system", content: SYSTEM_PROMPT },
       {
@@ -165,7 +168,7 @@ export const extractLabReport = async (
   if (uncaptured.length > 0) {
     const retry = await getClient().responses.parse({
       model,
-      ...(modelRequestParams(model) as any),
+      ...(modelRequestParams(model, model === DEFAULT_LAB_MODEL ? LAB_EFFORT : undefined) as any),
       input: [
         { role: "system", content: SYSTEM_PROMPT },
         {

@@ -43,6 +43,7 @@ If nothing fits, or the message is too vague to place, use general_unwell.`;
 export async function classify(llm: LLMClient, text: string): Promise<Classification> {
   try {
     const r = await llm.json<{ complaintKey: string; askingForDiagnosis: boolean }>({
+      task: "classify",
       system: SYSTEM,
       user: text.slice(0, 1500),
       schema: SCHEMA as unknown as Record<string, unknown>,

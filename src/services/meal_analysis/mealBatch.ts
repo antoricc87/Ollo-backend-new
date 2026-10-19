@@ -1,8 +1,8 @@
 import { z } from "zod";
+import { route } from "../agent/llm/policy";
 import { zodTextFormat } from "openai/helpers/zod";
 import {
   analyzeMeal,
-  FALLBACK_MEAL_MODEL,
   formatQuantity,
   getClient,
   modelRequestParams,
@@ -130,10 +130,11 @@ export function validateSegments(text: string, segments: { dayPhrase: string | n
 }
 
 export async function segmentNarration(text: string): Promise<{ dayPhrase: string | null; text: string }[]> {
-  const model = process.env.NUTRITION_SEGMENT_MODEL || FALLBACK_MEAL_MODEL;
+  // Splitting a narration into days is labelling: task "classify" (agent/llm/policy.ts).
+  const { model, effort } = route("classify");
   const response = await getClient().responses.parse({
     model,
-    ...(modelRequestParams(model) as any),
+    ...(modelRequestParams(model, effort) as any),
     input: [
       { role: "system", content: SEGMENT_SYSTEM },
       { role: "user", content: text },

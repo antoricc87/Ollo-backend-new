@@ -75,8 +75,6 @@ export type ProactiveInput = {
 };
 
 const MAX_STEPS = 8;
-const CHECKIN_MODEL = process.env.AGENT_CHECKIN_MODEL || "";
-const CHECKIN_EFFORT = (process.env.AGENT_CHECKIN_EFFORT || "medium") as "low" | "medium" | "high";
 const MAX_TOOL_RESULT_CHARS = 12_000;
 const SUMMARIZE_AFTER_ROWS = 8;
 
@@ -293,8 +291,8 @@ async function* runLoop(p: {
       steps += 1;
       if (steps > 1) yield { type: "status", text: "Thinking" };
       // A check-in is the one conversation where the model takes a history and chooses a next step:
-      // it may run on a stronger, reasoning model (AGENT_CHECKIN_MODEL; unset = the usual one).
-      const res = await llm.chat({ messages, tools: registry.specs(), signal: p.signal, ...(checkin && CHECKIN_MODEL ? { model: CHECKIN_MODEL, reasoningEffort: CHECKIN_EFFORT } : {}) });
+      // it runs as its own task (llm/policy.ts: more thinking than an ordinary turn).
+      const res = await llm.chat({ messages, tools: registry.specs(), signal: p.signal, task: checkin ? "checkin" : "converse" });
       usage = addUsage(usage, res.usage);
       model = res.model;
 
@@ -535,6 +533,7 @@ async function summarizeThread(llm: LLMClient, threadId: string, previous: strin
       .map((r) => (r.role === "TOOL" ? `[tool ${r.toolName}] ${r.content.slice(0, 300)}` : `${r.role}: ${r.content.slice(0, 1200)}`))
       .join("\n");
     const { summary } = await llm.json<{ summary: string }>({
+      task: "summarize",
       system: "Maintain a running summary of a coaching conversation between a user and their health assistant. Keep facts, numbers, decisions, open questions and the user's stated preferences. Drop pleasantries. Max 200 words. Return the updated summary.",
       user: `PREVIOUS SUMMARY:\n${previous ?? "(none)"}\n\nNEW TURNS:\n${transcript}`,
       schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"], additionalProperties: false },

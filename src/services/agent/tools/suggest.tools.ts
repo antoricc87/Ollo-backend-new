@@ -132,7 +132,7 @@ export const suggestMeal = defineTool({
         additionalProperties: false,
       },
       schemaName: "meal_suggestion",
-      model: getLLM().defaultModel,
+      task: "design",
     });
 
     /* ------------------------------ ground ------------------------------ */

@@ -11,6 +11,7 @@
  * numbers are comparable (Phase 4).
  */
 import "dotenv/config";
+import { route } from "../../services/agent/llm/policy";
 import fs from "fs";
 import path from "path";
 import {
@@ -355,7 +356,7 @@ const median = (xs: number[]) => {
 
   const usdaItems = results.reduce((a, r) => a + r.usdaItems, 0);
   const totalItems = results.reduce((a, r) => a + r.totalItems, 0);
-  const rerankModel = process.env.NUTRITION_RERANK_MODEL || "gpt-5.6-luna";
+  const rerankModel = route("classify").model;
   const summary = {
     model,
     effort: effort ?? null,

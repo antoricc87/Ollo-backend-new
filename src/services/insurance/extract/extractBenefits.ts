@@ -15,6 +15,7 @@
  * (default: the lab extraction model).
  */
 import { zodTextFormat } from "openai/helpers/zod";
+import { route } from "../../agent/llm/policy";
 import { extractPdfLayout } from "../../lab_extraction/pdfLayout";
 import { renderPdfPages } from "../../lab_extraction/pdfRender";
 import OpenAI from "openai";
@@ -22,7 +23,8 @@ import { modelRequestParams } from "../../meal_analysis/mealAnalysis.service";
 import { BenefitsSchema, normalizeBenefits, reviewBenefits, type Benefits, type StoredBenefits } from "../domain/benefits";
 
 // Read from the env here rather than imported from extractLabs: that file does not pass ts-jest's type check, and the agent tools import this one.
-export const INSURANCE_MODEL = process.env.INSURANCE_EXTRACTION_MODEL || process.env.LAB_EXTRACTION_MODEL || "gpt-4.1";
+// Model and effort: agent/llm/policy.ts task "extract" (R1, Oct 19 2026; was gpt-4.1).
+export const INSURANCE_MODEL = route("extract").model;
 const MAX_CHARS = 60_000;
 
 // Its own client: a whole summary is one long structured answer (30–60 s), far past the meal client's 20 s cap.
@@ -69,7 +71,7 @@ export const extractBenefits = async (file: Buffer | Uint8Array, opts: { model?:
 
   const r = await getClient().responses.parse({
     model,
-    ...(modelRequestParams(model) as any),
+    ...(modelRequestParams(model, model === INSURANCE_MODEL ? route("extract").effort : undefined) as any),
     input: [
       { role: "system", content: BENEFITS_PROMPT },
       { role: "user", content: content as any },

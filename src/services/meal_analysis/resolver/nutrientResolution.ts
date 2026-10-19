@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { route } from "../../agent/llm/policy";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { Ingredient } from "../mealAnalysis.schema";
@@ -38,7 +39,8 @@ export interface ResolveOptions {
   skipPortions?: boolean;
 }
 
-const RERANK_EFFORT = (process.env.NUTRITION_RERANK_EFFORT || "none") as ReasoningEffort;
+// Picking the matching food-database entry is labelling: task "classify" (agent/llm/policy.ts).
+const RERANK_EFFORT = route("classify").effort as ReasoningEffort;
 const ACCEPT_SCORE = 0.95; // heuristic accept only for (near) exact coverage with no extra qualifiers
 const CLEAR_MARGIN = 0.1;
 const PORTION_TOLERANCE = 0.25;
@@ -142,7 +144,7 @@ export async function resolveIngredient(
   opts: ResolveOptions = {}
 ): Promise<{ ingredient: Ingredient; resolution: IngredientResolution }> {
   const resolver = opts.resolver ?? getDefaultResolver();
-  const rerankModel = opts.rerankModel || process.env.NUTRITION_RERANK_MODEL || "gpt-5.6-luna";
+  const rerankModel = opts.rerankModel || route("classify").model;
   const term = normalizeTerm(ing.searchTerm || ing.name);
   const brand = normalizeTerm(ing.brand || "");
   if (!term) return { ingredient: ing, resolution: llmFallback("empty_term") };

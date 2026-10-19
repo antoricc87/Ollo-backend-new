@@ -31,6 +31,7 @@ import {
   portionResponseTool,
 } from "../schemas/nutrition.schema";
 import { getUserToken } from "../../../utils/auth_token";
+import { getLLM } from "../../agent/llm/openai.client";
 import { calculateCaloricAdjustment } from "../../../utils/calculateAdjustedTDEE";
 dotenv.config();
 
@@ -132,25 +133,14 @@ class NutritionService {
       const userContent =
         "Update the patient's caloric amount if necessary, based on their summary and health goals. Calculate the recommended daily nutrient amounts, taking into account medical conditions and selected health goals.";
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: systemContent },
-          { role: "user", content: userContent },
-        ],
-        tools: [nutrientLimitTool],
-        tool_choice: {
-          type: "function",
-          function: { name: "generateNutrientLimits" },
-        },
+      // Shared client, task "design" (agent/llm/policy.ts) — was its own gpt-4o-mini call (R1, Oct 19 2026).
+      let recommendedAmounts: Record<string, any> = await getLLM().json<Record<string, any>>({
+        task: "design",
+        system: systemContent,
+        user: userContent,
+        schema: { ...nutrientLimitTool.function.parameters, additionalProperties: false },
+        schemaName: "nutrient_limits",
       });
-
-      const toolCall = response.choices[0].message.tool_calls?.[0];
-      if (!toolCall) {
-        throw new Error("No structured output returned");
-      }
-
-      let recommendedAmounts = JSON.parse(toolCall.function.arguments);
 
       // Post-processing: enforce target values from trackableMetrics
       healthGoals.forEach((goal) => {

@@ -29,13 +29,15 @@ import {
   PatientContext,
 } from "./mealAnalysis.types";
 import { modelRequestParams } from "./modelParams";
+import { route } from "../agent/llm/policy";
 
 dotenv.config();
 
-// Phase 4 bake-off (2026-08-24): gpt-5.6-luna at effort "none" beat gpt-4o-mini on portion
-// labelling (97 % vs 86 %), grounded share and within-tolerance at equal latency, ~1.7× cost.
-export const DEFAULT_MEAL_MODEL = process.env.NUTRITION_MODEL || "gpt-5.6-luna";
-export const FALLBACK_MEAL_MODEL = process.env.NUTRITION_FALLBACK_MODEL || "gpt-4o-mini";
+// Model and effort come from agent/llm/policy.ts, task "extract" (a photo: "extract_vision"); the
+// task's escalation model is the fallback when the chosen one is unavailable to this key (R1, Oct 19 2026).
+// History: Phase 4 bake-off (Aug 24 2026) — gpt-5.6-luna at effort "none" beat gpt-4o-mini on portion labelling.
+export const DEFAULT_MEAL_MODEL = route("extract").model;
+export const FALLBACK_MEAL_MODEL = route("extract").escalate?.model ?? DEFAULT_MEAL_MODEL;
 
 /** 404 / "model not found" / "does not have access to model" style errors — not rate limits or bad requests. */
 export function isModelUnavailableError(err: any): boolean {
@@ -123,7 +125,9 @@ export async function analyzeMeal(
     (opts.patientId
       ? await loadPatientContext(opts.patientId)
       : EMPTY_PATIENT_CONTEXT);
-  const model = opts.model || DEFAULT_MEAL_MODEL;
+  const r = route(input.imageDataUrl ? "extract_vision" : "extract");
+  const model = opts.model || r.model;
+  const fallback = r.escalate?.model ?? FALLBACK_MEAL_MODEL;
 
   const content: any[] = [
     { type: "input_text", text: buildUserMessage(ctx, input) },
@@ -140,7 +144,7 @@ export async function analyzeMeal(
   const request = (m: string) =>
     getClient().responses.parse({
       model: m,
-      ...(modelRequestParams(m, opts.reasoningEffort) as any),
+      ...(modelRequestParams(m, opts.reasoningEffort ?? (m === model ? r.effort : r.escalate?.effort ?? r.effort)) as any),
       input: [
         { role: "system", content: buildSystemPrompt() },
         { role: "user", content },
@@ -154,10 +158,10 @@ export async function analyzeMeal(
   } catch (err: any) {
     // Safety net: if the configured model is not available to this API key
     // (e.g. a newer model on an older account), fall back rather than fail the log.
-    if (!isModelUnavailableError(err) || model === FALLBACK_MEAL_MODEL) throw err;
-    console.warn(`[meal-analysis] model "${model}" unavailable (${err?.status}); falling back to ${FALLBACK_MEAL_MODEL}`);
-    usedModel = FALLBACK_MEAL_MODEL;
-    response = await request(FALLBACK_MEAL_MODEL);
+    if (!isModelUnavailableError(err) || model === fallback) throw err;
+    console.warn(`[meal-analysis] model "${model}" unavailable (${err?.status}); falling back to ${fallback}`);
+    usedModel = fallback;
+    response = await request(fallback);
   }
   const parsed = response.output_parsed as MealAnalysisOutput | null;
   if (!parsed) throw new Error("analyzeMeal: no structured output returned");

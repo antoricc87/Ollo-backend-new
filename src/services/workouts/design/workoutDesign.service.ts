@@ -12,6 +12,7 @@
 import moment from "moment-timezone";
 import prisma from "../../../utility/prismaClient";
 import { getLLM } from "../../agent/llm/openai.client";
+import { route } from "../../agent/llm/policy";
 import { ACTIVITY_KEYS, activityByKey } from "../domain/activity.catalog";
 import { canonicalExercise, catalogForPlanner, muscleGroupsFor } from "../domain/exercise.catalog";
 import { fmtSets } from "../domain/workout.metrics";
@@ -332,10 +333,20 @@ export type DesignedSession = { session: PlannedSessionInput; fit: { ok: boolean
 
 export const designSession = async (ask: DesignAsk, brief: DesignBrief, opts: { model?: string } = {}): Promise<DesignedSession> => {
   const llm = getLLM();
-  const model = opts.model ?? process.env.WORKOUT_DESIGN_MODEL ?? llm.defaultModel;
+  // Which model: llm/policy.ts task "design" (opts.model only when an eval compares models).
+  const model = opts.model ?? route("design").model;
   const t0 = Date.now();
-  const generate = (revision?: { previous: SessionOut; issues: string[] }) =>
+  // The LAST revision carries the session's own check: if it still breaks a rule, the shared client
+  // escalates that one call (policy). A time estimate a few minutes off is not worth it.
+  const lastCheck = (out: SessionOut): true | string => {
+    const serious = checkSession(toPlanned(out, ask), ask, brief).issues.filter((i) => !/^estimated \d+ min/.test(i));
+    return serious.length ? serious.join("; ") : true;
+  };
+  const generate = (revision?: { previous: SessionOut; issues: string[] }, last = false) =>
     llm.json<SessionOut>({
+      task: "design",
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(last ? { accept: lastCheck } : {}),
       system: SYSTEM + (ask.caution ? CAUTION_RULES : "") + (ask.previous ? CHANGE_RULES : "") + (revision ? "\nYou are REVISING a session that missed its checks: fix every listed issue, keep what was fine." : ""),
       user: JSON.stringify({
         ask: { ...ask, dayName: moment.utc(ask.date, DAY).format("dddd") },
@@ -351,14 +362,13 @@ export const designSession = async (ask: DesignAsk, brief: DesignBrief, opts: { 
       }),
       schema: SESSION_OUT,
       schemaName: "workout_session_design",
-      model,
     });
   let out = await generate();
   let session = toPlanned(out, ask);
   let check = checkSession(session, ask, brief);
   let revised = false;
   for (let i = 0; i < MAX_REVISIONS && check.issues.length; i++) {
-    const again = await generate({ previous: out, issues: check.issues });
+    const again = await generate({ previous: out, issues: check.issues }, i === MAX_REVISIONS - 1);
     const s2 = toPlanned(again, ask);
     const c2 = checkSession(s2, ask, brief);
     if (c2.issues.length <= check.issues.length) {
@@ -456,16 +466,19 @@ export type DesignedWeek = { title: string; notes: string; keepDay: number | nul
 
 export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model?: string } = {}): Promise<DesignedWeek> => {
   const llm = getLLM();
-  const model = opts.model ?? process.env.WORKOUT_DESIGN_MODEL ?? llm.defaultModel;
+  // The layout is task "plan"; each session is "design" (llm/policy.ts).
+  const model = opts.model ?? route("design").model;
   const t0 = Date.now();
   const dayNames = Array.from({ length: ask.days }, (_, i) => `${i + 1}: ${moment.utc(ask.startDate, DAY).add(i, "days").format("ddd D MMM")}`);
-  const layout = (revision?: { previous: WeekOut; issues: string[] }) =>
+  const layout = (revision?: { previous: WeekOut; issues: string[] }, last = false) =>
     llm.json<WeekOut>({
+      task: "plan",
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(last ? { accept: (o: WeekOut) => (checkLayout(o).issues.length ? checkLayout(o).issues.join("; ") : true) } : {}),
       system: WEEK_SYSTEM + (ask.caution ? WEEK_CAUTION_RULES : "") + (revision ? "\nYou are REVISING a layout that missed its checks: fix every listed issue (exact session count, one session per day, no consecutive heavy days), keep what was fine." : ""),
       user: JSON.stringify({ ask: { ...ask, dayNames }, person: brief.person, training: brief.training, plan: brief.plan, recentSessions: brief.recent, remembered: brief.remembered, ...(revision ? { previous: revision.previous, issues: revision.issues } : {}) }),
       schema: WEEK_OUT,
       schemaName: "workout_week_design",
-      model,
     });
   const checkLayout = (out: WeekOut) => {
     const issues: string[] = [];
@@ -484,7 +497,7 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
   let skeleton = await layout();
   let { sessions, issues } = checkLayout(skeleton);
   for (let i = 0; i < MAX_REVISIONS && issues.length; i++) {
-    const again = await layout({ previous: skeleton, issues });
+    const again = await layout({ previous: skeleton, issues }, i === MAX_REVISIONS - 1);
     const c = checkLayout(again);
     if (c.issues.length <= issues.length) {
       skeleton = again;
