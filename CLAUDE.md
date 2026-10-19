@@ -1561,6 +1561,40 @@ follow-up changed nothing, and the check-in had dropped out of the gate.
   ("upper body only at first, then lower"), and the readiness strain button
   ignoring what was already done today / late evening.
 
+### The week designer reads first, may ask once, checks itself (Oct 19 2026)
+
+User ruling: no rules about anyone's routine (he rejected "soccer = leg load") —
+the agent has to understand the request. `designWeek` was a form-filler: the
+person's words reached it as the orchestrator's summary inside a JSON field,
+the prompt opened with a split recipe, there was no room to reason, and
+nothing checked the result against the request.
+- `ToolContext.userWords` (their last 3 messages verbatim, bracketed loop rows
+  excluded; R2) and `ToolContext.proactive`. `generate_workout_plan` passes them as
+  `WeekAsk.words` / `mayAsk`.
+- `WEEK_OUT.reading {purpose, said, wishes, openQuestion}` comes FIRST: what the
+  week is for, what their words imply day by day, every wish as a checkable
+  point. Each session carries `mustRespect` (that day's equipment, how hard,
+  what to leave out) — the per-day designer reads it first (`sessionRequest`).
+  The split recipe now applies only when their words leave the split open.
+- `openQuestion` → the tool returns NO card and asks through the shared
+  `ToolOutcome.question` (R3; `weekQuestion` stays in the result because
+  `askedWeekQuestion` scans the thread's TOOL rows for it): one per thread,
+  never on proactive runs (`ToolContext.proactive` → `mayAsk` false),
+  never about length / place / equipment / days / count. Ruling: asking is OK
+  when a request honestly reads two ways (amends the Oct 12 "never ask first").
+- `reviewWeek` checks the designed week against their words and the wishes;
+  a miss redesigns only the named days (once, `previous` = the day as it was);
+  what still misses goes to `fit.issues` as "not yet in the week: …".
+- Result `reading` + `readingNote`: the reply opens with "I read this as: …".
+- Models: the reading and layout run as task "plan", the review as "review",
+  each session as "design" (llm/policy.ts) — the Oct 19 commit's own model constants were
+  dropped when it was ported onto the shared policy (Nov 15 2026).
+- `scripts/workout-week-eval.ts`: 15 made-up people (race recovery, shifts,
+  stiff knee, hotel kit, swim club, his soccer week, ambiguous ones that must
+  ask), each week graded 1–5 by gpt-5.5 against the request; no DB. Oct 19:
+  old pipeline 3.8/5; this design 4.2 (gpt-5.6-luna + 5.4-mini), 4.4 on
+  gpt-6-luna with Sol escalation. One run each — ±0.2 is noise.
+
 ### Exercise catalog: variants split, equipment as a list (Nov 11 2026)
 
 Start of the "exercise selection" work (the AI picks exercises from its own

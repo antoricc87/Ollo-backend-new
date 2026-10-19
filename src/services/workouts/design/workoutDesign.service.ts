@@ -350,16 +350,24 @@ export const checkSession = (s: PlannedSessionInput, ask: DesignAsk, brief: Desi
 
 /* --------------------------------- design -------------------------------- */
 
+/** A model's text cut to the column's limit at a word, never rejected: one long load note used to throw away the whole session. */
+const fit = (text: string | null | undefined, max: number) => {
+  if (text == null) return text ?? null;
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  return `${cut.slice(0, cut.lastIndexOf(" ") > max * 0.6 ? cut.lastIndexOf(" ") : cut.length).trimEnd()}…`;
+};
+
 const toPlanned = (out: SessionOut, ask: DesignAsk): PlannedSessionInput => {
   const exercises: ExerciseInput[] = out.exercises.map((e) => {
     const c = canonicalExercise(e.name, e.exerciseKey);
     const n = Math.max(1, Math.min(10, e.sets || 1));
     return {
       exerciseKey: c.key,
-      name: c.def ? c.name : e.name,
+      name: c.def ? c.name : fit(e.name, 80)!,
       muscleGroup: c.def?.muscleGroup ?? null,
       equipment: c.def?.equipment ?? null,
-      loadNote: e.loadNote,
+      loadNote: fit(e.loadNote, 160),
       alternatives: (e.alternatives ?? []).filter((k) => canonicalExercise(k, k).def).slice(0, 2),
       sets: Array.from({ length: n }, () => ({ targetReps: e.reps, targetRepsMax: e.repsMax ?? null, targetKg: e.targetKg, restSec: e.restSec, durationSec: e.durationSec })),
     };
@@ -373,9 +381,9 @@ const toPlanned = (out: SessionOut, ask: DesignAsk): PlannedSessionInput => {
     place: out.place ?? ask.place ?? null,
     muscleGroups: Array.from(new Set(out.muscleGroups.flatMap(muscleGroupsFor).concat(exercises.map((e) => e.muscleGroup!).filter(Boolean)))).slice(0, 8),
     why: out.why?.slice(0, 300) ?? null,
-    warmup: out.warmup.slice(0, 8),
-    cooldown: out.cooldown.slice(0, 8),
-    notes: out.notes,
+    warmup: out.warmup.slice(0, 8).map((w) => fit(w, 160)!),
+    cooldown: out.cooldown.slice(0, 8).map((w) => fit(w, 160)!),
+    notes: fit(out.notes, 1000),
     distanceKm: out.distanceKm,
     exercises,
   });
@@ -442,6 +450,10 @@ export type WeekAsk = {
   sessionMinutes: number;
   /** They SAID the length: every session is that long. Otherwise the layout may make a lighter day shorter. */
   minutesFixed?: boolean;
+  /** Their own messages, verbatim, newest last — what the week is designed from. `request` is the assistant's summary. */
+  words?: string[];
+  /** One question may come back instead of a week (false on proactive runs and once one was asked in the thread). */
+  mayAsk?: boolean;
   focus?: (typeof FOCUS)[number] | null;
   place?: (typeof PLACE)[number] | null;
   request?: string | null;
@@ -449,14 +461,33 @@ export type WeekAsk = {
   caution?: DesignCaution | null;
 };
 
-type WeekOut = { title: string; notes: string; keepDay: number; sessions: { day: number; title: string; activityKey: string; focus: (typeof FOCUS)[number]; durationMin: number; muscleGroups: string[]; why: string }[] };
+type WeekOut = { reading?: WeekReading; title: string; notes: string; keepDay: number; sessions: { day: number; title: string; activityKey: string; focus: (typeof FOCUS)[number]; durationMin: number; muscleGroups: string[]; why: string; mustRespect?: string }[] };
 
-const WEEK_SYSTEM = `You are a coach laying out ONE training week for a specific person: which days train, what each day is for. Rules:
-- Exactly sessionsPerWeek sessions across the days (day 1 = startDate). Use preferredDays when given (the dayNames list maps day → weekday); otherwise spread sessions with rest between hard days.
-- A sensible split for the count and experience: 2 → full body ×2; 3 → full body ×3 or push/pull/legs; 4 → upper/lower ×2; 5–6 → push/pull/legs + conditioning. Mix in conditioning/mobility/endurance when the focus or the plan asks for it (a weight-loss plan likes one conditioning day).
-- Never put the same heavy muscle groups on consecutive days. Respect recent sessions (day 1 may follow a hard day already done).
-- Session titles are SHORT and in sentence case ("Full body strength", "Lower back recovery"), never Title Case; put the emphasis in muscleGroups, not in brackets after the title.
-- Respect limitations, equipment and place. why = one line per session, second person.
+/**
+ * UNDERSTAND FIRST, THEN LAY OUT (Oct 19 2026, user ruling). The layout used to
+ * open with a split recipe and get the request as one JSON field among many —
+ * "I played soccer today… lower body toward the end of the week" came back as
+ * a template week. Nothing here encodes any routine or sport: the model reads
+ * the person's words, writes what they imply for THIS week (`reading`), may ask
+ * ONE question when the words honestly read two ways, and lays the week out to
+ * honour every point; `reviewWeek` then checks the result against those points.
+ */
+const WEEK_SYSTEM = `You are an experienced coach laying out ONE training week for one specific person. Work from THEIR WORDS: ask.words are their own messages, newest last (ask.request is an assistant's summary and may have lost detail; their words win).
+
+First write \`reading\` — think it through before any day is placed:
+- purpose: one line, what this week is for, in their terms.
+- said: each thing their words or their record tell you about their body, what they did recently, and their schedule — each followed by what it means for THIS week, day by day where it matters (what needs time to recover and roughly how long, which days are fresher, what is fixed). Reason it out like a coach would; there is no rule table.
+- wishes: every wish as a short checkable point — what, which days or which part of the week, how often, how long, and anything they want in EVERY session.
+- openQuestion: null, unless their words can honestly be read in two ways that would give clearly different weeks and nothing in their words, the conversation or the record settles it — then ONE short, plain question that settles it. Never ask about length, place, equipment, days or how many sessions (those come in the ask). When ask.mayAsk is false it is always null: take the more careful reading and say it in purpose.
+
+Then lay out the week so every point of the reading is honoured:
+- Exactly sessionsPerWeek sessions across the days (day 1 = startDate; the dayNames list maps day → weekday). Use the days they named, else preferredDays, else spread with rest between hard days.
+- Only when their words leave the split open: a sensible split for the count and experience (2 → full body ×2; 3 → full body ×3 or push/pull/legs; 4 → upper/lower ×2; 5–6 → push/pull/legs + conditioning).
+- Never the same heavy muscle groups on consecutive days. Respect recentSessions and what they said they did — day 1 may follow something hard.
+- Session titles are SHORT and in sentence case ("Upper body and core", "Lower back recovery"), never Title Case; put the emphasis in muscleGroups.
+- why = one line per session, second person, saying which point(s) of the reading this day carries.
+- mustRespect = what THIS day's designer has to respect, from the reading: where they are and what equipment exists that day, how hard it may be and why (what comes before and after it), what to leave out. Another coach designs the exercises from this line alone, so be concrete. Empty string when nothing is special.
+- Respect limitations, equipment and place.
 - Output ONLY the schema.`;
 
 const WEEK_CAUTION_RULES = `
@@ -465,6 +496,17 @@ CAUTION — the ask carries \`caution\`: this person has a symptom on record (ca
 const WEEK_OUT = {
   type: "object",
   properties: {
+    reading: {
+      type: "object",
+      properties: {
+        purpose: { type: "string" },
+        said: { type: "array", items: { type: "string" } },
+        wishes: { type: "array", items: { type: "string" } },
+        openQuestion: { type: ["string", "null"] },
+      },
+      required: ["purpose", "said", "wishes", "openQuestion"],
+      additionalProperties: false,
+    },
     title: { type: "string", description: "e.g. 'Upper / lower week', 'Three full-body sessions'" },
     notes: { type: "string", description: "2 short lines about the week: what it builds, what to do if a day is missed" },
     keepDay: { type: "integer", description: "The one day to keep if they can only do one — the card tags it" },
@@ -480,15 +522,70 @@ const WEEK_OUT = {
           durationMin: { type: "integer" },
           muscleGroups: { type: "array", items: { type: "string" } },
           why: { type: "string" },
+          mustRespect: { type: "string" },
         },
-        required: ["day", "title", "activityKey", "focus", "durationMin", "muscleGroups", "why"],
+        required: ["day", "title", "activityKey", "focus", "durationMin", "muscleGroups", "why", "mustRespect"],
         additionalProperties: false,
       },
     },
   },
-  required: ["title", "notes", "keepDay", "sessions"],
+  required: ["reading", "title", "notes", "keepDay", "sessions"],
   additionalProperties: false,
 } as const;
+
+export type WeekReading = { purpose: string; said: string[]; wishes: string[]; openQuestion: string | null };
+
+/* -------------------- the week against their own words ------------------- */
+
+const REVIEW_SYSTEM = `You check a designed training week against what the person asked for. You get their own words, the coach's reading of them (wishes), and the week as designed (each day with its exercises).
+For EACH wish, and for anything else their words clearly ask that the wishes missed, say whether the week honours it. Be literal and fair: judge only what they asked, not your own preferences, and do not invent wishes. A wish that is honoured needs no fix.
+For one that is not: days = the day numbers that must change (only days that have a session), fix = one short instruction for redesigning those days (what to add, remove or change), written so a coach can apply it to that one session.`;
+
+const REVIEW_OUT = {
+  type: "object",
+  properties: {
+    checks: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { wish: { type: "string" }, met: { type: "boolean" }, days: { type: "array", items: { type: "integer" } }, fix: { type: ["string", "null"] } },
+        required: ["wish", "met", "days", "fix"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["checks"],
+  additionalProperties: false,
+} as const;
+
+export type WeekCheck = { wish: string; met: boolean; days: number[]; fix: string | null };
+
+/** Which designed days miss a wish, and how to fix them. Model judgement, applied once. */
+export const reviewWeek = async (
+  input: { words: string[]; request: string | null; reading: WeekReading; sessions: { day: number; session: PlannedSessionInput }[]; dayNames: string[] },
+  opts: { model?: string } = {}
+): Promise<WeekCheck[]> => {
+  const week = input.sessions.map((x) => ({
+    day: x.day,
+    on: input.dayNames[x.day - 1],
+    title: x.session.title,
+    focus: x.session.focus,
+    minutes: x.session.durationMin,
+    warmup: x.session.warmup,
+    exercises: (x.session.exercises ?? []).map((e) => `${e.name} ${(e.sets ?? []).length}×${e.sets?.[0]?.targetReps ?? (e.sets?.[0]?.durationSec ? `${e.sets[0].durationSec}s` : "")}${e.loadNote ? ` (${e.loadNote})` : ""}`),
+    cooldown: x.session.cooldown,
+  }));
+  const out = await getLLM().json<{ checks: WeekCheck[] }>({
+    task: "review",
+    ...(opts.model ? { model: opts.model } : {}),
+    system: REVIEW_SYSTEM,
+    user: JSON.stringify({ theirWords: input.words.length ? input.words : [input.request ?? ""], wishes: input.reading.wishes, said: input.reading.said, week }),
+    schema: REVIEW_OUT,
+    schemaName: "workout_week_review",
+  });
+  const days = new Set(input.sessions.map((x) => x.day));
+  return (out.checks ?? []).map((c) => ({ ...c, days: (c.days ?? []).filter((d) => days.has(d)) }));
+};
 
 /**
  * What a week must hold whatever produced it — the layout model or an edit to
@@ -514,12 +611,26 @@ export const weekShapeIssues = (sessions: { day: number; focus?: string | null; 
   return issues;
 };
 
-export type DesignedWeek = { title: string; notes: string; keepDay: number | null; sessions: (DesignedSession & { day: number })[]; fit: { ok: boolean; issues: string[] }; model: string; latencyMs: number };
+export type DesignedWeek = {
+  title: string;
+  notes: string;
+  keepDay: number | null;
+  sessions: (DesignedSession & { day: number })[];
+  fit: { ok: boolean; issues: string[] };
+  model: string;
+  latencyMs: number;
+  /** How the request was read — the reply opens with it. */
+  reading: WeekReading;
+  /** Set instead of a week when the request reads two ways: ask it, design nothing. */
+  question: string | null;
+};
 
 export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model?: string } = {}): Promise<DesignedWeek> => {
   const llm = getLLM();
   // The layout is task "plan"; each session is "design" (llm/policy.ts).
   const model = opts.model ?? route("design").model;
+  // Reported only: the reading and layout run as task "plan" (the review as "review").
+  const planModel = opts.model ?? route("plan").model;
   const t0 = Date.now();
   const dayNames = Array.from({ length: ask.days }, (_, i) => `${i + 1}: ${moment.utc(ask.startDate, DAY).add(i, "days").format("ddd D MMM")}`);
   const layout = (revision?: { previous: WeekOut; issues: string[] }, last = false) =>
@@ -528,7 +639,7 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
       ...(opts.model ? { model: opts.model } : {}),
       ...(last ? { accept: (o: WeekOut) => (checkLayout(o).issues.length ? checkLayout(o).issues.join("; ") : true) } : {}),
       system: WEEK_SYSTEM + (ask.caution ? WEEK_CAUTION_RULES : "") + (revision ? "\nYou are REVISING a layout that missed its checks: fix every listed issue (exact session count, one session per day, no consecutive heavy days), keep what was fine." : ""),
-      user: JSON.stringify({ ask: { ...ask, dayNames }, person: brief.person, training: brief.training, plan: brief.plan, recentSessions: brief.recent, remembered: brief.remembered, ...(revision ? { previous: revision.previous, issues: revision.issues } : {}) }),
+      user: JSON.stringify({ ask: { ...ask, words: ask.words ?? [], mayAsk: !!ask.mayAsk && !revision, dayNames }, today: brief.today, person: brief.person, training: brief.training, plan: brief.plan, recentSessions: brief.recent, remembered: brief.remembered, ...(revision ? { previous: revision.previous, issues: revision.issues } : {}) }),
       schema: WEEK_OUT,
       schemaName: "workout_week_design",
     });
@@ -547,12 +658,16 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
     return { sessions, issues };
   };
   let skeleton = await layout();
+  const reading: WeekReading = skeleton.reading ?? { purpose: "", said: [], wishes: [], openQuestion: null };
+  // One question instead of a week: nothing is designed until it is answered.
+  if (ask.mayAsk && reading.openQuestion?.trim())
+    return { title: skeleton.title, notes: "", keepDay: null, sessions: [], fit: { ok: false, issues: [] }, model: planModel, latencyMs: Date.now() - t0, reading, question: reading.openQuestion.trim() };
   let { sessions, issues } = checkLayout(skeleton);
   for (let i = 0; i < MAX_REVISIONS && issues.length; i++) {
     const again = await layout({ previous: skeleton, issues }, i === MAX_REVISIONS - 1);
     const c = checkLayout(again);
     if (c.issues.length <= issues.length) {
-      skeleton = again;
+      skeleton = { ...again, reading: skeleton.reading };
       sessions = c.sessions;
       issues = c.issues;
     }
@@ -567,7 +682,7 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
           focus: s.focus,
           muscleGroups: s.muscleGroups,
           place: ask.place ?? (brief.training?.place && brief.training.place !== "mixed" ? (brief.training.place as DesignAsk["place"]) : null),
-          request: `${s.title}. ${s.why} ${ask.request ?? ""}`.trim(),
+          request: sessionRequest(s, reading, ask),
           date,
           weekContext: weekContext.filter((w) => w.date !== date),
           caution: ask.caution ?? null,
@@ -580,5 +695,67 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
       return { ...d, day: s.day };
     })
   );
-  return { title: skeleton.title.slice(0, 120), notes: skeleton.notes, keepDay: sessions.some((x) => x.day === skeleton.keepDay) ? skeleton.keepDay : null, sessions: designed, fit: { ok: issues.length === 0 && designed.every((d) => d.fit.ok), issues: [...issues, ...designed.flatMap((d) => d.fit.issues.map((i) => `day ${d.day}: ${i}`))] }, model, latencyMs: Date.now() - t0 };
+
+  // The week against their words: a missed wish redesigns only the days it names, once.
+  let unmet: string[] = [];
+  if (reading.wishes.length) {
+    const review = (list: typeof designed) => reviewWeek({ words: ask.words ?? [], request: ask.request ?? null, reading, sessions: list.map((d) => ({ day: d.day, session: d.session })), dayNames }, opts.model ? { model: opts.model } : {}).catch((e) => {
+      console.error("[workouts] week review failed", e?.message ?? e);
+      return [] as WeekCheck[];
+    });
+    const misses = (await review(designed)).filter((c) => !c.met);
+    const fixes = new Map<number, string[]>();
+    for (const c of misses) for (const d of c.days) if (c.fix) fixes.set(d, [...(fixes.get(d) ?? []), c.fix]);
+    if (fixes.size) {
+      await Promise.all(
+        [...fixes].map(async ([day, fix]) => {
+          const i = designed.findIndex((d) => d.day === day);
+          const was = designed[i];
+          const s = sessions.find((x) => x.day === day)!;
+          const again = await designSession(
+            {
+              durationMin: was.session.durationMin ?? ask.sessionMinutes,
+              focus: was.session.focus as DesignAsk["focus"],
+              muscleGroups: was.session.muscleGroups ?? [],
+              place: (was.session.place as DesignAsk["place"]) ?? null,
+              request: `${fix.join(" ")} ${sessionRequest(s, reading, ask)}`,
+              date: was.session.plannedFor!,
+              weekContext: weekContext.filter((w) => w.date !== was.session.plannedFor),
+              caution: ask.caution ?? null,
+              previous: asPrevious(was.session),
+            },
+            brief,
+            { model }
+          );
+          again.session.title = was.session.title;
+          designed[i] = { ...again, day };
+        })
+      );
+      unmet = (await review(designed)).filter((c) => !c.met).map((c) => c.wish);
+    } else unmet = misses.map((c) => c.wish);
+  }
+
+  return {
+    title: skeleton.title.slice(0, 120),
+    notes: skeleton.notes,
+    keepDay: sessions.some((x) => x.day === skeleton.keepDay) ? skeleton.keepDay : null,
+    sessions: designed,
+    fit: { ok: issues.length === 0 && unmet.length === 0 && designed.every((d) => d.fit.ok), issues: [...issues, ...unmet.map((w) => `not yet in the week: ${w}`), ...designed.flatMap((d) => d.fit.issues.map((i) => `day ${d.day}: ${i}`))] },
+    model: planModel === model ? model : `${planModel} + ${model}`,
+    latencyMs: Date.now() - t0,
+    reading,
+    question: null,
+  };
 };
+
+/** What one day's designer is told: its role in the week, what the week is for, and their own words. */
+const sessionRequest = (s: { title: string; why: string; mustRespect?: string }, reading: WeekReading, ask: WeekAsk) =>
+  [
+    s.mustRespect?.trim() ? `THIS DAY MUST RESPECT: ${s.mustRespect.trim()}` : null,
+    `${s.title}. ${s.why}`,
+    reading.purpose ? `The week is for: ${reading.purpose}.` : null,
+    reading.wishes.length ? `Their wishes for the week: ${reading.wishes.join("; ")}.` : null,
+    ask.words?.length ? `Their words: "${ask.words.join(" / ").slice(0, 1200)}"` : ask.request ?? null,
+  ]
+    .filter(Boolean)
+    .join(" ");

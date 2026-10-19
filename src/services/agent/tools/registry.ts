@@ -31,6 +31,8 @@ export type ToolContext = {
    * soccer today", "at the end of the week") — tools that design from free text read these too.
    */
   userWords?: string[];
+  /** A scheduled run (nobody is there to answer a question): designers decide instead of asking. */
+  proactive?: boolean;
 };
 
 /** The request as the model summarised it, plus their own words — what a designer should read. */

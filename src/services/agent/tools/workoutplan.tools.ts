@@ -212,6 +212,13 @@ const askDefaults = async (ctx: { patientId: string; today: string; timeZone: st
   return { profile, defaults: deriveDefaults({ stated, profile, plan, history, lastWeek }) };
 };
 
+/** Did a week design in this thread already come back as a question? Then the next one decides on its own. */
+const askedWeekQuestion = async (threadId: string | null) => {
+  if (!threadId) return false;
+  const rows = await prisma.agentMessage.findMany({ where: { threadId, role: "TOOL" }, orderBy: { seq: "desc" }, take: 30, select: { content: true } });
+  return rows.some((r) => typeof r.content === "string" && r.content.includes('"weekQuestion"'));
+};
+
 /** What the model is told about values nobody stated. */
 const assumedNote = (assumed: string[]) =>
   assumed.length
@@ -407,7 +414,16 @@ export const generateWorkoutPlan = defineTool({
     const weekAssumed = defaults.assumed.filter((a) => !/session/i.test(a));
     const sessionsPerWeek = input.sessionsPerWeek ?? brief.plan?.sessionsPerWeek ?? 3;
     const startDate = input.startDate && input.startDate >= ctx.today ? input.startDate : ctx.today;
-    const week = await designWeek({ startDate, days: input.days, sessionsPerWeek: Math.min(sessionsPerWeek, input.days), sessionMinutes: durationMin, minutesFixed: !!statedMinutes, focus: input.focus ?? null, place, request: withTheirWords(input.request, ctx), caution }, brief);
+    const words = ctx.userWords ?? [];
+    // One question per conversation at most, and none on a scheduled run (nobody is there to answer it).
+    const mayAsk = !ctx.proactive && words.length > 0 && !(await askedWeekQuestion(ctx.threadId));
+    const week = await designWeek({ startDate, days: input.days, sessionsPerWeek: Math.min(sessionsPerWeek, input.days), sessionMinutes: durationMin, minutesFixed: !!statedMinutes, focus: input.focus ?? null, place, request: input.request ?? null, caution, words, mayAsk }, brief);
+    if (week.question)
+      return {
+        // `weekQuestion` stays in the stored result: askedWeekQuestion finds it there.
+        result: { designed: false, weekQuestion: week.question, readSoFar: week.reading.purpose },
+        question: { text: week.question, resumeWith: "call generate_workout_plan again with the same arguments — their answer is read from the conversation. No week, no options list before that." },
+      };
     // Saved with the week. The week card does not print notes today, so the reply carries the same line (cautionNote).
     const notes = caution ? [week.notes, generalSessionLine(caution, "week"), stopLine(caution)].filter(Boolean).join("\n") : week.notes;
     const draftId = randomUUID();
@@ -442,6 +458,8 @@ export const generateWorkoutPlan = defineTool({
         days: input.days,
         sessions: sessions.map((s) => `day ${s.day} (${moment.utc(s.date!, "YYYY-MM-DD").format("ddd")}): ${sessionLine(s.session)}`),
         notes: week.notes,
+        reading: { purpose: week.reading.purpose, said: week.reading.said, wishes: week.reading.wishes },
+        readingNote: "Open your reply with how you read the request, ONE line ('I read this as: …') — the purpose and the one or two implications that shaped the order of the days. If they correct it, redesign with the correction.",
         fit: week.fit.ok ? { ok: true } : { ok: false, issues: week.fit.issues, note: "Say plainly which days miss and why; offer to adjust. Do not claim it fits." },
         ...(caution ? { caution: cautionNote(caution, "week") } : {}),
         ...assumedNote(weekAssumed),
