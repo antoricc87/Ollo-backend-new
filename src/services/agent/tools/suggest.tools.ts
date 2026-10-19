@@ -1,8 +1,8 @@
 import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
 import { getLLM } from "../llm/openai.client";
-import { analyzeMeal } from "../../meal_analysis/mealAnalysis.service";
-import { MEAL_TYPES } from "../../meal_analysis/mealAnalysis.schema";
+import { analyzeDesignedMeal, analyzeMeal } from "../../meal_analysis/mealAnalysis.service";
+import { FOOD_GROUPS, MEAL_TYPES } from "../../meal_analysis/mealAnalysis.schema";
 import { defineTool, subjectField } from "./registry";
 import { nutritionContext } from "./generation.tools";
 import MealPlanService, { SLOT_SHARE } from "../../meal_plan/model/meal_plan.model";
@@ -99,7 +99,7 @@ export const suggestMeal = defineTool({
 
     /* ----------------------------- generate ----------------------------- */
     const tDesign = Date.now();
-    const draft = await getLLM().json<{ name: string; description: string; ingredients: { item: string; grams: number; note: string }[]; prepMinutes: number; why: string; alternatives: { name: string; description: string }[] }>({
+    const draft = await getLLM().json<{ name: string; description: string; ingredients: { item: string; grams: number; note: string; searchTerm: string; kcal: number; foodGroup: (typeof FOOD_GROUPS)[number]; glycemicIndex: number; isProcessedFood: boolean }[]; prepMinutes: number; why: string; alternatives: { name: string; description: string }[] }>({
       system:
         `You are a dietitian suggesting ONE ${mealType.toLowerCase()}${planSlot ? ` to REPLACE "${planSlot.replaces}" on day ${planSlot.day} of the user's saved meal plan — something clearly different from it` : " for right now"}. Hit the calorie and protein aim (±15%) with realistic portions in grams — count honestly (protein 4 kcal/g, carbs 4, fat 9). Respect allergies (never, in any form), intolerances, dislikes, watch-outs (keep flagged nutrients low) and remembered constraints; lean on likes and favorites when they fit. Honour the request (ingredients on hand, time, cuisine). Simple food people actually cook. Two different alternatives in one line each. No supplements, no medical claims.` +
         (kept.length
@@ -123,7 +123,22 @@ export const suggestMeal = defineTool({
           description: { type: "string", description: "One line: what it is" },
           ingredients: {
             type: "array",
-            items: { type: "object", properties: { item: { type: "string", description: "'salmon fillet', 'cooked quinoa'" }, grams: { type: "number" }, note: { type: "string", description: "household measure, e.g. '1 fillet', '½ cup' — or empty" } }, required: ["item", "grams", "note"], additionalProperties: false },
+            items: {
+              type: "object",
+              properties: {
+                item: { type: "string", description: "'salmon fillet', 'cooked quinoa'" },
+                grams: { type: "number" },
+                note: { type: "string", description: "household measure, e.g. '1 fillet', '½ cup' — or empty" },
+                // What the food-database lookup needs, so the suggestion goes straight to USDA (no second analysis).
+                searchTerm: { type: "string", description: "food-database style name, e.g. 'salmon, atlantic, cooked', 'quinoa, cooked'" },
+                kcal: { type: "number", description: "your kcal estimate for these grams" },
+                foodGroup: { type: "string", enum: [...FOOD_GROUPS] },
+                glycemicIndex: { type: "number", description: "0–100; 0 when carbohydrate is negligible" },
+                isProcessedFood: { type: "boolean" },
+              },
+              required: ["item", "grams", "note", "searchTerm", "kcal", "foodGroup", "glycemicIndex", "isProcessedFood"],
+              additionalProperties: false,
+            },
           },
           prepMinutes: { type: "integer" },
           why: { type: "string", description: "One line: how it fits today's numbers / their plan" },
@@ -152,7 +167,11 @@ export const suggestMeal = defineTool({
     let nutrientSource: "usda" | "model" | "unresolved" = "unresolved";
     try {
       // Only the additions are analysed; the kept food was grounded above.
-      const added = lines.length ? (await analyzeMeal({ text: `${draft.name}: ${lines.join(", ")}`, mealTypeHint: mealType, todayLocal: ctx.today }, { patientId: subject.id })).meals.flatMap((m) => m.ingredients).filter((i) => !(kept.length && isKept(i.name))) : [];
+      // The additions go straight to USDA with what the designer already knows (analyzeDesignedMeal);
+      // only if an item does not match does the meal take the full analysis.
+      const added = additions.length
+        ? (await analyzeDesignedMeal({ name: draft.name, mealType: mealType as any, items: additions.map((i) => ({ item: i.item, grams: i.grams, searchTerm: i.searchTerm, kcal: i.kcal, foodGroup: i.foodGroup, glycemicIndex: i.glycemicIndex, isProcessedFood: i.isProcessedFood })) }, { patientId: subject.id, todayLocal: ctx.today })).meals.flatMap((m) => m.ingredients).filter((i) => !(kept.length && isKept(i.name)))
+        : [];
       const keptSet = new Set<AnalyzedIngredient>(kept);
       let ings = [...kept, ...added];
       if (ings.length) {

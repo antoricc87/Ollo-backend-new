@@ -22,6 +22,9 @@ import {
   MealAnalysisResult,
   MealAnalysisSchema,
   Unit,
+  FOOD_GROUPS,
+  MEAL_TYPES,
+  NutrientsSchema,
 } from "./mealAnalysis.schema";
 import {
   AnalyzeOptions,
@@ -181,6 +184,57 @@ async function analyzeMealTimed(
 }
 
 export type ResolvedIngredient = { ingredient: Ingredient; resolution: IngredientResolution };
+// ---------------------------------------------------------------------------
+// analyzeDesignedMeal — a meal Ollie DESIGNED (suggest_meal), straight to USDA
+// ---------------------------------------------------------------------------
+
+/** One designed item: what the designer already knows about it (agent/tools/suggest.tools.ts). */
+export type DesignedItem = { item: string; grams: number; searchTerm: string; kcal: number; foodGroup: (typeof FOOD_GROUPS)[number]; glycemicIndex: number; isProcessedFood: boolean };
+
+const ZERO_NUTRIENTS = Object.fromEntries(Object.keys(NutrientsSchema.shape).map((k) => [k, 0])) as Ingredient["nutrients"];
+
+/**
+ * A suggestion's ingredients and grams are already decided, so re-reading them with the full analysis
+ * model (9.4 of a 20 s dinner suggestion in production, Oct 19 2026) is wasted work. Each item goes
+ * straight to the USDA lookup with the designer's kcal estimate for the plausibility check. Only when
+ * EVERY item resolves is that used; otherwise the whole meal takes the full analysis as before.
+ */
+export async function analyzeDesignedMeal(
+  meal: { name: string; mealType: (typeof MEAL_TYPES)[number]; items: DesignedItem[] },
+  opts: { patientId?: string; todayLocal?: string } = {}
+): Promise<MealAnalysisResult> {
+  return withMealTiming("designedMeal", async () => {
+    const started = Date.now();
+    const ings: Ingredient[] = meal.items.map((d) => ({
+      name: d.item,
+      searchTerm: d.searchTerm || d.item,
+      brand: null,
+      quantity: d.grams,
+      unit: "g",
+      grams: d.grams,
+      gramsLow: d.grams,
+      gramsHigh: d.grams,
+      portionSource: "standard_serving",
+      portionAssumption: null,
+      confidence: 0.8,
+      foodGroup: d.foodGroup,
+      isProcessedFood: d.isProcessedFood,
+      glycemicIndex: d.glycemicIndex,
+      vegetableServings: 0,
+      fruitServings: 0,
+      calories: d.kcal,
+      nutrients: { ...ZERO_NUTRIENTS },
+    }));
+    const resolved = ings.length ? await resolveIngredients(ings) : [];
+    const allUsda = resolved.length > 0 && resolved.every((r) => r.resolution.nutrientSource === "usda");
+    const text = `${meal.name}: ${meal.items.map((d) => `${d.grams} g ${d.item}`).join(", ")}`;
+    if (!allUsda) return analyzeMeal({ text, mealTypeHint: meal.mealType, todayLocal: opts.todayLocal }, { patientId: opts.patientId });
+    const ctx = opts.patientId ? await loadPatientContext(opts.patientId) : EMPTY_PATIENT_CONTEXT;
+    const parsed: MealAnalysisOutput = { meals: [{ mealName: meal.name, mealType: meal.mealType, mealDate: "today", portion: null, ingredients: ings }], dateReference: null, dateConfidence: 1 };
+    return compose(parsed, ctx, { model: "usda-direct", latencyMs: Date.now() - started, usage: null }, [resolved]);
+  });
+}
+
 
 /** Resolve every ingredient of every meal; returns a per-meal array aligned with `parsed.meals`. */
 export async function resolveMeals(
