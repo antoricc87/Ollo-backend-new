@@ -43,6 +43,7 @@ describe("llm policy", () => {
     expect(route("extract_vision", { LLM_EXTRACT_VISION_TIER: "fast" }).tier).toBe("fast");
     expect(route("extract_vision", {}).tier).toBe("fast");
     expect(route("extract_vision", { LLM_EXTRACT_VISION_TIER: "default" }).tier).toBe("default");
-    expect(route("design", {}).tier).toBe("default");
+    expect(route("design", {}).tier).toBe("fast");
+    expect(route("summarize", {}).tier).toBe("default");
   });
 });

@@ -311,7 +311,7 @@ async function* runLoop(p: {
       if (steps > 1) yield { type: "status", text: "Thinking" };
       // A check-in is the one conversation where the model takes a history and chooses a next step:
       // it runs as its own task (llm/policy.ts: more thinking than an ordinary turn).
-      const res = await llm.chat({ messages, tools: toolSpecs(), signal: p.signal, task: checkin ? "checkin" : "converse", cacheKey: `ollie:${patientId}` });
+      const res = await llm.chat({ messages, tools: toolSpecs(), signal: p.signal, task: checkin ? "checkin" : "converse", cacheKey: `ollie:${patientId}`, ...(p.proactive ? { tier: "default" as const } : {}) });
       usage = addUsage(usage, res.usage);
       model = res.model;
 

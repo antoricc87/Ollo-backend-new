@@ -43,6 +43,8 @@ export type ChatOptions = {
   model?: string;
   /** Overrides the task's thinking level (reasoning models only). */
   reasoningEffort?: Effort;
+  /** Overrides the task's service tier (a proactive run: nobody is waiting). */
+  tier?: "default" | "fast" | "flex";
   /** Groups calls that share a long prefix (one person's turns) so OpenAI's prompt cache hits. */
   cacheKey?: string;
   signal?: AbortSignal;

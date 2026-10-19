@@ -156,7 +156,8 @@ export class OpenAIClient implements LLMClient {
   }
 
   async chat(opts: ChatOptions): Promise<ChatResult> {
-    const r = route(opts.task ?? "converse");
+    const routed = route(opts.task ?? "converse");
+    const r = opts.tier ? { ...routed, tier: opts.tier } : routed;
     const model = opts.model || r.model;
     const effort = opts.reasoningEffort ?? r.effort;
     const tools: ChatCompletionTool[] | undefined = opts.tools?.length

@@ -54,23 +54,26 @@ const toSol = { model: SOL, effort: "medium" as Effort };
  * migration advice, quoted by Antonio Oct 19); work that needs judgement gets low or medium.
  * Each line is changed only with its area's tests (plan § Testing cost).
  */
+// Interactive work runs on the FAST tier (his OK, Oct 19 2026): on the standard tier single Luna calls
+// sometimes took 1–2 minutes (a meal analysis timed out and the card lost its one-tap log). Luna fast is
+// $0.20 / $1.00 per M — still ~10× cheaper than gpt-4.1. Background runs (proactive) use standard: nobody waits.
 const DEFAULTS: Record<Task, Omit<Route, "tier"> & { tier?: Tier }> = {
-  converse: { model: LUNA, effort: "none", escalate: null },
-  checkin: { model: LUNA, effort: "medium", escalate: null },
+  converse: { model: LUNA, effort: "none", escalate: null, tier: "fast" },
+  checkin: { model: LUNA, effort: "medium", escalate: null, tier: "fast" },
   // Moved alone, Oct 19 2026, after its own test matched case for case (13/13, same as gpt-4.1-mini).
-  safety: { model: LUNA, effort: "none", escalate: null },
+  safety: { model: LUNA, effort: "none", escalate: null, tier: "fast" },
   summarize: { model: LUNA, effort: "none", escalate: null },
-  classify: { model: LUNA, effort: "none", escalate: null },
-  extract: { model: LUNA, effort: "none", escalate: toSol },
+  classify: { model: LUNA, effort: "none", escalate: null, tier: "fast" },
+  extract: { model: LUNA, effort: "none", escalate: toSol, tier: "fast" },
   // Images need a little thinking (effort none misread 11 values on a scanned report) and the fast tier
   // (standard tier: single calls of 1–2 minutes stalled whole uploads). Oct 19 2026, scripts/eval-labs.ts.
   extract_vision: { model: LUNA, effort: "low", escalate: toSol, tier: "fast" },
   // The independent read-back is a DIFFERENT model on purpose: Sol caught Luna's ALT 9→99 misread
   // ("99 belongs to EGFR, not ALT") that a same-model check would share. 226/241 = gpt-4.1's score.
   verify: { model: SOL, effort: "low", escalate: null, tier: "fast" },
-  design: { model: LUNA, effort: "none", escalate: toSol },
-  plan: { model: LUNA, effort: "low", escalate: toSol },
-  review: { model: LUNA, effort: "low", escalate: null },
+  design: { model: LUNA, effort: "none", escalate: toSol, tier: "fast" },
+  plan: { model: LUNA, effort: "low", escalate: toSol, tier: "fast" },
+  review: { model: LUNA, effort: "low", escalate: null, tier: "fast" },
 };
 
 /** Variables that predate the policy, still honoured so nothing set on a machine silently stops working. */
