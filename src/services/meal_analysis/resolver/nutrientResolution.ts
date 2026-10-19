@@ -1,5 +1,6 @@
 import { DEADLINE_MS, structuredClient } from "../../agent/llm/structured";
 import { route } from "../../agent/llm/policy";
+import { timed } from "../timing";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { Ingredient } from "../mealAnalysis.schema";
@@ -180,7 +181,7 @@ export async function resolveIngredient(
 
   let candidates: FoodCandidate[];
   try {
-    candidates = await resolver.search(query, { dataTypes, pageSize: 10 });
+    candidates = await timed("usda", () => resolver.search(query, { dataTypes, pageSize: 10 }));
   } catch (err: any) {
     console.warn(`[resolver] search failed for "${query}":`, err?.message);
     return { ingredient: ing, resolution: llmFallback("resolver_unavailable") };
@@ -206,7 +207,7 @@ export async function resolveIngredient(
     pick = top;
   } else {
     try {
-      const idx = await rerank(ing, ranked.slice(0, 6).map((r) => r.candidate), rerankModel);
+      const idx = await timed("rerank", () => rerank(ing, ranked.slice(0, 6).map((r) => r.candidate), rerankModel));
       method = "rerank";
       if (idx >= 0) pick = ranked.slice(0, 6)[idx];
     } catch (err: any) {
@@ -253,7 +254,7 @@ async function ensurePortions<T extends ResolvedReference & { id?: string }>(
   if (ref.portions && ref.portions.length) return ref;
   if (resolver.isCoolingDown()) return ref;
   try {
-    const portions = await resolver.portions(ref.sourceId);
+    const portions = await timed("portions", () => resolver.portions(ref.sourceId));
     if (ref.id) await savePortions(ref.id, portions).catch(() => {});
     return { ...ref, portions };
   } catch (err: any) {

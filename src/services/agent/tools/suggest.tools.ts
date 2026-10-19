@@ -98,6 +98,7 @@ export const suggestMeal = defineTool({
     };
 
     /* ----------------------------- generate ----------------------------- */
+    const tDesign = Date.now();
     const draft = await getLLM().json<{ name: string; description: string; ingredients: { item: string; grams: number; note: string }[]; prepMinutes: number; why: string; alternatives: { name: string; description: string }[] }>({
       system:
         `You are a dietitian suggesting ONE ${mealType.toLowerCase()}${planSlot ? ` to REPLACE "${planSlot.replaces}" on day ${planSlot.day} of the user's saved meal plan — something clearly different from it` : " for right now"}. Hit the calorie and protein aim (±15%) with realistic portions in grams — count honestly (protein 4 kcal/g, carbs 4, fat 9). Respect allergies (never, in any form), intolerances, dislikes, watch-outs (keep flagged nutrients low) and remembered constraints; lean on likes and favorites when they fit. Honour the request (ingredients on hand, time, cuisine). Simple food people actually cook. Two different alternatives in one line each. No supplements, no medical claims.` +
@@ -135,6 +136,8 @@ export const suggestMeal = defineTool({
       task: "design",
     });
 
+    const designMs = Date.now() - tDesign;
+    const tGround = Date.now();
     /* ------------------------------ ground ------------------------------ */
     const additions = kept.length ? draft.ingredients.filter((i) => !isKept(i.item)) : draft.ingredients;
     const lines = additions.map((i) => `${i.grams} g ${i.item}${i.note ? ` (${i.note})` : ""}`);
@@ -178,6 +181,8 @@ export const suggestMeal = defineTool({
     } catch (e) {
       console.error("suggest_meal: analyzeMeal failed, falling back to model estimate", e);
     }
+    // Where a suggestion's time goes (47 s once in production, Oct 19 2026); analyzeMeal logs its own steps.
+    console.log(`[meal-timing] suggest_meal design ${(designMs / 1000).toFixed(1)}s · grounding ${((Date.now() - tGround) / 1000).toFixed(1)}s`);
     if (!nutrition) {
       // Analyzer unavailable: rough estimate from the aim so the card is never blank.
       nutrition = { calories: aimKcal, protein_g: aimProtein, carbs_g: 0, fat_g: 0, saturatedFat_g: null, fiber_g: null, sodium_mg: null };

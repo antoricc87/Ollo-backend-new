@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import { DEADLINE_MS, structuredClient } from "../agent/llm/structured";
+import { timed, withMealTiming } from "./timing";
 import { zodTextFormat } from "openai/helpers/zod";
 import { calculateAgeFromDob } from "../../utils/calculateAgefromDob";
 import { getPatientById } from "../patient/model/patient.model";
@@ -104,7 +105,11 @@ export { isReasoningModel, modelRequestParams } from "./modelParams";
 // analyzeMeal
 // ---------------------------------------------------------------------------
 
-export async function analyzeMeal(
+export async function analyzeMeal(input: MealAnalysisInput, opts: AnalyzeOptions = {}): Promise<MealAnalysisResult> {
+  return withMealTiming(input.imageDataUrl ? "analyzeMeal(photo)" : "analyzeMeal", () => analyzeMealTimed(input, opts));
+}
+
+async function analyzeMealTimed(
   input: MealAnalysisInput,
   opts: AnalyzeOptions = {}
 ): Promise<MealAnalysisResult> {
@@ -145,14 +150,14 @@ export async function analyzeMeal(
   let response;
   let usedModel = model;
   try {
-    response = await request(model);
+    response = await timed("model", () => request(model));
   } catch (err: any) {
     // Safety net: if the configured model is not available to this API key
     // (e.g. a newer model on an older account), fall back rather than fail the log.
     if (!isModelUnavailableError(err) || model === fallback) throw err;
     console.warn(`[meal-analysis] model "${model}" unavailable (${err?.status}); falling back to ${fallback}`);
     usedModel = fallback;
-    response = await request(fallback);
+    response = await timed("model", () => request(fallback));
   }
   const parsed = response.output_parsed as MealAnalysisOutput | null;
   if (!parsed) throw new Error("analyzeMeal: no structured output returned");
