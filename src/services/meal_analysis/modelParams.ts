@@ -21,9 +21,11 @@ export function normalizeEffort(model: string, effort: ReasoningEffort): string 
 
 export function modelRequestParams(
   model: string,
-  effort: ReasoningEffort = DEFAULT_REASONING_EFFORT
+  effort: ReasoningEffort = DEFAULT_REASONING_EFFORT,
+  tier: "default" | "fast" = "default"
 ): Record<string, unknown> {
-  return isReasoningModel(model)
-    ? { reasoning: { effort: normalizeEffort(model, effort) } }
-    : { temperature: 0 };
+  return {
+    ...(isReasoningModel(model) ? { reasoning: { effort: normalizeEffort(model, effort) } } : { temperature: 0 }),
+    ...(tier === "fast" ? { service_tier: "fast" } : {}),
+  };
 }

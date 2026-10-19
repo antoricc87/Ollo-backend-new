@@ -15,10 +15,10 @@
  * (default: the lab extraction model).
  */
 import { zodTextFormat } from "openai/helpers/zod";
+import { DEADLINE_MS, structuredClient } from "../../agent/llm/structured";
 import { route } from "../../agent/llm/policy";
 import { extractPdfLayout } from "../../lab_extraction/pdfLayout";
 import { renderPdfPages } from "../../lab_extraction/pdfRender";
-import OpenAI from "openai";
 import { modelRequestParams } from "../../meal_analysis/mealAnalysis.service";
 import { BenefitsSchema, normalizeBenefits, reviewBenefits, type Benefits, type StoredBenefits } from "../domain/benefits";
 
@@ -28,11 +28,8 @@ export const INSURANCE_MODEL = route("extract").model;
 const MAX_CHARS = 60_000;
 
 // Its own client: a whole summary is one long structured answer (30–60 s), far past the meal client's 20 s cap.
-let client: OpenAI | null = null;
-export const getClient = () => {
-  if (!client) client = new OpenAI({ apiKey: process.env.REACT_APP_OPENAI_API_KEY || "", timeout: Number(process.env.INSURANCE_OPENAI_TIMEOUT_MS || 180_000), maxRetries: 1 });
-  return client;
-};
+// The shared structured-call connection; a whole benefits summary may take minutes (agent/llm/structured.ts).
+export const getClient = () => structuredClient(DEADLINE_MS.document);
 const MAX_SCAN_PAGES = 8;
 
 export const BENEFITS_PROMPT = `You transcribe a US health plan's "Summary of Benefits and Coverage" (SBC) into a fixed structure. You copy what is printed; you never infer, compute or fill in typical values.

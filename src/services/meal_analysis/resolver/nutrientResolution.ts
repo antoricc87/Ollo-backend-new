@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import { DEADLINE_MS, structuredClient } from "../../agent/llm/structured";
 import { route } from "../../agent/llm/policy";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
@@ -18,7 +18,7 @@ import {
 } from "./foodReference.repository";
 import { isPlausible, rankCandidates } from "./matchScoring";
 import { gramsFromReference } from "./portionMatching";
-import { UsdaFdcResolver, ResolverUnavailableError } from "./usdaFdc.resolver";
+import { UsdaFdcResolver } from "./usdaFdc.resolver";
 import { modelRequestParams } from "../modelParams";
 import { ReasoningEffort } from "../mealAnalysis.types";
 import { scalePer100g } from "./usdaNutrients";
@@ -54,15 +54,8 @@ export function getDefaultResolver(): FoodResolver {
   return defaultResolver;
 }
 
-let openaiClient: OpenAI | null = null;
-const getOpenAI = () => {
-  if (!openaiClient) openaiClient = new OpenAI({
-      apiKey: process.env.REACT_APP_OPENAI_API_KEY || "",
-      timeout: Number(process.env.NUTRITION_OPENAI_TIMEOUT_MS || 20_000), // typical call 3-6 s; hung requests seen at ~45 s
-      maxRetries: 1,
-    });
-  return openaiClient;
-};
+// The shared structured-call connection; a food-database pick is quick (agent/llm/structured.ts).
+const getOpenAI = () => structuredClient(DEADLINE_MS.quick);
 
 const RerankSchema = z.object({
   bestIndex: z.number().describe("Index of the best candidate, or -1 if none is acceptable"),

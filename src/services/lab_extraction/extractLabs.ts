@@ -9,7 +9,7 @@
  * Model is configurable via LAB_EXTRACTION_MODEL (default gpt-4.1). The
  * legacy path stays reachable with LAB_EXTRACTION_ENGINE=legacy.
  */
-import OpenAI from "openai";
+import { DEADLINE_MS, structuredClient } from "../agent/llm/structured";
 import { route } from "../agent/llm/policy";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -25,11 +25,8 @@ import { buildLabReportSummary } from "./reportSummary";
 export const DEFAULT_LAB_MODEL = route("extract").model;
 const LAB_EFFORT = route("extract").effort;
 
-let client: OpenAI | null = null;
-const getClient = () => {
-  if (!client) client = new OpenAI({ apiKey: process.env.REACT_APP_OPENAI_API_KEY || "" });
-  return client;
-};
+// The shared structured-call connection, with a deadline (agent/llm/structured.ts).
+const getClient = () => structuredClient(DEADLINE_MS.page);
 
 const ExtractionSchema = z.object({
   labResults: z.array(

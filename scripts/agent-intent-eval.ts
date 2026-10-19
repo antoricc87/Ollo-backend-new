@@ -24,7 +24,9 @@ import { createFixture, destroyFixture, seedFinishedCheckin } from "../tests/age
 
 const args = process.argv.slice(2);
 const arg = (k: string) => (args.indexOf(k) >= 0 ? args[args.indexOf(k) + 1] : undefined);
-const JUDGE = process.env.INTENT_EVAL_JUDGE ?? "gpt-5.5";
+// The grader: a strong model that is NOT the one being graded. gpt-6.1-sol ($2 / $10 per M) replaced
+// gpt-5.5 ($5 / $30) on Oct 19 2026 — the grader had been the most expensive model in the run.
+const JUDGE = process.env.INTENT_EVAL_JUDGE ?? "gpt-6.1-sol";
 
 type Ask = "must" | "never" | "either";
 type Case = { key: string; area: string; turns: string[]; ask: Ask; setup?: (patientId: string) => Promise<unknown>; note?: string };

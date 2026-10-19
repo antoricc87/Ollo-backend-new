@@ -165,6 +165,7 @@ export class OpenAIClient implements LLMClient {
       ...(tools ? { tools, tool_choice: "auto" as const } : {}),
       ...(opts.maxOutputTokens ? { max_completion_tokens: opts.maxOutputTokens } : {}),
       ...sampling(model, 0.3, effort),
+      ...(r.tier === "fast" ? { service_tier: "fast" as any } : {}),
     };
 
     const out = needsResponses(model)
@@ -182,6 +183,7 @@ export class OpenAIClient implements LLMClient {
                   ...(opts.tools?.length ? { tools: opts.tools.map((t) => ({ type: "function" as const, name: t.name, description: t.description, parameters: t.parameters, strict: false })) } : {}),
                   ...(opts.maxOutputTokens ? { max_output_tokens: opts.maxOutputTokens } : {}),
                   reasoning: { effort: effort as "low" },
+                  ...(r.tier === "fast" ? { service_tier: "fast" } : {}),
                   store: false,
                   stream: true,
                 } as any,
@@ -223,6 +225,7 @@ export class OpenAIClient implements LLMClient {
               },
               stream: true,
               ...sampling(model, 0, effort),
+              ...(r.tier === "fast" ? { service_tier: "fast" as any } : {}),
             },
             { signal }
           ),

@@ -10,7 +10,10 @@
  * everyone, and every escalation is logged so we can see where Luna needs help.
  *
  * Overrides, one per task (Railway or .env): LLM_<TASK>=model[:effort]  ·  LLM_<TASK>_ESCALATE=model[:effort] | off
- * e.g. LLM_DESIGN=gpt-6.1-sol:medium, LLM_SAFETY_ESCALATE=off.
+ *   · LLM_<TASK>_TIER=fast | default   e.g. LLM_DESIGN=gpt-6.1-sol:medium, LLM_SAFETY_ESCALATE=off.
+ *
+ * Tier: OpenAI's "fast" service tier (formerly Priority) — up to 2.5× faster and steadier latency at 2× the
+ * token price. For work where one slow call holds up a whole result (a scanned report's strips).
  */
 
 export type Effort = "none" | "low" | "medium" | "high";
@@ -39,7 +42,8 @@ export type Task =
   /** Checking a result against what was asked. */
   | "review";
 
-export type Route = { model: string; effort: Effort; escalate: { model: string; effort: Effort } | null };
+export type Tier = "default" | "fast";
+export type Route = { model: string; effort: Effort; escalate: { model: string; effort: Effort } | null; tier: Tier };
 
 const LUNA = "gpt-6-luna";
 const SOL = "gpt-6.1-sol";
@@ -50,7 +54,7 @@ const toSol = { model: SOL, effort: "medium" as Effort };
  * migration advice, quoted by Antonio Oct 19); work that needs judgement gets low or medium.
  * Each line is changed only with its area's tests (plan § Testing cost).
  */
-const DEFAULTS: Record<Task, Route> = {
+const DEFAULTS: Record<Task, Omit<Route, "tier"> & { tier?: Tier }> = {
   converse: { model: LUNA, effort: "none", escalate: null },
   checkin: { model: LUNA, effort: "medium", escalate: null },
   // Unchanged until the safety tests match on the new model — then its own commit moves it.
@@ -58,8 +62,12 @@ const DEFAULTS: Record<Task, Route> = {
   summarize: { model: LUNA, effort: "none", escalate: null },
   classify: { model: LUNA, effort: "none", escalate: null },
   extract: { model: LUNA, effort: "none", escalate: toSol },
-  extract_vision: { model: LUNA, effort: "low", escalate: toSol },
-  verify: { model: LUNA, effort: "low", escalate: null },
+  // Images need a little thinking (effort none misread 11 values on a scanned report) and the fast tier
+  // (standard tier: single calls of 1–2 minutes stalled whole uploads). Oct 19 2026, scripts/eval-labs.ts.
+  extract_vision: { model: LUNA, effort: "low", escalate: toSol, tier: "fast" },
+  // The independent read-back is a DIFFERENT model on purpose: Sol caught Luna's ALT 9→99 misread
+  // ("99 belongs to EGFR, not ALT") that a same-model check would share. 226/241 = gpt-4.1's score.
+  verify: { model: SOL, effort: "low", escalate: null, tier: "fast" },
   design: { model: LUNA, effort: "none", escalate: toSol },
   plan: { model: LUNA, effort: "low", escalate: toSol },
   review: { model: LUNA, effort: "low", escalate: null },
@@ -73,6 +81,8 @@ const LEGACY_ENV: Partial<Record<Task, string[]>> = {
 };
 
 const EFFORTS: Effort[] = ["none", "low", "medium", "high"];
+/** Models that accept no "none" effort. */
+const NO_NONE = /-(sol|astra)\b/i;
 
 const parse = (raw: string | undefined, fallbackEffort: Effort): { model: string; effort: Effort } | null => {
   if (!raw?.trim()) return null;
@@ -85,15 +95,20 @@ export const route = (task: Task, env: Record<string, string | undefined> = proc
   const key = `LLM_${task.toUpperCase()}`;
   const legacy = (LEGACY_ENV[task] ?? []).map((k) => env[k]).find((v) => v?.trim());
   const legacyEffort = task === "checkin" ? env.AGENT_CHECKIN_EFFORT : undefined;
-  const chosen = parse(env[key], base.effort) ?? (legacy ? { model: legacy.trim(), effort: (EFFORTS.includes(legacyEffort as Effort) ? legacyEffort : base.effort) as Effort } : null) ?? base;
+  let chosen = parse(env[key], base.effort) ?? (legacy ? { model: legacy.trim(), effort: (EFFORTS.includes(legacyEffort as Effort) ? legacyEffort : base.effort) as Effort } : null) ?? base;
   const esc = env[`${key}_ESCALATE`];
-  const escalate = esc?.trim() === "off" ? null : parse(esc, "medium") ?? base.escalate;
-  return { model: chosen.model, effort: chosen.effort, escalate: escalate && escalate.model !== chosen.model ? escalate : null };
+  let escalate = esc?.trim() === "off" ? null : parse(esc, "medium") ?? base.escalate;
+  if (escalate && NO_NONE.test(escalate.model) && escalate.effort === "none") escalate = { ...escalate, effort: "low" };
+  // Sol and Astra refuse effort "none" (400, Oct 19 2026): never send it to them.
+  if (NO_NONE.test(chosen.model) && chosen.effort === "none") chosen = { ...chosen, effort: "low" };
+  const tierEnv = env[`${key}_TIER`]?.trim();
+  const tier: Tier = tierEnv === "fast" || tierEnv === "default" ? tierEnv : base.tier ?? "default";
+  return { model: chosen.model, effort: chosen.effort, escalate: escalate && escalate.model !== chosen.model ? escalate : null, tier };
 };
 
 /** The whole table as it resolves now — printed at boot so the deployed choice is visible in the logs. */
 export const policyTable = (env: Record<string, string | undefined> = process.env) =>
   (Object.keys(DEFAULTS) as Task[]).map((t) => {
     const r = route(t, env);
-    return `${t}=${r.model}:${r.effort}${r.escalate ? `→${r.escalate.model}:${r.escalate.effort}` : ""}`;
+    return `${t}=${r.model}:${r.effort}${r.tier === "fast" ? "(fast)" : ""}${r.escalate ? `→${r.escalate.model}:${r.escalate.effort}` : ""}`;
   });

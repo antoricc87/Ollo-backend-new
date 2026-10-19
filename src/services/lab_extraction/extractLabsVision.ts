@@ -16,7 +16,7 @@
  * PRIVACY: a scanned PDF cannot be text-redacted, so the pages go to the
  * model with identifiers visible. Disable with LAB_VISION_FALLBACK=false.
  */
-import OpenAI from "openai";
+import { DEADLINE_MS, structuredClient } from "../agent/llm/structured";
 import { route } from "../agent/llm/policy";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
@@ -49,11 +49,8 @@ const mapLimit = async <T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
   return out;
 };
 
-let client: OpenAI | null = null;
-const getClient = () => {
-  if (!client) client = new OpenAI({ apiKey: process.env.REACT_APP_OPENAI_API_KEY || "" });
-  return client;
-};
+// The shared structured-call connection, with a deadline per strip (agent/llm/structured.ts).
+const getClient = () => structuredClient(DEADLINE_MS.page);
 
 const Entry = z.object({
   testType: z.string(),
@@ -127,7 +124,7 @@ export const extractLabsVision = async (
   const transcribed = await mapLimit(segments, CONCURRENCY, async (sg) => {
     const r = await getClient().responses.parse({
       model,
-      ...(modelRequestParams(model, model === DEFAULT_LAB_VISION_MODEL ? route("extract_vision").effort : undefined) as any),
+      ...(modelRequestParams(model, model === DEFAULT_LAB_VISION_MODEL ? route("extract_vision").effort : undefined, route("extract_vision").tier) as any),
       input: [
         { role: "system", content: TRANSCRIBE_PROMPT },
         {
@@ -175,7 +172,7 @@ export const extractLabsVision = async (
       if (items.length === 0) return null;
       const r = await getClient().responses.parse({
         model: verifyModel,
-        ...(modelRequestParams(verifyModel, verifyModel === DEFAULT_LAB_VISION_VERIFY_MODEL ? route("verify").effort : undefined) as any),
+        ...(modelRequestParams(verifyModel, verifyModel === DEFAULT_LAB_VISION_VERIFY_MODEL ? route("verify").effort : undefined, route("verify").tier) as any),
         input: [
           { role: "system", content: VERIFY_PROMPT },
           {

@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import OpenAI from "openai";
+import { DEADLINE_MS, structuredClient } from "../agent/llm/structured";
 import { zodTextFormat } from "openai/helpers/zod";
 import { calculateAgeFromDob } from "../../utils/calculateAgefromDob";
 import { getPatientById } from "../patient/model/patient.model";
@@ -48,17 +48,8 @@ export function isModelUnavailableError(err: any): boolean {
 }
 export const DEFAULT_RESOLVER = (process.env.NUTRITION_RESOLVER || "usda") as "usda" | "llm";
 
-let client: OpenAI | null = null;
-export const getClient = () => {
-  if (!client) {
-    client = new OpenAI({
-      apiKey: process.env.REACT_APP_OPENAI_API_KEY || "",
-      timeout: Number(process.env.NUTRITION_OPENAI_TIMEOUT_MS || 20_000), // typical call 3-6 s; hung requests seen at ~45 s
-      maxRetries: 1,
-    });
-  }
-  return client;
-};
+// The shared structured-call connection; a meal call is quick (agent/llm/structured.ts).
+export const getClient = () => structuredClient(DEADLINE_MS.quick);
 
 // ---------------------------------------------------------------------------
 // Patient context

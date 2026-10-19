@@ -1,9 +1,9 @@
 // openaiService.ts
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { DEADLINE_MS, structuredClient } from "../../agent/llm/structured";
 import dotenv from "dotenv";
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
-import OpenAI from "openai";
 import path from "path";
 import os from "os";
 import { randomUUID } from "crypto";
@@ -19,10 +19,8 @@ const writeFile = promisify(fs.writeFile);
 const unlink = promisify(fs.unlink);
 dotenv.config();
 
-const apiKey = process.env.REACT_APP_OPENAI_API_KEY;
-const openai = new OpenAI({
-  apiKey: apiKey || "",
-});
+// Voice notes go through the shared connection with a deadline (agent/llm/structured.ts).
+const openai = structuredClient(DEADLINE_MS.page);
 
 // ---------------------------------------------------------------------------
 // Meal analysis. The calorie entry points delegate to the unified analyzeMeal
