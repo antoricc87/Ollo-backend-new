@@ -22,6 +22,30 @@ analysis and lab extraction. Mobile app lives in `../healtcare-mobile-app-main`.
 - Full `tsc` has ~7 pre-existing errors (lab_extraction `unknown` narrowing,
   @napi-rs/canvas Float16Array) — runtime uses transpile-only, don't block on them.
 
+## One model policy (R1, Oct 2026) — `src/services/agent/llm/policy.ts`
+
+Plan: `../docs/ollie-request-handling-plan.md`. Ruling (Oct 19 2026): Ollie is ONE infrastructure, gpt-4
+is being retired, GPT-6 Luna first and GPT-6.1 Sol only where Luna falls short.
+- Every model call names a `Task` (converse, checkin, safety, summarize, classify, extract,
+  extract_vision, verify, design, plan, review), never a model. `route(task)` gives model, effort and the
+  escalation model; `policyTable()` is logged at boot (`[llm] policy …`). Override per task:
+  `LLM_<TASK>=model[:effort]`, `LLM_<TASK>_ESCALATE=model[:effort]|off`. `AGENT_MODEL`,
+  `AGENT_CHECKIN_MODEL/EFFORT`, `AGENT_FAST_MODEL` still work as aliases.
+- Shared client (`openai.client.ts`): `chat({task})`, `json({task, accept?, images?})`. `accept` is the
+  caller's own check; when it fails (or the JSON is unusable) the call runs once on the escalation model
+  — the same rule for every area, every escalation logged `[llm] escalate …`. Design loops pass `accept`
+  on their LAST revision only, so Sol is used when the cheap retries did not fix it.
+- The Responses-API callers (meals, labs, insurance) take model + effort from the same table via
+  `modelRequestParams(model, effort)`. gpt-6 counts as a reasoning model; effort "none" is cast past the
+  SDK's types.
+- Safety stays on gpt-4.1-mini until its own tests match on the new model (ruling: only if it matches).
+- Deleted as dead (Oct 19 2026, his go): the old lab parsers in `openAI/model/openai.model.ts`, the
+  `MEAL_ANALYSIS_ENGINE=legacy` calorie prompts (`openAI/model/legacy/`), `LAB_EXTRACTION_ENGINE=legacy`,
+  the unrouted utils photo/transcription/PDF handlers, `generatePortionsFromAI`, `generateOptimalCalories`,
+  `generateNutrientsTotalAmountAndCalories` and `POST /api/nutrition/generateOptimalValues` (no app caller).
+- Worktree gotcha: with `node_modules` linked to the main repo, Prisma fills any env var the copy leaves
+  unset from the MAIN `.env` — set model variables explicitly (empty) in test copies.
+
 ## Health Plan v1 (Aug 2026) — `src/services/plan/`
 
 Goal → pillar targets (SLEEP/EXERCISE/NUTRITION) + nutrition watch-outs.
@@ -1648,7 +1672,7 @@ Railway after deploy).
   Quest scan, ~13/67 flagged "check". The PDF pages go to OpenAI unredacted
   (can't text-redact an image) — `LAB_VISION_FALLBACK=false` re-enables the
   422 rejection. The app tells the user a scan was read visually.
-  `LAB_EXTRACTION_ENGINE=legacy` restores the old path.
+  The old `LAB_EXTRACTION_ENGINE=legacy` path was deleted Oct 19 2026 (R1).
   **Summary wording (Sep 15 2026):** the model no longer writes `labReport`
   or `recommendations` (the old prompt produced "above the recommended range
   and may increase your risk for heart disease", "no exercise changes are
