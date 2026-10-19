@@ -282,6 +282,8 @@ async function* runLoop(p: {
     today: dayKey(tz),
     resolveSubject: makeSubjectResolver(patientId),
     client: p.client,
+    // Their messages only: bracketed rows are the loop's own nudges and confirmations.
+    userWords: window.messages.filter((m: any) => m.role === "USER" && typeof m.content === "string" && !m.content.startsWith("[")).slice(-3).map((m: any) => m.content.slice(0, 1500)),
   };
 
   const cards: Card[] = [];

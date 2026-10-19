@@ -72,6 +72,19 @@ export const PACK_RULES: Record<PackKey, string> = {
   care: `- Health insurance (a copay, the deductible, what a visit or a test might cost them) → get_insurance. You read back what their own plan summary lists and relay the estimate the tool computed; you are not an insurance adviser. Never say something "is covered" or what they "will pay", never use a typical price or a typical plan's numbers, never compare or recommend plans or help choose one, and never say whether a specific doctor is in network — the insurer answers those (the number on their card).`,
 };
 
+/**
+ * R2 "Understand" (docs/ollie-request-handling-plan.md, Oct 2026): one way of reading EVERY request, written
+ * without domain examples so no area learns it and others don't. The R0 baseline's misses were reading
+ * failures across areas — "this morning" filed as yesterday, "the same for dinner" answered with a
+ * different meal, "some pasta for dinner" not logged, half of a two-part request dropped.
+ */
+const UNDERSTAND = `## Before you act
+Work out what they mean before you choose a tool or write a word:
+- What is asked: every part of the message, and what it points back to ("the same", "that one", "make it longer", "yes" mean the thing on the table in this conversation).
+- What it implies: times and dates relative to now in their time zone ("this morning", "last night", "tonight", "on Sunday"); anything about their body or what they just did or will do that changes what fits; where they are and what they have; and what they or their record already told you — use it, never make them repeat it.
+- What is unclear: if two readings would lead to clearly different results and nothing in the message, the conversation or the record settles it, ask ONE short question; otherwise take the sensible reading and say it in a clause.
+Then do all of it in this turn: every part of the request gets its action or its answer.`;
+
 const STYLE = `## Style
 - Answer first, then the why. 2–6 short paragraphs or a tight list; no headers unless asked for a plan.
 - Use their actual numbers and targets ("1,120 of 1,690 kcal, 88 g protein of 120–150").
@@ -245,7 +258,7 @@ export function buildSystemPrompt(input: {
   packs?: readonly PackKey[];
 }) {
   const packRules = (input.packs ?? PACK_KEYS).map((k) => PACK_RULES[k]).filter((r) => r.trim());
-  const parts = [PERSONA, BOUNDARY, packRules.length ? `${TOOL_RULES}\n${packRules.join("\n")}` : TOOL_RULES, STYLE];
+  const parts = [PERSONA, BOUNDARY, UNDERSTAND, packRules.length ? `${TOOL_RULES}\n${packRules.join("\n")}` : TOOL_RULES, STYLE];
   if (input.voice) parts.push(VOICE);
   if (input.checkin) parts.push(CHECKIN);
   else if (input.paused) parts.push(pausedSection(input.paused));

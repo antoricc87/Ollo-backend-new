@@ -2,7 +2,7 @@ import { z } from "zod";
 import moment from "moment-timezone";
 import { randomUUID } from "crypto";
 import prisma from "../../../utility/prismaClient";
-import { dayString, defineTool, shiftDay, subjectField } from "./registry";
+import { dayString, defineTool, shiftDay, subjectField, withTheirWords } from "./registry";
 import type { Card } from "./registry";
 import WorkoutService from "../../workouts/model/workouts.model";
 import WorkoutPlanService, { fmtTargets, lastSavedWeek, type WorkoutPlanView } from "../../workouts/model/plan.model";
@@ -351,7 +351,7 @@ export const generateWorkout = defineTool({
       const row = await WorkoutService.get(ctx.patientId, input.replaceSessionId);
       if (row && row.status === "PLANNED") replaces = { id: row.id, title: row.title ?? activityByKey(row.activityKey).label, date: row.plannedFor ?? date };
     }
-    const designed = await designSession({ durationMin, focus: defaults.focus, muscleGroups: input.muscleGroups ?? [], place, equipment: input.equipment ?? profile?.equipment ?? [], request: input.request ?? null, date: replaces?.date ?? date, caution }, brief);
+    const designed = await designSession({ durationMin, focus: defaults.focus, muscleGroups: input.muscleGroups ?? [], place, equipment: input.equipment ?? profile?.equipment ?? [], request: withTheirWords(input.request, ctx), date: replaces?.date ?? date, caution }, brief);
     const draftId = randomUUID();
     const display = sessionDisplay(designed.session);
     const active = await WorkoutPlanService.getActive(ctx.patientId);
@@ -407,7 +407,7 @@ export const generateWorkoutPlan = defineTool({
     const weekAssumed = defaults.assumed.filter((a) => !/session/i.test(a));
     const sessionsPerWeek = input.sessionsPerWeek ?? brief.plan?.sessionsPerWeek ?? 3;
     const startDate = input.startDate && input.startDate >= ctx.today ? input.startDate : ctx.today;
-    const week = await designWeek({ startDate, days: input.days, sessionsPerWeek: Math.min(sessionsPerWeek, input.days), sessionMinutes: durationMin, minutesFixed: !!statedMinutes, focus: input.focus ?? null, place, request: input.request ?? null, caution }, brief);
+    const week = await designWeek({ startDate, days: input.days, sessionsPerWeek: Math.min(sessionsPerWeek, input.days), sessionMinutes: durationMin, minutesFixed: !!statedMinutes, focus: input.focus ?? null, place, request: withTheirWords(input.request, ctx), caution }, brief);
     // Saved with the week. The week card does not print notes today, so the reply carries the same line (cautionNote).
     const notes = caution ? [week.notes, generalSessionLine(caution, "week"), stopLine(caution)].filter(Boolean).join("\n") : week.notes;
     const draftId = randomUUID();

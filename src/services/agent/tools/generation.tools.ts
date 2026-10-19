@@ -1,5 +1,6 @@
 import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
+import { withTheirWords } from "./registry";
 import { getLLM } from "../llm/openai.client";
 import { randomUUID } from "crypto";
 import { defineTool, subjectField } from "./registry";
@@ -213,7 +214,7 @@ export const generateMealPlan = defineTool({
         mealsPerDay,
         ...(coverage ? { covers: slots } : {}),
         perMealGuide: perMealGuide(planTargets, mealsPerDay, slots),
-        request: input.request ?? null,
+        request: withTheirWords(input.request, ctx),
         context: { ...context, dailyTargets: planTargets, ...(coverage ? { wholeDayTargets: dayTargets, coveredShare: coverage.share } : {}) },
         remembered: memories.map((m) => m.content),
         ...(revision ? { previousPlan: revision.previous, issues: revision.issues, stillNeeded: deficits(revision.previous.days, planTargets) } : {}),

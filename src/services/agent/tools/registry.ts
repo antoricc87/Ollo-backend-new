@@ -25,6 +25,19 @@ export type ToolContext = {
   resolveSubject: (subjectId?: string | null) => Promise<{ id: string; name: string; isSelf: boolean }>;
   /** Phone-side data sent with this turn (HealthKit); null when not a user turn. */
   client?: ClientContext | null;
+  /**
+   * The person's own last messages in this thread, verbatim, newest last (R2, Oct 2026). A tool's
+   * arguments are the model's summary of them, and a summary loses what a designer needs ("I played
+   * soccer today", "at the end of the week") — tools that design from free text read these too.
+   */
+  userWords?: string[];
+};
+
+/** The request as the model summarised it, plus their own words — what a designer should read. */
+export const withTheirWords = (request: string | null | undefined, ctx: Pick<ToolContext, "userWords">): string | null => {
+  const words = (ctx.userWords ?? []).filter((w) => w.trim());
+  if (!words.length) return request ?? null;
+  return `${request?.trim() ? `${request.trim()}\n` : ""}Their own words, newest last: ${words.map((w) => `"${w.slice(0, 600)}"`).join(" / ")}`;
 };
 
 export type ToolOutcome = {

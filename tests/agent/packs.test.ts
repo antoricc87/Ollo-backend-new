@@ -30,6 +30,8 @@ describe("area packs", () => {
     const none = buildSystemPrompt({ snapshotText: "", packs: [] });
     expect(none).toMatch(/Hard boundary/);
     expect(none).toMatch(/Training and the body/);
+    // R2: the same way of reading a request, whatever the area.
+    expect(none).toMatch(/## Before you act/);
     expect(none.length).toBeLessThan(buildSystemPrompt({ snapshotText: "" }).length);
   });
 
