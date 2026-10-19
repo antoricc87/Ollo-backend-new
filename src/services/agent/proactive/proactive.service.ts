@@ -5,6 +5,7 @@ import { SINGLE_LINES, type DeliveryMode } from "../../notifications/gate";
 import { ProactiveKind, runProactiveCollect } from "../agent.service";
 import { audit } from "../memory/audit";
 import { isoWeekRange, safeTz } from "../memory/dates";
+import { lastSavedWeek } from "../../workouts/model/plan.model";
 import type { Yardstick } from "../../signals/domain/types";
 
 /**
@@ -76,10 +77,22 @@ const weeklyInstruction = (tz: string) => {
   return `[Weekly plan review for the week ${lastWeek.start} → ${lastWeek.end}. First call get_week_review (no arguments): it returns that week against the one before, row by row, and shows the review card. Only if you need detail the card does not carry, call get_nutrition_summary or get_workouts for that exact range (from=${lastWeek.start}, to=${lastWeek.end}). Compare against the plan targets. If a target should change, call update_plan_targets with the full new target list.]`;
 };
 
-const planWeekInstruction = (tz: string) => {
+/**
+ * Next week starts from the last week they CHOSE (Oct 18 2026): with nothing
+ * logged this week, the run designed "three full-body sessions" — back squats,
+ * Mon/Wed/Sat, 35 min — for someone whose last saved week was a 60-minute
+ * Mon/Wed/Thu back-recovery week. Its request, days and length are handed
+ * over verbatim; the check-in on record is applied by the tool itself.
+ */
+const planWeekInstruction = async (patientId: string, tz: string) => {
   const thisWeek = isoWeekRange(tz, moment().tz(tz));
   const nextMonday = thisWeek.next;
-  return `[Sunday planning for the week starting ${nextMonday}. First call get_workouts with status=all from=${thisWeek.start} to=${thisWeek.end} to see what was planned and done this week. Then call generate_workout_plan with startDate=${nextMonday}, days=7 (sessionsPerWeek from the plan target; keep what worked, adjust what was missed). Present the split in a few lines and say the card has Save. Do NOT call save_workout_plan.]`;
+  const last = await lastSavedWeek(patientId).catch(() => null);
+  const days = last?.days.length ? last.days.map((d) => d.charAt(0).toUpperCase() + d.slice(1)).join(", ") : null;
+  const carry = last
+    ? ` Their last saved week, "${last.title}", was asked for as: "${last.request ?? "(no words saved)"}"${days ? `, trained ${days}` : ""}${last.sessionMinutes ? `, ${last.sessionMinutes} min a session` : ""}. Start from it: pass request="${[last.request, days ? `Train on ${days}.` : null].filter(Boolean).join(" ").replace(/"/g, "'")}"${last.sessionMinutes ? ` and sessionMinutes=${last.sessionMinutes}` : ""}, and change only what this week's sessions give a reason to change.`
+    : "";
+  return `[Sunday planning for the week starting ${nextMonday}. First call get_workouts with status=all from=${thisWeek.start} to=${thisWeek.end} to see what was planned and done this week. Then call generate_workout_plan with startDate=${nextMonday}, days=7 (sessionsPerWeek from the plan target; keep what worked, adjust what was missed).${carry} If nothing was planned or recorded this week, say nothing about it — unrecorded is not the same as not done. Present the split in a few lines and say the card has Save. Do NOT call save_workout_plan.]`;
 };
 
 /**
@@ -141,7 +154,7 @@ export async function runProactiveFor(patientId: string, kind: ProactiveKind, op
   // A signal brings its own instruction (the detector's finding); the scheduled
   // kinds write theirs from the calendar.
   const instruction =
-    opts.instruction ?? (kind === "weekly_review" ? weeklyInstruction(tz) : kind === "plan_week" ? planWeekInstruction(tz) : null);
+    opts.instruction ?? (kind === "weekly_review" ? weeklyInstruction(tz) : kind === "plan_week" ? await planWeekInstruction(patientId, tz) : null);
   if (!instruction) throw new Error(`proactive ${kind} needs an instruction — the finding is written by code, never looked for by the model`);
   const title = opts.title ?? (kind === "weekly_review" ? `Weekly review · ${isoWeekRange(tz, moment().tz(tz).subtract(1, "week")).start}` : TITLES[kind]);
 

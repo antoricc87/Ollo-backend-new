@@ -165,7 +165,7 @@ class EncounterService {
   async existingFor(patientId: string, complaintKey: string) {
     const since = new Date(Date.now() - GATE_DAYS * 86400000);
     const row = await prisma.encounter.findFirst({
-      where: { patientId, complaintKey, status: { in: ["OPEN", "ABANDONED"] }, updatedAt: { gte: since } },
+      where: { patientId, complaintKey, status: { in: ["OPEN", "ABANDONED"] }, OR: [{ updatedAt: { gte: since } }, { checkIns: { some: { createdAt: { gte: since } } } }] },
       orderBy: { updatedAt: "desc" },
     });
     if (!row) return null;
@@ -498,9 +498,11 @@ class EncounterService {
   async trainingGate(patientId: string, threadId: string | null = null): Promise<TrainingGate | null> {
     const since = new Date(Date.now() - GATE_DAYS * 86400000);
     const rows = await prisma.encounter.findMany({
-      where: { patientId, status: { in: ["OPEN", "ABANDONED"] }, updatedAt: { gte: since } },
+      // A follow-up answer keeps it current: it is a child row, so it never touches updatedAt.
+      where: { patientId, status: { in: ["OPEN", "ABANDONED"] }, OR: [{ updatedAt: { gte: since } }, { checkIns: { some: { createdAt: { gte: since } } } }] },
       orderBy: { updatedAt: "desc" },
       take: 5,
+      include: { checkIns: { orderBy: { createdAt: "desc" }, take: 1, select: { trend: true, day: true } } },
     });
     if (!rows.length) return null;
     const assessments = await prisma.encounterEvent.findMany({
@@ -513,7 +515,7 @@ class EncounterService {
         .map((row) => {
           const state = toState(row);
           const last = assessments.find((a) => a.encounterId === row.id);
-          const gate = trainingGateFor({ id: row.id, status: row.status, state, protocol: resolveProtocol(state.complaintKey) }, (last?.payload as any) ?? null);
+          const gate = trainingGateFor({ id: row.id, status: row.status, state, protocol: resolveProtocol(state.complaintKey) }, (last?.payload as any) ?? null, row.checkIns[0] ?? null);
           // An unfinished or ended interview established nothing: it shapes training only in the conversation it ran in.
           return (gate.pending || row.status === "ABANDONED") && row.threadId !== threadId ? null : gate;
         })

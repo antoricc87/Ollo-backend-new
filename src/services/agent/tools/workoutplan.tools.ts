@@ -5,14 +5,14 @@ import prisma from "../../../utility/prismaClient";
 import { dayString, defineTool, shiftDay, subjectField } from "./registry";
 import type { Card } from "./registry";
 import WorkoutService from "../../workouts/model/workouts.model";
-import WorkoutPlanService, { fmtTargets, type WorkoutPlanView } from "../../workouts/model/plan.model";
+import WorkoutPlanService, { fmtTargets, lastSavedWeek, type WorkoutPlanView } from "../../workouts/model/plan.model";
 import TrainingProfileService from "../../workouts/model/training_profile.model";
 import { activityByKey } from "../../workouts/domain/activity.catalog";
 import { fmtDuration, fmtSets } from "../../workouts/domain/workout.metrics";
 import { EQUIPMENT, EXPERIENCE, FOCUS, PLACE, PlannedSessionInput, WEEKDAYS, WorkoutPlanInput, timeString } from "../../workouts/domain/workout.schema";
 import { asPrevious, buildBrief, DEFAULT_SESSION_MIN, designSession, designWeek, weekShapeIssues } from "../../workouts/design/workoutDesign.service";
 import { applyWeekEdits, dateOfDay, WeekEditError, type WeekEdit, type WeekSession } from "../../workouts/design/weekEdit";
-import { changesLine, keepUntouched, sessionChanges } from "../../workouts/design/sessionEdit";
+import { changesLine, keepUntouched, lengthAsked, sessionChanges } from "../../workouts/design/sessionEdit";
 import { deriveDefaults, type Defaults, type DefaultsInput } from "../../workouts/design/defaults";
 import encounterService from "../../encounter/model/encounter.model";
 import { generalSessionLine, stopLine, type TrainingGate } from "../../encounter/domain/trainingGate";
@@ -186,10 +186,11 @@ export const savedWeekCard = (v: WorkoutPlanView, tz: string): Card => ({
  */
 const askDefaults = async (ctx: { patientId: string; today: string; timeZone: string }, stated: DefaultsInput["stated"]): Promise<{ profile: Awaited<ReturnType<typeof TrainingProfileService.get>>; defaults: Defaults }> => {
   const from = moment.tz(ctx.today, "YYYY-MM-DD", ctx.timeZone).subtract(56, "days").toDate();
-  const [profile, plan, rows] = await Promise.all([
+  const [profile, plan, rows, lastWeek] = await Promise.all([
     TrainingProfileService.get(ctx.patientId),
     prisma.healthPlan.findFirst({ where: { patientId: ctx.patientId, status: "ACTIVE" }, orderBy: { createdAt: "desc" }, select: { outcome: true } }),
     WorkoutService.list(ctx.patientId, { from, to: moment.tz(ctx.today, "YYYY-MM-DD", ctx.timeZone).endOf("day").toDate() }, { limit: 80 }).catch(() => []),
+    lastSavedWeek(ctx.patientId),
   ]);
   const history = rows.map((r: any) => ({
     date: r.plannedFor ?? moment(r.startedAt).tz(ctx.timeZone).format("YYYY-MM-DD"),
@@ -198,13 +199,23 @@ const askDefaults = async (ctx: { patientId: string; today: string; timeZone: st
     shape: activityByKey(r.activityKey).shape,
     hasLifts: (r.exercises ?? []).some((e: any) => (e.sets ?? []).length > 0),
   }));
-  return { profile, defaults: deriveDefaults({ stated, profile, plan, history }) };
+  return { profile, defaults: deriveDefaults({ stated, profile, plan, history, lastWeek }) };
 };
 
 /** What the model is told about values nobody stated. */
 const assumedNote = (assumed: string[]) =>
   assumed.length
     ? { assumed, assumedNote: "These were assumed, not said — the card lists them. Mention them in ONE clause. If they correct one, redo the design with it and offer to keep it with update_training_profile. Do not ask about them." }
+    : {};
+
+/**
+ * A length they chose while editing, when their profile does not already say
+ * it: the model is told to offer keeping it ONCE. Decided here because the
+ * generic assumedNote line ("offer to keep it") was skipped in practice.
+ */
+const keepLengthNote = (minutes: number | null, profileMinutes: number | null | undefined) =>
+  minutes && minutes !== profileMinutes
+    ? { keepLength: `They chose ${minutes} min. Offer ONCE, in one clause, to keep ${minutes} min as their usual session length (update_training_profile sessionMinutes ${minutes}). Do not ask anything else.` }
     : {};
 
 /**
@@ -267,8 +278,9 @@ export const editWorkout = defineTool({
     const profile = await TrainingProfileService.get(ctx.patientId);
     const brief = await buildBrief(ctx.patientId, { today: ctx.today, timeZone: ctx.timeZone, client: ctx.client });
     const date = previous.plannedFor && previous.plannedFor >= ctx.today ? previous.plannedFor : ctx.today;
+    const asked = input.durationMin ?? lengthAsked(input.request as string, previous.durationMin);
     const designed = await designSession(
-      { durationMin: input.durationMin ?? previous.durationMin ?? DEFAULT_SESSION_MIN, focus: (previous.focus as any) ?? null, muscleGroups: previous.muscleGroups ?? [], place: (previous.place as any) ?? null, equipment: profile?.equipment ?? [], request: input.request as string, date, caution, previous: asPrevious(previous) },
+      { durationMin: asked ?? previous.durationMin ?? DEFAULT_SESSION_MIN, focus: (previous.focus as any) ?? null, muscleGroups: previous.muscleGroups ?? [], place: (previous.place as any) ?? null, equipment: profile?.equipment ?? [], request: input.request as string, date, caution, previous: asPrevious(previous) },
       brief
     );
     const session = keepUntouched(previous, designed.session, input.request as string);
@@ -284,6 +296,7 @@ export const editWorkout = defineTool({
         fit: designed.fit.ok ? { ok: true } : { ok: false, issues: designed.fit.issues, note: "Say plainly what still misses; do not claim it fits." },
         note: `What is true: ${changesLine(changes)}. Say that in one line — name what was added, removed or changed and that the rest is as it was. Do not re-list the whole session; the card shows it. Nothing is saved.`,
         ...(caution ? { caution: cautionNote(caution, "session") } : {}),
+        ...keepLengthNote(asked, profile?.sessionMinutes),
       },
       cards: [{ type: "workout", title: session.title!, data: cardData }],
     };
@@ -309,7 +322,7 @@ export const generateWorkout = defineTool({
   async run(ctx, input) {
     const subject = await ctx.resolveSubject(input.subjectId);
     if (!subject.isSelf) return { result: { error: "Workouts are designed for the account holder only for now." } };
-    const { profile, defaults } = await askDefaults(ctx, { place: input.place ?? null, durationMin: input.durationMin ?? null, focus: input.focus ?? null, describesSession: !!(input.request?.trim() || input.muscleGroups?.length) });
+    const { profile, defaults } = await askDefaults(ctx, { place: input.place ?? null, durationMin: input.durationMin ?? (input.request ? lengthAsked(input.request) : null), focus: input.focus ?? null, describesSession: !!(input.request?.trim() || input.muscleGroups?.length) });
     const { durationMin, place } = defaults;
     const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
     if (gate?.level === "hold") return heldResult(gate);
@@ -366,7 +379,9 @@ export const generateWorkoutPlan = defineTool({
   async run(ctx, input) {
     const subject = await ctx.resolveSubject(input.subjectId);
     if (!subject.isSelf) return { result: { error: "Training weeks are designed for the account holder only for now." } };
-    const { defaults } = await askDefaults(ctx, { place: input.place ?? null, durationMin: input.sessionMinutes ?? null, focus: input.focus ?? null, describesSession: !!input.request?.trim() });
+    // A length said in their words counts as said ("sessions should be 45 minutes" inside the request).
+    const statedMinutes = input.sessionMinutes ?? (input.request ? lengthAsked(input.request) : null);
+    const { defaults } = await askDefaults(ctx, { place: input.place ?? null, durationMin: statedMinutes, focus: input.focus ?? null, describesSession: !!input.request?.trim() });
     const { durationMin, place } = defaults;
     const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
     if (gate?.level === "hold") return heldResult(gate);
@@ -377,7 +392,7 @@ export const generateWorkoutPlan = defineTool({
     const weekAssumed = defaults.assumed.filter((a) => !/session/i.test(a));
     const sessionsPerWeek = input.sessionsPerWeek ?? brief.plan?.sessionsPerWeek ?? 3;
     const startDate = input.startDate && input.startDate >= ctx.today ? input.startDate : ctx.today;
-    const week = await designWeek({ startDate, days: input.days, sessionsPerWeek: Math.min(sessionsPerWeek, input.days), sessionMinutes: durationMin, focus: input.focus ?? null, place, request: input.request ?? null, caution }, brief);
+    const week = await designWeek({ startDate, days: input.days, sessionsPerWeek: Math.min(sessionsPerWeek, input.days), sessionMinutes: durationMin, minutesFixed: !!statedMinutes, focus: input.focus ?? null, place, request: input.request ?? null, caution }, brief);
     // Saved with the week. The week card does not print notes today, so the reply carries the same line (cautionNote).
     const notes = caution ? [week.notes, generalSessionLine(caution, "week"), stopLine(caution)].filter(Boolean).join("\n") : week.notes;
     const draftId = randomUUID();
@@ -481,6 +496,9 @@ export const editWorkoutPlan = defineTool({
     const startDate: string = card.startDate ?? card.sessions[0].date;
     const days: number = Number(card.days) || 7;
     const place = card.brief?.place ?? null;
+    // A length said in the words of any edit ("make it a 45-minute session") — the model passed it only as words once.
+    const lengthFor = (spec: { durationMin?: number; request?: string; previous?: PlannedSessionInput | null }) => spec.durationMin ?? (spec.request ? lengthAsked(spec.request, spec.previous?.durationMin) : null);
+    const askedLengths: number[] = [];
     let brief: Awaited<ReturnType<typeof buildBrief>> | null = null;
     let edited: Awaited<ReturnType<typeof applyWeekEdits>>;
     try {
@@ -489,9 +507,11 @@ export const editWorkoutPlan = defineTool({
         input.edits as WeekEdit[],
         async (spec) => {
           brief = brief ?? (await buildBrief(ctx.patientId, { today: ctx.today, timeZone: ctx.timeZone, client: ctx.client }));
+          const asked = lengthFor(spec);
+          if (asked) askedLengths.push(asked);
           const d = await designSession(
             {
-              durationMin: spec.durationMin ?? spec.previous?.durationMin ?? card.brief?.sessionMinutes ?? DEFAULT_SESSION_MIN,
+              durationMin: asked ?? spec.previous?.durationMin ?? card.brief?.sessionMinutes ?? DEFAULT_SESSION_MIN,
               focus: spec.focus ?? (spec.previous?.focus as (typeof FOCUS)[number] | undefined) ?? null,
               muscleGroups: spec.muscleGroups ?? spec.previous?.muscleGroups ?? [],
               place,
@@ -519,6 +539,8 @@ export const editWorkoutPlan = defineTool({
       const kept = [...before.values()].find((b) => b.session === s.session || (b.day !== s.day && JSON.stringify({ ...b.session, plannedFor: null }) === JSON.stringify({ ...s.session, plannedFor: null })));
       return { day: s.day, date, session: s.session, display: kept?.display ?? sessionDisplay(s.session), fit: s.fit, assumptions: s.assumptions };
     });
+    // One length asked for, and every session now at it → that is the week's length (and worth offering to keep). One session made longer is not.
+    const weekLength = askedLengths.length && sessions.every((s) => s.session.durationMin === askedLengths[0]) ? askedLengths[0] : null;
     const shape = weekShapeIssues(sessions.map((s) => ({ day: s.day, focus: s.session.focus, muscleGroups: s.session.muscleGroups })), !!caution);
     const issues = [...shape, ...sessions.flatMap((s) => (s.fit?.issues ?? []).map((i: string) => `day ${s.day}: ${i}`))];
     const cardData = {
@@ -528,7 +550,8 @@ export const editWorkoutPlan = defineTool({
       priorityDay: edited.priorityDay,
       startDate,
       days,
-      brief: { ...(card.brief ?? {}), sessionsPerWeek: sessions.length },
+      // Every session now at one length they asked for → that is the week's length (the next added session gets it too).
+      brief: { ...(card.brief ?? {}), sessionsPerWeek: sessions.length, ...(weekLength ? { sessionMinutes: weekLength } : {}) },
       fit: { ok: issues.length === 0, issues },
       sessions,
       rest: Array.from({ length: days }, (_, i) => i + 1).filter((d) => !sessions.some((s) => s.day === d)).map((d) => ({ day: d, date: dateOfDay(startDate, d) })),
@@ -547,7 +570,8 @@ export const editWorkoutPlan = defineTool({
         sessions: sessions.map((s) => `${moment.utc(s.date, "YYYY-MM-DD").format("ddd")}: ${edited.designed.includes(s.day) ? sessionLine(s.session) : `${s.session.title} — unchanged`}`),
         fit: weekFitForModel(issues, card.fit?.issues ?? []),
         ...(caution && edited.designed.length ? { caution: cautionNote(caution, "week") } : {}),
-        note: "What is true: only the changes listed in `changed` were made; every other session is exactly as it was on the previous card. Say what changed (for a designed session, its key moves) and that the rest is untouched — do not list the unchanged sessions again. The new card replaces the previous one; nothing is saved until they ask (save_workout_plan with this draftId) or tap Save on the card.",
+        ...(weekLength ? keepLengthNote(weekLength, (await TrainingProfileService.get(ctx.patientId))?.sessionMinutes) : {}),
+        note: "What is true: only the changes listed in `changed` were made — say each session's change as `changed` states it (minutes, exercises added, MORE or FEWER sets), never more than that; every other session is exactly as it was on the previous card. Say what changed (for a designed session, its key moves) and that the rest is untouched — do not list the unchanged sessions again. The new card replaces the previous one; nothing is saved until they ask (save_workout_plan with this draftId) or tap Save on the card.",
       },
       cards: [{ type: "workout_plan", title: cardData.title, data: cardData }],
     };

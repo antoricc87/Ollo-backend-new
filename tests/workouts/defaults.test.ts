@@ -31,6 +31,19 @@ describe("what a design falls back on", () => {
     expect(d.assumed).toEqual(["Planned for home, where you last trained", "60 min, your usual length", "A general mixed session"]);
   });
 
+  it("the last saved week beats the median of logged sessions (Oct 18 2026: asked at 60, redesigned at 35)", () => {
+    const history = [gymDay("2026-09-28", 35), gymDay("2026-10-01", 30), gymDay("2026-10-03", 35)];
+    const d = deriveDefaults({ stated: {}, profile: { place: "gym" }, plan: null, history, lastWeek: { sessionMinutes: 60, days: ["thu", "mon", "wed"] } });
+    expect(d).toMatchObject({ durationMin: 60, preferredDays: ["mon", "wed", "thu"] });
+    expect(d.from).toMatchObject({ durationMin: "last_week", preferredDays: "last_week" });
+    expect(d.assumed).toContain("60 min, like your last training week");
+  });
+
+  it("the profile still beats the last saved week", () => {
+    const d = deriveDefaults({ stated: {}, profile: { place: "gym", sessionMinutes: 45, preferredDays: ["tue"] }, plan: null, history: [], lastWeek: { sessionMinutes: 60, days: ["mon"] } });
+    expect(d).toMatchObject({ durationMin: 45, preferredDays: ["tue"] });
+  });
+
   it("a soccer match does not count toward the usual length or days", () => {
     const d = deriveDefaults({ ...nothing, history: [1, 2, 3, 4].map((i) => ({ date: `2026-10-0${i}`, durationMin: 90, place: null, shape: "sport", hasLifts: false })) });
     expect(d.durationMin).toBe(45);

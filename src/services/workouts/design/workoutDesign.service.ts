@@ -378,6 +378,8 @@ export type WeekAsk = {
   days: number;
   sessionsPerWeek: number;
   sessionMinutes: number;
+  /** They SAID the length: every session is that long. Otherwise the layout may make a lighter day shorter. */
+  minutesFixed?: boolean;
   focus?: (typeof FOCUS)[number] | null;
   place?: (typeof PLACE)[number] | null;
   request?: string | null;
@@ -496,7 +498,7 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
       const date = moment.utc(ask.startDate, DAY).add(s.day - 1, "days").format(DAY);
       const d = await designSession(
         {
-          durationMin: s.durationMin || ask.sessionMinutes,
+          durationMin: ask.minutesFixed ? ask.sessionMinutes : s.durationMin || ask.sessionMinutes,
           focus: s.focus,
           muscleGroups: s.muscleGroups,
           place: ask.place ?? (brief.training?.place && brief.training.place !== "mixed" ? (brief.training.place as DesignAsk["place"]) : null),

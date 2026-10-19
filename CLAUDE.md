@@ -1490,6 +1490,38 @@ an edit path.
 - Tests `tests/workouts/sessionEdit.test.ts`, more cases in `tests/agent/turnChecks.test.ts`.
   No eval scenario yet (a `workout_draft_edit_keeps_the_rest` like the week one is due).
 
+### Lengths in words, the last saved week, and a worse follow-up (Oct 18 2026)
+
+Prod thread 0807b49e + Sunday run 7a710204: "session should be 45 minutes" came
+back at 35 (one session even lost a set; the reply said "more volume"); the
+default was "35 min, your usual length" though the last saved week was asked at
+60; the Sunday draft (back squats, Mon/Wed/Sat) ignored that week; a "worse"
+follow-up changed nothing, and the check-in had dropped out of the gate.
+- `design/sessionEdit.ts` `lengthAsked(request, previousMin?)` reads a length
+  from words (45-minute, an hour, 1.5 hours; "15 minutes longer" relative to
+  the session; a warm-up's length is not the session's). Used by
+  `edit_workout`, `edit_workout_plan` (per edit), `generate_workout` and
+  `generate_workout_plan`. A length SAID for a week (`minutesFixed`) is kept on
+  every session; otherwise the layout may still shorten a lighter day.
+- `sessionChanges` adds `minutes`, `moreSets`, `fewerSets`; `changesLine` says
+  "FEWER sets of …". The week edit log uses it per changed day (it used to say
+  only "X changed → X"). A week edited to one length sets `brief.sessionMinutes`
+  and the result carries `keepLength` (offer once to save it to the profile).
+- `design/defaults.ts`: length and days fall back said → profile → **last saved
+  week** (`plan.model.ts lastSavedWeek`: request, sessionMinutes, weekdays) →
+  history → fixed. `from` gains `last_week`.
+- `plan_week` instruction hands over the last saved week's request, days and
+  length verbatim (`request=…`, `sessionMinutes=…`); prompt: nothing recorded
+  this week is never "you didn't log any workouts".
+- Gate: `trainingGateFor(…, latestFollowUp)` — the latest follow-up WORSE is a
+  `general` reason; same/better leave the interview's answers to decide; it
+  never lowers a hold. `trainingGate()` / `existingFor()` count a check-in
+  as current while follow-ups arrive (a child row never touched `updatedAt`).
+- Evals `week_draft_length_in_words`, `followup_worse_makes_week_general`
+  (fixture `seedFollowedCheckin`). Not done: phased programmes across weeks
+  ("upper body only at first, then lower"), and the readiness strain button
+  ignoring what was already done today / late evening.
+
 ## Labs journey (Aug 27 2026) — `src/services/labs_journey/`
 
 How a patient gets labs done. `domain/screening.rules.ts` `buildPanel(profile)`

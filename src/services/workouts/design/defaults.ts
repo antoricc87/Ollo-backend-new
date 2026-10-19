@@ -3,8 +3,11 @@ import { EXPERIENCE, FOCUS, PLACE, WEEKDAYS } from "../domain/workout.schema";
 /**
  * WHAT A DESIGN FALLS BACK ON (user ruling Oct 12 2026): everything the person
  * did not say has a default, and the default comes from THEM where it can —
- * what they said in this request, then their training profile, then what their
- * own sessions show, then their plan — and only then a fixed value. Nothing
+ * what they said in this request, then their training profile, then the last
+ * training week they saved (its length and days — Oct 18 2026: a week asked
+ * for at 60 min came back at 35, "your usual length", from the median of
+ * logged sessions), then what their own sessions show, then their plan — and
+ * only then a fixed value. Nothing
  * here asks a question: a design is never held up for one. Whatever was
  * assumed is said on the card, so a wrong guess is one sentence to correct
  * (and the correction is saved to the profile).
@@ -35,9 +38,11 @@ export type DefaultsInput = {
   plan: { outcome?: string | null } | null;
   /** Completed sessions of the last eight weeks, any order. */
   history: HistorySession[];
+  /** The most recent training week they saved (any status): the length it was asked at and the weekdays it trained. */
+  lastWeek?: { sessionMinutes?: number | null; days?: string[] } | null;
 };
 
-type From = "stated" | "profile" | "history" | "plan" | "default";
+type From = "stated" | "profile" | "last_week" | "history" | "plan" | "default";
 
 export type Defaults = {
   place: Place;
@@ -63,7 +68,7 @@ const median = (xs: number[]) => {
 };
 const weekdayOf = (date: string): Weekday => WEEKDAYS[(new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7];
 
-export const deriveDefaults = ({ stated, profile, plan, history }: DefaultsInput): Defaults => {
+export const deriveDefaults = ({ stated, profile, plan, history, lastWeek = null }: DefaultsInput): Defaults => {
   const assumed: string[] = [];
   const from = {} as Defaults["from"];
   const own = history.filter((h) => h.shape !== "sport" && h.shape !== "endurance"); // sessions like the one being designed
@@ -87,7 +92,10 @@ export const deriveDefaults = ({ stated, profile, plan, history }: DefaultsInput
   const lengths = own.map((h) => h.durationMin).filter((m): m is number => !!m && m >= 10 && m <= 180);
   if (stated.durationMin) [durationMin, from.durationMin] = [stated.durationMin, "stated"];
   else if (profile?.sessionMinutes) [durationMin, from.durationMin] = [profile.sessionMinutes, "profile"];
-  else if (lengths.length >= 3) {
+  else if (lastWeek?.sessionMinutes && lastWeek.sessionMinutes >= 10 && lastWeek.sessionMinutes <= 180) {
+    [durationMin, from.durationMin] = [lastWeek.sessionMinutes, "last_week"];
+    assumed.push(`${durationMin} min, like your last training week`);
+  } else if (lengths.length >= 3) {
     [durationMin, from.durationMin] = [Math.max(15, Math.round(median(lengths) / 5) * 5), "history"];
     assumed.push(`${durationMin} min, your usual length`);
   } else {
@@ -121,7 +129,9 @@ export const deriveDefaults = ({ stated, profile, plan, history }: DefaultsInput
   const counts = new Map<Weekday, number>();
   for (const h of own) counts.set(weekdayOf(h.date), (counts.get(weekdayOf(h.date)) ?? 0) + 1);
   const usual = WEEKDAYS.filter((d) => (counts.get(d) ?? 0) >= 2);
+  const lastWeekDays = WEEKDAYS.filter((d) => (lastWeek?.days ?? []).indexOf(d) >= 0);
   if (fromProfile.length) [preferredDays, from.preferredDays] = [fromProfile, "profile"];
+  else if (lastWeekDays.length) [preferredDays, from.preferredDays] = [[...lastWeekDays], "last_week"];
   else if (usual.length) [preferredDays, from.preferredDays] = [[...usual], "history"];
   else [preferredDays, from.preferredDays] = [[], "default"];
 
