@@ -1,4 +1,6 @@
 import { ownQuestionsLeft } from "../encounter/domain/ownQuestions";
+import { pickPacks, type RouteResult } from "./router";
+import { PACK_KEYS, isPackKey, toolsForPacks, type PackKey } from "./tools/packs";
 import prisma from "../../utility/prismaClient";
 import { buildPatientSnapshot, renderSnapshot, ClientContext, PatientSnapshot } from "./context/snapshot";
 import { getLLM } from "./llm/openai.client";
@@ -232,7 +234,17 @@ async function* runLoop(p: {
   const checkin = mode.active;
   // A paused check-in changes what Ollie does with that symptom (End = pause, ruling 2026-09-16).
   const pausedView = mode.paused ? await encounterService.threadView(patientId, threadId).catch(() => null) : null;
+  // Which area packs this turn carries (tools/packs.ts, router.ts). A proactive run has no message to
+  // route and is rare: it gets every pack. A check-in in this thread always brings its own pack.
+  const lastUser = [...window.messages].reverse().find((m: any) => m.role === "USER");
+  const replyItAnswers = lastUser ? [...window.messages].slice(0, window.messages.indexOf(lastUser)).reverse().find((m: any) => m.role === "ASSISTANT" && m.content)?.content ?? null : null;
+  const routed: RouteResult = p.proactive || !lastUser
+    ? { packs: [...PACK_KEYS], reason: "forced", ms: 0 }
+    : await pickPacks({ message: lastUser.content, previousReply: replyItAnswers, always: checkin || mode.paused || mode.assessedConditions?.length ? ["symptoms"] : [] });
+  const packs = new Set<PackKey>(routed.packs);
+  const toolSpecs = () => registry.specs(toolsForPacks([...packs]));
   const system = buildSystemPrompt({
+    packs: routed.packs,
     snapshotText: renderSnapshot(snapshot),
     threadSummary: window.summary,
     proactive: p.proactive ?? null,
@@ -292,7 +304,7 @@ async function* runLoop(p: {
       if (steps > 1) yield { type: "status", text: "Thinking" };
       // A check-in is the one conversation where the model takes a history and chooses a next step:
       // it runs as its own task (llm/policy.ts: more thinking than an ordinary turn).
-      const res = await llm.chat({ messages, tools: registry.specs(), signal: p.signal, task: checkin ? "checkin" : "converse" });
+      const res = await llm.chat({ messages, tools: toolSpecs(), signal: p.signal, task: checkin ? "checkin" : "converse", cacheKey: `ollie:${patientId}` });
       usage = addUsage(usage, res.usage);
       model = res.model;
 
@@ -349,6 +361,8 @@ async function* runLoop(p: {
         if (tool?.risk === "generate") generatedThisTurn = true;
         void audit(patientId, tool?.risk === "memory" ? "memory_write" : "tool_call", { threadId, toolName: call.name, payload: { input: call.input } });
         const out = await registry.execute(call.name, call.input, ctx);
+        // load_tools: the next step carries those packs too.
+        if (call.name === "load_tools" && out.ok) for (const k of ((call.input as any)?.areas ?? []) as string[]) if (isPackKey(k)) packs.add(k);
         let modelResult: unknown = out.result;
         if (call.name === "assess_checkin") assessRejected = (out.result as any)?.rejected ? String((out.result as any).fix ?? "rejected") : null;
         if (out.ok && out.proposal) {
@@ -484,7 +498,7 @@ async function* runLoop(p: {
     for (const c of chunks(text)) yield { type: "text", delta: c };
 
     const [row] = await threadStore.append(threadId, [
-      { role: "ASSISTANT", content: text, cards, meta: { model, usage, steps, safety: verdict, snapshotChars: system.length, proactive: p.proactive ?? null } },
+      { role: "ASSISTANT", content: text, cards, meta: { model, usage, steps, safety: verdict, snapshotChars: system.length, proactive: p.proactive ?? null, packs: [...packs], route: { reason: routed.reason, first: routed.packs, ms: routed.ms } } },
     ]);
     void audit(patientId, "response", { threadId, messageId: row.id, payload: { model, usage, steps, safety: verdict.reasons, proactive: p.proactive ?? null } });
     // After the tools, since they are what start, advance and end a check-in.

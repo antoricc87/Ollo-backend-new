@@ -26,6 +26,8 @@ import { undoLastLog } from "./undo.tools";
  * tools (proposal → user confirms in the app → commit). There is deliberately
  * no tool for diagnosis, medication or supplement advice — see prompt/system.ts.
  */
+import { loadTools } from "./packs.tools";
+
 export const registry = new ToolRegistry().register(
   getPlan,
   getMeals,
@@ -74,7 +76,8 @@ export const registry = new ToolRegistry().register(
   saveWorkoutPlan,
   updateTrainingProfile,
   moveWorkout,
-  undoLastLog
+  undoLastLog,
+  loadTools
 );
 
 export { ToolRegistry } from "./registry";

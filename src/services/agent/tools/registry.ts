@@ -126,8 +126,9 @@ export class ToolRegistry {
     return Array.from(this.tools.keys());
   }
 
-  specs(): ToolSpec[] {
-    return Array.from(this.tools.values()).map((t) => ({
+  /** Tool specs in registration order (stable, so the prompt prefix caches); `only` = the turn's packs. */
+  specs(only?: Set<string>): ToolSpec[] {
+    return Array.from(this.tools.values()).filter((t) => !only || only.has(t.name)).map((t) => ({
       name: t.name,
       description: t.description,
       parameters: jsonSchemaFor(t.schema),

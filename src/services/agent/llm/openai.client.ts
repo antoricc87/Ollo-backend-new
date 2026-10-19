@@ -166,6 +166,7 @@ export class OpenAIClient implements LLMClient {
       ...(opts.maxOutputTokens ? { max_completion_tokens: opts.maxOutputTokens } : {}),
       ...sampling(model, 0.3, effort),
       ...(r.tier === "fast" ? { service_tier: "fast" as any } : {}),
+      ...(opts.cacheKey ? { prompt_cache_key: opts.cacheKey } : {}),
     };
 
     const out = needsResponses(model)
@@ -184,6 +185,7 @@ export class OpenAIClient implements LLMClient {
                   ...(opts.maxOutputTokens ? { max_output_tokens: opts.maxOutputTokens } : {}),
                   reasoning: { effort: effort as "low" },
                   ...(r.tier === "fast" ? { service_tier: "fast" } : {}),
+                  ...(opts.cacheKey ? { prompt_cache_key: opts.cacheKey } : {}),
                   store: false,
                   stream: true,
                 } as any,
