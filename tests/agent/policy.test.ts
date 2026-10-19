@@ -2,9 +2,10 @@ import { policyTable, route } from "../../src/services/agent/llm/policy";
 
 /** One model policy for every call (R1, Oct 19 2026): the table, its overrides, and no gpt-4 by default. */
 describe("llm policy", () => {
-  it("every task starts on GPT-6 Luna, except safety until its tests match and the lab read-back (a different model on purpose)", () => {
+  it("every task starts on GPT-6 Luna, except the lab read-back (a different model on purpose) — no gpt-4 anywhere", () => {
     for (const line of policyTable({})) {
-      if (line.startsWith("safety=") || line.startsWith("verify=")) continue;
+      expect(line).not.toMatch(/gpt-4/);
+      if (line.startsWith("verify=")) continue;
       expect(line).toMatch(/=gpt-6-luna:/);
     }
   });

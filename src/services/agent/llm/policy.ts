@@ -57,8 +57,8 @@ const toSol = { model: SOL, effort: "medium" as Effort };
 const DEFAULTS: Record<Task, Omit<Route, "tier"> & { tier?: Tier }> = {
   converse: { model: LUNA, effort: "none", escalate: null },
   checkin: { model: LUNA, effort: "medium", escalate: null },
-  // Unchanged until the safety tests match on the new model — then its own commit moves it.
-  safety: { model: "gpt-4.1-mini", effort: "none", escalate: null },
+  // Moved alone, Oct 19 2026, after its own test matched case for case (13/13, same as gpt-4.1-mini).
+  safety: { model: LUNA, effort: "none", escalate: null },
   summarize: { model: LUNA, effort: "none", escalate: null },
   classify: { model: LUNA, effort: "none", escalate: null },
   extract: { model: LUNA, effort: "none", escalate: toSol },
