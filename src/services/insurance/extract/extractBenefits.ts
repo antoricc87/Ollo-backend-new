@@ -68,7 +68,7 @@ export const extractBenefits = async (file: Buffer | Uint8Array, opts: { model?:
 
   const r = await getClient().responses.parse({
     model,
-    ...(modelRequestParams(model, model === INSURANCE_MODEL ? route("extract").effort : undefined) as any),
+    ...(modelRequestParams(model, model === INSURANCE_MODEL ? route("extract").effort : undefined, route("extract").tier) as any),
     input: [
       { role: "system", content: BENEFITS_PROMPT },
       { role: "user", content: content as any },

@@ -66,7 +66,7 @@ export const weekInputFromCard = (data: any): WorkoutPlanInput =>
     sessions: (data?.sessions ?? []).map((s: any) => ({ ...s.session, plannedFor: undefined, day: s.day })),
   });
 
-const findWeekDraft = async (threadId: string | null, draftId?: string | null): Promise<{ draftId: string; plan: WorkoutPlanInput } | null> => {
+const findWeekDraftExact = async (threadId: string | null, draftId?: string | null): Promise<{ draftId: string; plan: WorkoutPlanInput } | null> => {
   if (draftId && weekDrafts.has(draftId)) return { draftId, plan: weekDrafts.get(draftId)!.plan };
   if (!draftId) {
     const newest = [...weekDrafts.entries()].sort((a, b) => b[1].at - a[1].at)[0];
@@ -88,9 +88,14 @@ const findWeekDraft = async (threadId: string | null, draftId?: string | null): 
   }
   return null;
 };
+/**
+ * A draft id that matches nothing in this conversation is a stale or invented one (seen with gpt-6-luna,
+ * Oct 19 2026: "the draft is no longer available" with the card right there) — the latest draft is meant.
+ */
+const findWeekDraft = async (threadId: string | null, draftId?: string | null) => (await findWeekDraftExact(threadId, draftId)) ?? (draftId && threadId ? findWeekDraftExact(threadId, null) : null);
 
 /** The latest unsaved week card of this conversation, whole (edit_workout_plan builds the next draft from it). */
-const findWeekCard = async (threadId: string | null, draftId?: string | null): Promise<any | null> => {
+const findWeekCardExact = async (threadId: string | null, draftId?: string | null): Promise<any | null> => {
   if (draftId && weekDrafts.has(draftId)) return weekDrafts.get(draftId)!.card;
   if (threadId) {
     const rows = await prisma.agentMessage.findMany({ where: { threadId, role: "ASSISTANT" }, orderBy: { seq: "desc" }, take: 40, select: { cards: true } });
@@ -108,6 +113,11 @@ const findWeekCard = async (threadId: string | null, draftId?: string | null): P
   const newest = [...weekDrafts.entries()].sort((x, y) => y[1].at - x[1].at)[0];
   return !draftId && newest && Date.now() - newest[1].at < 30 * 60 * 1000 ? newest[1].card : null;
 };
+/**
+ * A draft id that matches nothing in this conversation is a stale or invented one (seen with gpt-6-luna,
+ * Oct 19 2026: "the draft is no longer available" with the card right there) — the latest draft is meant.
+ */
+const findWeekCard = async (threadId: string | null, draftId?: string | null) => (await findWeekCardExact(threadId, draftId)) ?? (draftId && threadId ? findWeekCardExact(threadId, null) : null);
 
 /* ------------------------------ card shapes ------------------------------ */
 
@@ -238,7 +248,7 @@ const cautionNote = (gate: TrainingGate, what: "session" | "week") =>
   `This is a GENERAL, lighter ${what}${what === "session" ? " — the card says so and lists when to stop" : ""}. What is true and must come across: (1) say ONCE, in one line, that exercises aimed at their ${gate.about.toLowerCase()} are for a clinician or physiotherapist to choose; (2) describe the ${what} as what it is — never that it will help, relieve, treat or fix the ${gate.about.toLowerCase()}${gate.conditions.length ? `, and never as being for ${gate.conditions.join(" / ")}` : ""}; (3) if they asked for it "for" a condition, say plainly that you built the general version instead${what === "week" ? `; (4) end with when to stop: ${stopLine(gate) ?? "if it gets worse, stop and get seen"}` : ""}. You may offer once to keep their limitation, in their own words, in their training profile (update_training_profile).`;
 
 /** The latest single-session card of this conversation (edit_workout builds the next draft from it). */
-const findSessionCard = async (threadId: string | null, draftId?: string | null): Promise<any | null> => {
+const findSessionCardExact = async (threadId: string | null, draftId?: string | null): Promise<any | null> => {
   if (draftId && sessionDrafts.has(draftId)) return sessionDrafts.get(draftId)!.card;
   if (!threadId) {
     const newest = [...sessionDrafts.entries()].sort((x, y) => y[1].at - x[1].at)[0];
@@ -255,6 +265,11 @@ const findSessionCard = async (threadId: string | null, draftId?: string | null)
   }
   return null;
 };
+/**
+ * A draft id that matches nothing in this conversation is a stale or invented one (seen with gpt-6-luna,
+ * Oct 19 2026: "the draft is no longer available" with the card right there) — the latest draft is meant.
+ */
+const findSessionCard = async (threadId: string | null, draftId?: string | null) => (await findSessionCardExact(threadId, draftId)) ?? (draftId && threadId ? findSessionCardExact(threadId, null) : null);
 
 /* --------------------------------- tools --------------------------------- */
 

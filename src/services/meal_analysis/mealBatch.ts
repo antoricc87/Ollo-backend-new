@@ -134,7 +134,7 @@ export async function segmentNarration(text: string): Promise<{ dayPhrase: strin
   const { model, effort } = route("classify");
   const response = await getClient().responses.parse({
     model,
-    ...(modelRequestParams(model, effort) as any),
+    ...(modelRequestParams(model, effort, route("classify").tier) as any),
     input: [
       { role: "system", content: SEGMENT_SYSTEM },
       { role: "user", content: text },

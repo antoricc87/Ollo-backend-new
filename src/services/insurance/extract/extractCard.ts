@@ -39,7 +39,7 @@ export const extractCard = async (images: CardImage[], opts: { model?: string } 
   const model = opts.model || route("extract_vision").model;
   const r = await getClient().responses.parse({
     model,
-    ...(modelRequestParams(model, opts.model ? undefined : route("extract_vision").effort) as any),
+    ...(modelRequestParams(model, opts.model ? undefined : route("extract_vision").effort, route("extract_vision").tier) as any),
     input: [
       { role: "system", content: CARD_PROMPT },
       {

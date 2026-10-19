@@ -140,7 +140,7 @@ export const extractLabReport = async (
   const model = ctx.model || DEFAULT_LAB_MODEL;
   const response = await getClient().responses.parse({
     model,
-    ...(modelRequestParams(model, model === DEFAULT_LAB_MODEL ? LAB_EFFORT : undefined) as any),
+    ...(modelRequestParams(model, model === DEFAULT_LAB_MODEL ? LAB_EFFORT : undefined, route("extract").tier) as any),
     input: [
       { role: "system", content: SYSTEM_PROMPT },
       {
@@ -165,7 +165,7 @@ export const extractLabReport = async (
   if (uncaptured.length > 0) {
     const retry = await getClient().responses.parse({
       model,
-      ...(modelRequestParams(model, model === DEFAULT_LAB_MODEL ? LAB_EFFORT : undefined) as any),
+      ...(modelRequestParams(model, model === DEFAULT_LAB_MODEL ? LAB_EFFORT : undefined, route("extract").tier) as any),
       input: [
         { role: "system", content: SYSTEM_PROMPT },
         {

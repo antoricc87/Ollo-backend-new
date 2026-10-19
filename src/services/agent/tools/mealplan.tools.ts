@@ -38,7 +38,7 @@ export const planInputFromCard = (data: any): MealPlanInput =>
   });
 
 /** Find the draft: memory first, then the thread's stored assistant cards (latest first). */
-const findDraft = async (threadId: string | null, draftId?: string | null): Promise<{ draftId: string; plan: MealPlanInput } | null> => {
+const findDraftExact = async (threadId: string | null, draftId?: string | null): Promise<{ draftId: string; plan: MealPlanInput } | null> => {
   if (draftId && drafts.has(draftId)) return { draftId, plan: drafts.get(draftId)!.plan };
   if (!draftId) {
     // newest in-memory draft for this process
@@ -61,6 +61,11 @@ const findDraft = async (threadId: string | null, draftId?: string | null): Prom
   }
   return null;
 };
+/**
+ * A draft id that matches nothing in this conversation is a stale or invented one (seen with gpt-6-luna,
+ * Oct 19 2026: "the draft is no longer available" with the card right there) — the latest draft is meant.
+ */
+const findDraft = async (threadId: string | null, draftId?: string | null) => (await findDraftExact(threadId, draftId)) ?? (draftId && threadId ? findDraftExact(threadId, null) : null);
 
 /* ------------------------------- view → card ------------------------------- */
 

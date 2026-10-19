@@ -74,7 +74,7 @@ Candidates:
 ${list}`;
   const response = await getOpenAI().responses.parse({
     model,
-    ...(modelRequestParams(model, RERANK_EFFORT) as any), // temperature 0, or reasoning.effort (NUTRITION_RERANK_EFFORT)
+    ...(modelRequestParams(model, RERANK_EFFORT, route("classify").tier) as any), // temperature 0, or reasoning.effort (NUTRITION_RERANK_EFFORT)
     input: [{ role: "user", content: prompt }],
     text: { format: zodTextFormat(RerankSchema, "rerank") },
   } as any);

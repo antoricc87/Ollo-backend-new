@@ -77,6 +77,13 @@ export type ProactiveInput = {
 };
 
 const MAX_STEPS = 8;
+/** Save tools and the draft tools whose result they save: never in the same turn unless asked (see the loop). */
+const DRAFT_SAVES: Record<string, string[]> = {
+  save_meal_plan: ["generate_meal_plan"],
+  save_workout_plan: ["generate_workout_plan", "edit_workout_plan"],
+};
+const ASKS_TO_SAVE = /\b(save|keep|use it|lock (it )?in|make it my|set it as)\b/i;
+
 const MAX_TOOL_RESULT_CHARS = 12_000;
 const SUMMARIZE_AFTER_ROWS = 8;
 
@@ -360,7 +367,12 @@ async function* runLoop(p: {
         const tool = registry.get(call.name);
         if (tool?.risk === "generate") generatedThisTurn = true;
         void audit(patientId, tool?.risk === "memory" ? "memory_write" : "tool_call", { threadId, toolName: call.name, payload: { input: call.input } });
-        const out = await registry.execute(call.name, call.input, ctx);
+        // A draft is not saved in the turn it was made unless they asked to save (DRAFT_SAVES). The prompt
+        // said so; gpt-6-luna saved a meal plan in the same turn anyway (Oct 19 2026) — code decides now.
+        const draftedHere = DRAFT_SAVES[call.name]?.some((g) => toolsCalled.slice(0, -1).includes(g));
+        const out = draftedHere && !ASKS_TO_SAVE.test(lastUser?.content ?? "")
+          ? { ok: false, result: { error: "NOT SAVED: the draft was made in this turn and they have not asked to save it. Show the draft (the card has Save) and stop — saving waits for their OK." }, error: "draft_not_asked_to_save" } as Awaited<ReturnType<typeof registry.execute>>
+          : await registry.execute(call.name, call.input, ctx);
         // load_tools: the next step carries those packs too.
         if (call.name === "load_tools" && out.ok) for (const k of ((call.input as any)?.areas ?? []) as string[]) if (isPackKey(k)) packs.add(k);
         let modelResult: unknown = out.result;

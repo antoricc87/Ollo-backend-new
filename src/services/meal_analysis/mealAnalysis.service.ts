@@ -135,7 +135,7 @@ export async function analyzeMeal(
   const request = (m: string) =>
     getClient().responses.parse({
       model: m,
-      ...(modelRequestParams(m, opts.reasoningEffort ?? (m === model ? r.effort : r.escalate?.effort ?? r.effort)) as any),
+      ...(modelRequestParams(m, opts.reasoningEffort ?? (m === model ? r.effort : r.escalate?.effort ?? r.effort), r.tier) as any),
       input: [
         { role: "system", content: buildSystemPrompt() },
         { role: "user", content },
