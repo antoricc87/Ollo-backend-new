@@ -22,12 +22,12 @@ export const CORE_TOOLS = ["get_plan", "remember", "recall_memory", "forget_memo
 export const PACKS: Record<PackKey, { title: string; covers: string; tools: string[] }> = {
   food: {
     title: "Food",
-    covers: "logging meals, what or how much to eat, saved meals, meal plans, recipes, grocery lists, calories and macros eaten",
+    covers: "anything they ate or drank — also said in passing ('I had pasta', 'just a coffee') — logging meals, what or how much to eat, saved meals, meal plans, recipes, grocery lists, calories and macros eaten",
     tools: ["get_meals", "get_nutrition_summary", "get_logging_gaps", "get_favorites", "suggest_meal", "portion_check", "generate_meal_plan", "get_meal_plan", "save_meal_plan", "generate_recipe", "build_grocery_list", "log_meal", "save_favorite", "delete_favorite"],
   },
   training: {
     title: "Training",
-    covers: "workouts done or planned, designing a session or a training week, changing or moving sessions, sport, activity minutes, the training profile",
+    covers: "any physical activity they did or plan — also said in passing ('played soccer', 'went for a run') — workouts, designing a session or a training week, changing or moving sessions, sport, activity minutes, the training profile",
     tools: ["get_activity", "get_workouts", "log_workout", "generate_workout", "generate_workout_plan", "edit_workout", "edit_workout_plan", "save_workout_plan", "update_training_profile", "move_workout"],
   },
   labs: {
