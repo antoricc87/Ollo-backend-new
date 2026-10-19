@@ -53,7 +53,9 @@ export function isModelUnavailableError(err: any): boolean {
 export const DEFAULT_RESOLVER = (process.env.NUTRITION_RESOLVER || "usda") as "usda" | "llm";
 
 // The shared structured-call connection; a meal call is quick (agent/llm/structured.ts).
-export const getClient = () => structuredClient(DEADLINE_MS.quick);
+// A single meal is quick; a long narration or a catch-up of many days is not (a two-week catch-up timed
+// out at 20 s twice, Oct 19 2026) — the deadline follows the size of what is read.
+export const getClient = (inputChars = 0) => structuredClient(inputChars > 400 ? DEADLINE_MS.page : DEADLINE_MS.quick);
 
 // ---------------------------------------------------------------------------
 // Patient context
@@ -141,7 +143,7 @@ async function analyzeMealTimed(
 
   const started = Date.now();
   const request = (m: string) =>
-    getClient().responses.parse({
+    getClient((input.text?.length ?? 0) + (input.imageDataUrl ? 1000 : 0)).responses.parse({
       model: m,
       ...(modelRequestParams(m, opts.reasoningEffort ?? (m === model ? r.effort : r.escalate?.effort ?? r.effort), r.tier) as any),
       input: [

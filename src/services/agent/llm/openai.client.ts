@@ -28,6 +28,9 @@ const IDLE_MS = Number(process.env.AGENT_LLM_IDLE_MS || 30_000);
 const SLOW_LOG_MS = 15_000;
 const THINKING_IDLE_MS = Number(process.env.AGENT_LLM_THINKING_IDLE_MS || 120_000);
 
+/** The half-price "flex" tier is sometimes switched off for minutes ("flex_unavailable"): the call goes on the normal tier. */
+export const isFlexUnavailable = (e: unknown) => /flex_unavailable|Flex processing is temporarily unavailable/i.test(`${(e as any)?.code ?? ""} ${(e as any)?.error?.code ?? ""} ${(e as any)?.message ?? ""}`);
+
 /** OpenAI's "your prompt was flagged as potentially violating our usage policy" 400 — a refusal, not a bug in the request. */
 export const isFlaggedPrompt = (e: unknown) => {
   const err = e as { status?: number; message?: string; code?: string };
@@ -157,7 +160,7 @@ export class OpenAIClient implements LLMClient {
 
   async chat(opts: ChatOptions): Promise<ChatResult> {
     const routed = route(opts.task ?? "converse");
-    const r = opts.tier ? { ...routed, tier: opts.tier } : routed;
+    let r = opts.tier ? { ...routed, tier: opts.tier } : routed;
     const model = opts.model || r.model;
     const effort = opts.reasoningEffort ?? r.effort;
     const tools: ChatCompletionTool[] | undefined = opts.tools?.length
@@ -209,6 +212,13 @@ export class OpenAIClient implements LLMClient {
     try {
       out = await run();
     } catch (e) {
+      if (isFlexUnavailable(e) && r.tier === "flex" && !opts.signal?.aborted) {
+        console.warn(`[llm] ${opts.task ?? "converse"}: flex tier unavailable → normal tier`);
+        r = { ...r, tier: "default" };
+        base.service_tier = undefined as any;
+        out = await run();
+        return { text: out.text, toolCalls: out.toolCalls, finishReason: mapFinish(out.finish, out.toolCalls.length), usage: out.usage, model: out.model };
+      }
       // The same filter refusal as in json(): one more try before the turn fails (no text reached the user yet).
       if (!isFlaggedPrompt(e) || opts.signal?.aborted) throw e;
       console.warn(`[llm] ${opts.task ?? "converse"}: prompt refused by OpenAI's filter on ${model} → one retry`);
@@ -218,7 +228,7 @@ export class OpenAIClient implements LLMClient {
   }
 
   async json<T = unknown>(opts: JsonOptions<T>): Promise<T> {
-    const r = route(opts.task);
+    let r = route(opts.task);
     const once = async (model: string, effort: Effort): Promise<T> => {
       // A reasoning model thinks before its first token: give it the thinking allowance, not the 45 s hang limit.
       const wait = isReasoningModel(model) && effort !== "none" ? THINKING_IDLE_MS : undefined;
@@ -263,6 +273,11 @@ export class OpenAIClient implements LLMClient {
     try {
       first = await once(model, effort);
     } catch (e) {
+      if (isFlexUnavailable(e) && r.tier === "flex") {
+        console.warn(`[llm] ${opts.task} ${opts.schemaName}: flex tier unavailable → normal tier`);
+        r = { ...r, tier: "default" };
+        return once(model, effort);
+      }
       // OpenAI's prompt filter sometimes refuses an ordinary request outright (seen Oct 19 2026: a meal
       // suggestion with the same context passed on the next request). One more try — on the escalation
       // model when the task has one — before the error surfaces.

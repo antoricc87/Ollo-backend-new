@@ -58,8 +58,10 @@ const toSol = { model: SOL, effort: "medium" as Effort };
 // sometimes took 1–2 minutes (a meal analysis timed out and the card lost its one-tap log). Luna fast is
 // $0.20 / $1.00 per M — still ~10× cheaper than gpt-4.1. Background runs (proactive) use standard: nobody waits.
 const DEFAULTS: Record<Task, Omit<Route, "tier"> & { tier?: Tier }> = {
-  // R2 (Oct 2026): a little thinking, so Ollie works out what is meant before it picks a tool.
-  converse: { model: LUNA, effort: "low", escalate: null, tier: "fast" },
+  // R2 (Oct 19 2026): "low" thinking was tried and NOT kept — no measurable gain in the intent check
+  // (4.23 vs 4.32) and the check-in flows loosened (warning signs asked second, a reply without its
+  // clinician line). The "Before you act" section and their own words stay; the thinking does not.
+  converse: { model: LUNA, effort: "none", escalate: null, tier: "fast" },
   checkin: { model: LUNA, effort: "medium", escalate: null, tier: "fast" },
   // Moved alone, Oct 19 2026, after its own test matched case for case (13/13, same as gpt-4.1-mini).
   safety: { model: LUNA, effort: "none", escalate: null, tier: "fast" },

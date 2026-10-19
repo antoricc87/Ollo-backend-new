@@ -132,7 +132,7 @@ export function validateSegments(text: string, segments: { dayPhrase: string | n
 export async function segmentNarration(text: string): Promise<{ dayPhrase: string | null; text: string }[]> {
   // Splitting a narration into days is labelling: task "classify" (agent/llm/policy.ts).
   const { model, effort } = route("classify");
-  const response = await getClient().responses.parse({
+  const response = await getClient(text.length).responses.parse({
     model,
     ...(modelRequestParams(model, effort, route("classify").tier) as any),
     input: [
