@@ -11,6 +11,12 @@ describe("the one asking rule", () => {
     expect(prompt).toMatch(/When a tool result carries askThis, that IS the question/);
   });
 
+  it("names one-or-several as an ambiguity and keeps questions about numbers from becoming logs", () => {
+    expect(prompt).toMatch(/one session or a week, one meal or a whole day/);
+    expect(prompt).toMatch(/nothing is logged unless they report it as theirs/);
+    expect(prompt).toMatch(/drafts \(a week, a meal plan, a session\) are made only when they ask for one/);
+  });
+
   it("no rule elsewhere contradicts it", () => {
     for (const p of [prompt, voice]) {
       expect(p).not.toMatch(/If you're unsure what they mean, ask one question/);
