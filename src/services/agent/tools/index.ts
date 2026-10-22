@@ -14,9 +14,10 @@ import { getWorkouts, logWorkout } from "./workout.tools";
 import { suggestMeal } from "./suggest.tools";
 import { portionCheck } from "./portion.tools";
 import { getMealPlan, saveMealPlan } from "./mealplan.tools";
-import { editWorkoutPlan, generateWorkout, generateWorkoutPlan, moveWorkout, saveWorkoutPlan, updateTrainingProfile } from "./workoutplan.tools";
+import { editWorkout, editWorkoutPlan, generateWorkout, generateWorkoutPlan, moveWorkout, saveWorkoutPlan, updateTrainingProfile } from "./workoutplan.tools";
 import { askFollowup, assessCheckin, endCheckin, getCheckins, recordCheckin, recordFollowup, resumeCheckin, startCheckin } from "./checkin.tools";
 import { deleteFavorite, saveFavorite } from "./favorite.tools";
+import { getWeekReview } from "./review.tools";
 import { undoLastLog } from "./undo.tools";
 
 /**
@@ -25,6 +26,8 @@ import { undoLastLog } from "./undo.tools";
  * tools (proposal → user confirms in the app → commit). There is deliberately
  * no tool for diagnosis, medication or supplement advice — see prompt/system.ts.
  */
+import { loadTools } from "./packs.tools";
+
 export const registry = new ToolRegistry().register(
   getPlan,
   getMeals,
@@ -33,13 +36,14 @@ export const registry = new ToolRegistry().register(
   getFavorites,
   getActivity,
   getWorkouts,
+  getWeekReview,
   getVitals,
   getLabs,
   getRecords,
   getCareTeam,
+  getInsurance,
   listSubaccounts,
   startCheckin,
-  getInsurance,
   recordCheckin,
   resumeCheckin,
   endCheckin,
@@ -67,11 +71,13 @@ export const registry = new ToolRegistry().register(
   logWorkout,
   generateWorkout,
   generateWorkoutPlan,
+  editWorkout,
   editWorkoutPlan,
   saveWorkoutPlan,
   updateTrainingProfile,
   moveWorkout,
-  undoLastLog
+  undoLastLog,
+  loadTools
 );
 
 export { ToolRegistry } from "./registry";

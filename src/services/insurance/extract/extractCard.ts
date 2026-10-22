@@ -6,7 +6,8 @@
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { modelRequestParams } from "../../meal_analysis/mealAnalysis.service";
-import { getClient, INSURANCE_MODEL } from "./extractBenefits";
+import { getClient } from "./extractBenefits";
+import { route } from "../../agent/llm/policy";
 
 export const CardSchema = z.object({
   isInsuranceCard: z.boolean(),
@@ -34,10 +35,11 @@ export type CardImage = { data: Buffer; mimeType: string };
 
 /** One or two photos (front, back) of the same card. */
 export const extractCard = async (images: CardImage[], opts: { model?: string } = {}): Promise<CardFields> => {
-  const model = opts.model || INSURANCE_MODEL;
+  // A card photo: task "extract_vision" (agent/llm/policy.ts).
+  const model = opts.model || route("extract_vision").model;
   const r = await getClient().responses.parse({
     model,
-    ...(modelRequestParams(model) as any),
+    ...(modelRequestParams(model, opts.model ? undefined : route("extract_vision").effort, route("extract_vision").tier) as any),
     input: [
       { role: "system", content: CARD_PROMPT },
       {

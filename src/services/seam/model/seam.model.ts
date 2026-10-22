@@ -85,7 +85,8 @@ export class SeamPatientService {
   static async snapshot(patientId: string) {
     const s = await buildPatientSnapshot(patientId);
     if (!s) return null;
-    const { memories: _m, subAccounts: _s, client: _c, mealPlan: _mp, savedMeals: _sm, ...rest } = s;
+    // Signals and nights stay patient-side until the physician app is real (ruling Sep 24 2026, #7).
+    const { memories: _m, subAccounts: _s, client: _c, mealPlan: _mp, savedMeals: _sm, signals: _sg, nights: _n, ...rest } = s;
     return rest;
   }
 

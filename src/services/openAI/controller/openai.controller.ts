@@ -1,10 +1,9 @@
-import express, { Request, Response } from "express";
+import { Response } from "express";
 import { Util } from "../../../utils/response";
 import {
   getOpenAiCaloriesCalculator,
   getCaloriesFromImage,
   getCaloriesFromAudio,
-  calculateMultipleMealsCaloriesAndNutrients,
 } from "../model/openai.model";
 
 export class OpenAiHandler {
@@ -20,32 +19,6 @@ export class OpenAiHandler {
           .json(Util.error({}, "Please insert food description"));
       }
       const openAiResponse = await getOpenAiCaloriesCalculator(
-        foodDescription,
-        id
-      );
-      if (openAiResponse) {
-        return response
-          .status(200)
-          .json(
-            Util.success(openAiResponse, "Calories calculated successfully")
-          );
-      }
-    } catch (error: any) {
-      console.error("Something went wrong calculating calories", error);
-      throw error;
-    }
-  }
-  async generateCaloriesAmountTest(request: any, response: Response) {
-    const { foodDescription } = request.body;
-    const { id } = request.user;
-
-    try {
-      if (!foodDescription) {
-        return response
-          .status(404)
-          .json(Util.error({}, "Please insert food description"));
-      }
-      const openAiResponse = await calculateMultipleMealsCaloriesAndNutrients(
         foodDescription,
         id
       );

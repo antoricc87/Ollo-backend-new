@@ -25,6 +25,7 @@ export const trainingStopped: Detector = {
   resolveAfterDays: 1,
   cooldownDays: 14,
   against: "plan",
+  domain: "habit",
   run: ({ workouts, plan, today }: SignalInput): Candidate | null => {
     const target = plan?.sessionsPerWeek ?? 0;
     if (target < 2) return null;
@@ -58,6 +59,7 @@ export const trainingDrifting: Detector = {
   resolveAfterDays: 7,
   cooldownDays: 21,
   against: "plan",
+  domain: "habit",
   run: ({ workouts, plan, today }: SignalInput): Candidate | null => {
     const target = plan?.sessionsPerWeek ?? 0;
     if (target < 2) return null;
@@ -93,6 +95,7 @@ export const trainingConsistent: Detector = {
   resolveAfterDays: 7,
   cooldownDays: 42,
   against: "plan",
+  domain: "habit",
   run: ({ workouts, plan, today }: SignalInput): Candidate | null => {
     const target = plan?.sessionsPerWeek ?? 0;
     if (target < 2) return null;
@@ -130,6 +133,7 @@ export const loggingStopped: Detector = {
   resolveAfterDays: 1,
   cooldownDays: 7,
   against: "rule",
+  domain: "habit",
   run: ({ days }: SignalInput): Candidate | null => {
     // Today is still being lived — the scan runs in the morning, before anyone
     // has eaten — so an empty today is not a missed day. Only finished days count.
@@ -170,6 +174,7 @@ export const proteinShort: Detector = {
   resolveAfterDays: 4,
   cooldownDays: 14,
   against: "plan",
+  domain: "habit",
   run: ({ days, plan }: SignalInput): Candidate | null => {
     const target = plan?.proteinG ?? null;
     if (!target) return null;
@@ -203,6 +208,7 @@ export const weightOffTrack: Detector = {
   resolveAfterDays: 7,
   cooldownDays: 21,
   against: "plan",
+  domain: "habit",
   run: ({ weights, plan, today }: SignalInput): Candidate | null => {
     const target = plan?.weightRateKgPerWeek ?? null;
     if (target == null || target === 0) return null;

@@ -87,6 +87,20 @@ export const describeFinding = (finding: Row): { title: string; line: string } =
         line: observed != null && target != null ? `${observed > 0 ? "+" : ""}${observed} kg a week against a plan of ${target > 0 ? "+" : ""}${target} kg a week` : "The three-week trend differs from your plan",
       };
     }
+    case "weight.change": {
+      const down = e.direction === "down";
+      const change = num(e.change);
+      const pct = num(e.changePercent);
+      const days = num(e.days);
+      const unit = e.unit === "lb" ? "lb" : "kg";
+      return {
+        title: down ? "Weight down substantially" : "Weight up substantially",
+        line:
+          change != null && pct != null && days != null
+            ? `${down ? "Down" : "Up"} ${change} ${unit} (${pct}%) in ${plural(days, "day")}${down && e.planAimsForLoss ? "; your plan aims for loss" : ""}`
+            : "A change of 5% or more within a month",
+      };
+    }
     case "labs.report": {
       const parts = [
         arr(e.newlyFlagged).length && `${plural(arr(e.newlyFlagged).length, "value")} newly outside the lab's range`,

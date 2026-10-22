@@ -1,3 +1,6 @@
+import { ownQuestionsLeft } from "../encounter/domain/ownQuestions";
+import { pickPacks, type RouteResult } from "./router";
+import { PACK_KEYS, isPackKey, toolsForPacks, type PackKey } from "./tools/packs";
 import prisma from "../../utility/prismaClient";
 import { buildPatientSnapshot, renderSnapshot, ClientContext, PatientSnapshot } from "./context/snapshot";
 import { getLLM } from "./llm/openai.client";
@@ -60,7 +63,7 @@ export type TurnInput = {
  * made the notes feel like boring reports. Signals replace it — they fire only
  * when a detector clears its bar.
  */
-export type ProactiveKind = "weekly_review" | "signal" | "watch_out" | "plan_week";
+export type ProactiveKind = "weekly_review" | "signal" | "watch_out" | "plan_week" | "missed_session" | "lighter_today";
 
 export type ProactiveInput = {
   patientId: string;
@@ -74,6 +77,13 @@ export type ProactiveInput = {
 };
 
 const MAX_STEPS = 8;
+/** Save tools and the draft tools whose result they save: never in the same turn unless asked (see the loop). */
+const DRAFT_SAVES: Record<string, string[]> = {
+  save_meal_plan: ["generate_meal_plan"],
+  save_workout_plan: ["generate_workout_plan", "edit_workout_plan"],
+};
+const ASKS_TO_SAVE = /\b(save|keep|use it|lock (it )?in|make it my|set it as)\b/i;
+
 const MAX_TOOL_RESULT_CHARS = 12_000;
 const SUMMARIZE_AFTER_ROWS = 8;
 
@@ -231,7 +241,17 @@ async function* runLoop(p: {
   const checkin = mode.active;
   // A paused check-in changes what Ollie does with that symptom (End = pause, ruling 2026-09-16).
   const pausedView = mode.paused ? await encounterService.threadView(patientId, threadId).catch(() => null) : null;
+  // Which area packs this turn carries (tools/packs.ts, router.ts). A proactive run has no message to
+  // route and is rare: it gets every pack. A check-in in this thread always brings its own pack.
+  const lastUser = [...window.messages].reverse().find((m: any) => m.role === "USER");
+  const replyItAnswers = lastUser ? [...window.messages].slice(0, window.messages.indexOf(lastUser)).reverse().find((m: any) => m.role === "ASSISTANT" && m.content)?.content ?? null : null;
+  const routed: RouteResult = p.proactive || !lastUser
+    ? { packs: [...PACK_KEYS], reason: "forced", ms: 0 }
+    : await pickPacks({ message: lastUser.content, previousReply: replyItAnswers, always: checkin || mode.paused || mode.assessedConditions?.length ? ["symptoms"] : [] });
+  const packs = new Set<PackKey>(routed.packs);
+  const toolSpecs = () => registry.specs(toolsForPacks([...packs]));
   const system = buildSystemPrompt({
+    packs: routed.packs,
     snapshotText: renderSnapshot(snapshot),
     threadSummary: window.summary,
     proactive: p.proactive ?? null,
@@ -262,6 +282,8 @@ async function* runLoop(p: {
     today: dayKey(tz),
     resolveSubject: makeSubjectResolver(patientId),
     client: p.client,
+    // Their messages only: bracketed rows are the loop's own nudges and confirmations.
+    userWords: window.messages.filter((m: any) => m.role === "USER" && typeof m.content === "string" && !m.content.startsWith("[")).slice(-3).map((m: any) => m.content.slice(0, 1500)),
   };
 
   const cards: Card[] = [];
@@ -283,13 +305,17 @@ async function* runLoop(p: {
   let usedTools = false;
   let nudged = false;
   const toolsCalled: string[] = [];
+  /** One question per reply (ToolOutcome.question). */
+  let askedThisTurn = false;
   let assessRejected: string | null = null;
 
   try {
     while (steps < MAX_STEPS) {
       steps += 1;
       if (steps > 1) yield { type: "status", text: "Thinking" };
-      const res = await llm.chat({ messages, tools: registry.specs(), signal: p.signal });
+      // A check-in is the one conversation where the model takes a history and chooses a next step:
+      // it runs as its own task (llm/policy.ts: more thinking than an ordinary turn).
+      const res = await llm.chat({ messages, tools: toolSpecs(), signal: p.signal, task: checkin ? "checkin" : "converse", cacheKey: `ollie:${patientId}`, ...(p.proactive ? { tier: "default" as const } : {}) });
       usage = addUsage(usage, res.usage);
       model = res.model;
 
@@ -311,6 +337,7 @@ async function* runLoop(p: {
               inThread: checkin || mode.paused || mode.assessedConditions.length > 0 || toolsCalled.includes("start_checkin"),
               active: !!live && live.state.phase !== "ROUTE" && live.state.phase !== "CLOSED",
               historyComplete: !!live && historyComplete(live.state, live.protocol),
+              ownQuestionsLeft: live ? ownQuestionsLeft(live.state) : 0,
               flagged: !!live && live.state.redFlags.length > 0,
               rejected: assessRejected,
             },
@@ -344,7 +371,14 @@ async function* runLoop(p: {
         const tool = registry.get(call.name);
         if (tool?.risk === "generate") generatedThisTurn = true;
         void audit(patientId, tool?.risk === "memory" ? "memory_write" : "tool_call", { threadId, toolName: call.name, payload: { input: call.input } });
-        const out = await registry.execute(call.name, call.input, ctx);
+        // A draft is not saved in the turn it was made unless they asked to save (DRAFT_SAVES). The prompt
+        // said so; gpt-6-luna saved a meal plan in the same turn anyway (Oct 19 2026) — code decides now.
+        const draftedHere = DRAFT_SAVES[call.name]?.some((g) => toolsCalled.slice(0, -1).includes(g));
+        const out = draftedHere && !ASKS_TO_SAVE.test(lastUser?.content ?? "")
+          ? { ok: false, result: { error: "NOT SAVED: the draft was made in this turn and they have not asked to save it. Show the draft (the card has Save) and stop — saving waits for their OK." }, error: "draft_not_asked_to_save" } as Awaited<ReturnType<typeof registry.execute>>
+          : await registry.execute(call.name, call.input, ctx);
+        // load_tools: the next step carries those packs too.
+        if (call.name === "load_tools" && out.ok) for (const k of ((call.input as any)?.areas ?? []) as string[]) if (isPackKey(k)) packs.add(k);
         let modelResult: unknown = out.result;
         if (call.name === "assess_checkin") assessRejected = (out.result as any)?.rejected ? String((out.result as any).fix ?? "rejected") : null;
         if (out.ok && out.proposal) {
@@ -366,6 +400,16 @@ async function* runLoop(p: {
             yield { type: "proposal", proposalId: pr.id, toolName: call.name, title: pr.title, summary: pr.summary, preview: pr.preview, expiresAt: pr.expiresAt.toISOString() };
             yield { type: "card", card };
             modelResult = { proposed: true, proposalId: pr.id, summary: pr.summary, preview: out.result, note: "NOT saved yet — the user must confirm the card. Tell them what you prepared and ask them to confirm; do not say it is logged/sent/booked." };
+          }
+        }
+        // A tool asking something back (ToolOutcome.question): one rule for every tool.
+        if (out.ok && out.question) {
+          const base = (modelResult && typeof modelResult === "object" ? modelResult : { result: modelResult }) as Record<string, unknown>;
+          if (p.proactive) modelResult = { ...base, note: "Nobody is there to answer a question on this run: take the likeliest reading, say it in one clause, and carry on." };
+          else if (askedThisTurn) modelResult = { ...base, note: `Another question is already being asked in this reply — do not ask this one now (${out.question.text}); it waits for their answer.` };
+          else {
+            askedThisTurn = true;
+            modelResult = { ...base, askThis: out.question.text, note: `Ask exactly this ONE question, in your own words and one sentence — nothing else for this part of the request. When they answer, ${out.question.resumeWith}` };
           }
         }
         let content = JSON.stringify(modelResult);
@@ -480,7 +524,7 @@ async function* runLoop(p: {
     for (const c of chunks(text)) yield { type: "text", delta: c };
 
     const [row] = await threadStore.append(threadId, [
-      { role: "ASSISTANT", content: text, cards, meta: { model, usage, steps, safety: verdict, snapshotChars: system.length, proactive: p.proactive ?? null } },
+      { role: "ASSISTANT", content: text, cards, meta: { model, usage, steps, safety: verdict, snapshotChars: system.length, proactive: p.proactive ?? null, packs: [...packs], route: { reason: routed.reason, first: routed.packs, ms: routed.ms } } },
     ]);
     void audit(patientId, "response", { threadId, messageId: row.id, payload: { model, usage, steps, safety: verdict.reasons, proactive: p.proactive ?? null } });
     // After the tools, since they are what start, advance and end a check-in.
@@ -529,6 +573,7 @@ async function summarizeThread(llm: LLMClient, threadId: string, previous: strin
       .map((r) => (r.role === "TOOL" ? `[tool ${r.toolName}] ${r.content.slice(0, 300)}` : `${r.role}: ${r.content.slice(0, 1200)}`))
       .join("\n");
     const { summary } = await llm.json<{ summary: string }>({
+      task: "summarize",
       system: "Maintain a running summary of a coaching conversation between a user and their health assistant. Keep facts, numbers, decisions, open questions and the user's stated preferences. Drop pleasantries. Max 200 words. Return the updated summary.",
       user: `PREVIOUS SUMMARY:\n${previous ?? "(none)"}\n\nNEW TURNS:\n${transcript}`,
       schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"], additionalProperties: false },

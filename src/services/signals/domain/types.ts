@@ -50,6 +50,8 @@ export type PlanTargets = {
   calories: number | null;
   /** kg per week, signed: negative when the plan is a deficit. */
   weightRateKgPerWeek: number | null;
+  /** The plan's goal (LOSE_WEIGHT · RECOMPOSITION · GENERAL_HEALTH · FIX_LAB). */
+  outcome?: string | null;
 };
 
 /** One day of logged nutrition, already summed. */
@@ -82,6 +84,8 @@ export type SignalInput = {
   days: DayRow[];
   workouts: WorkoutRow[];
   weights: { date: string; kg: number }[];
+  /** The unit they last weighed in with — findings about weight are worded in it. */
+  weightUnit?: "kg" | "lb";
   plan: PlanTargets | null;
   /** Episodes still open, so a POSITIVE detector can notice a return to
    *  normal ("HRV back to your usual") — the one case where a detector has to
@@ -90,6 +94,7 @@ export type SignalInput = {
 };
 
 export type Yardstick = "usual" | "plan" | "rule";
+export type SignalDomain = "health" | "habit";
 
 export type Detector = {
   key: string;
@@ -108,6 +113,15 @@ export type Detector = {
    *  for everyone (a rule read as a habit produced "you typically go about 3
    *  days between logs"). */
   against: Yardstick;
+  /**
+   * What the finding is ABOUT (user ruling Oct 12 2026). "health" = something
+   * about the body, judged against the person's own usual or a lab's range —
+   * these are listed under Signals beside the check-ins. "habit" = what they
+   * did or did not do, judged against their plan or the app (training, food
+   * logging, protein, sleep against its target, weight against the plan's
+   * pace) — these stay notes from Ollie and the weekly review.
+   */
+  domain: SignalDomain;
   run: (input: SignalInput) => Candidate | null;
 };
 

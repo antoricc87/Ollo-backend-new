@@ -1,4 +1,6 @@
-import OpenAI from "openai";
+import { DEADLINE_MS, structuredClient } from "../../agent/llm/structured";
+import { route } from "../../agent/llm/policy";
+import { timed } from "../timing";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { Ingredient } from "../mealAnalysis.schema";
@@ -17,7 +19,7 @@ import {
 } from "./foodReference.repository";
 import { isPlausible, rankCandidates } from "./matchScoring";
 import { gramsFromReference } from "./portionMatching";
-import { UsdaFdcResolver, ResolverUnavailableError } from "./usdaFdc.resolver";
+import { UsdaFdcResolver } from "./usdaFdc.resolver";
 import { modelRequestParams } from "../modelParams";
 import { ReasoningEffort } from "../mealAnalysis.types";
 import { scalePer100g } from "./usdaNutrients";
@@ -38,7 +40,8 @@ export interface ResolveOptions {
   skipPortions?: boolean;
 }
 
-const RERANK_EFFORT = (process.env.NUTRITION_RERANK_EFFORT || "none") as ReasoningEffort;
+// Picking the matching food-database entry is labelling: task "classify" (agent/llm/policy.ts).
+const RERANK_EFFORT = route("classify").effort as ReasoningEffort;
 const ACCEPT_SCORE = 0.95; // heuristic accept only for (near) exact coverage with no extra qualifiers
 const CLEAR_MARGIN = 0.1;
 const PORTION_TOLERANCE = 0.25;
@@ -52,15 +55,8 @@ export function getDefaultResolver(): FoodResolver {
   return defaultResolver;
 }
 
-let openaiClient: OpenAI | null = null;
-const getOpenAI = () => {
-  if (!openaiClient) openaiClient = new OpenAI({
-      apiKey: process.env.REACT_APP_OPENAI_API_KEY || "",
-      timeout: Number(process.env.NUTRITION_OPENAI_TIMEOUT_MS || 20_000), // typical call 3-6 s; hung requests seen at ~45 s
-      maxRetries: 1,
-    });
-  return openaiClient;
-};
+// The shared structured-call connection; a food-database pick is quick (agent/llm/structured.ts).
+const getOpenAI = () => structuredClient(DEADLINE_MS.quick);
 
 const RerankSchema = z.object({
   bestIndex: z.number().describe("Index of the best candidate, or -1 if none is acceptable"),
@@ -79,7 +75,7 @@ Candidates:
 ${list}`;
   const response = await getOpenAI().responses.parse({
     model,
-    ...(modelRequestParams(model, RERANK_EFFORT) as any), // temperature 0, or reasoning.effort (NUTRITION_RERANK_EFFORT)
+    ...(modelRequestParams(model, RERANK_EFFORT, route("classify").tier) as any), // temperature 0, or reasoning.effort (NUTRITION_RERANK_EFFORT)
     input: [{ role: "user", content: prompt }],
     text: { format: zodTextFormat(RerankSchema, "rerank") },
   } as any);
@@ -142,7 +138,7 @@ export async function resolveIngredient(
   opts: ResolveOptions = {}
 ): Promise<{ ingredient: Ingredient; resolution: IngredientResolution }> {
   const resolver = opts.resolver ?? getDefaultResolver();
-  const rerankModel = opts.rerankModel || process.env.NUTRITION_RERANK_MODEL || "gpt-5.6-luna";
+  const rerankModel = opts.rerankModel || route("classify").model;
   const term = normalizeTerm(ing.searchTerm || ing.name);
   const brand = normalizeTerm(ing.brand || "");
   if (!term) return { ingredient: ing, resolution: llmFallback("empty_term") };
@@ -185,7 +181,7 @@ export async function resolveIngredient(
 
   let candidates: FoodCandidate[];
   try {
-    candidates = await resolver.search(query, { dataTypes, pageSize: 10 });
+    candidates = await timed("usda", () => resolver.search(query, { dataTypes, pageSize: 10 }));
   } catch (err: any) {
     console.warn(`[resolver] search failed for "${query}":`, err?.message);
     return { ingredient: ing, resolution: llmFallback("resolver_unavailable") };
@@ -211,7 +207,7 @@ export async function resolveIngredient(
     pick = top;
   } else {
     try {
-      const idx = await rerank(ing, ranked.slice(0, 6).map((r) => r.candidate), rerankModel);
+      const idx = await timed("rerank", () => rerank(ing, ranked.slice(0, 6).map((r) => r.candidate), rerankModel));
       method = "rerank";
       if (idx >= 0) pick = ranked.slice(0, 6)[idx];
     } catch (err: any) {
@@ -258,7 +254,7 @@ async function ensurePortions<T extends ResolvedReference & { id?: string }>(
   if (ref.portions && ref.portions.length) return ref;
   if (resolver.isCoolingDown()) return ref;
   try {
-    const portions = await resolver.portions(ref.sourceId);
+    const portions = await timed("portions", () => resolver.portions(ref.sourceId));
     if (ref.id) await savePortions(ref.id, portions).catch(() => {});
     return { ...ref, portions };
   } catch (err: any) {

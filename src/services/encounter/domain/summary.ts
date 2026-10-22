@@ -1,4 +1,6 @@
 import { OwnDataBlock, renderOwnData } from "./context";
+import { regionsKey, regionsLine } from "./bodyRegions";
+import { ownQuestions } from "./ownQuestions";
 import { EncounterState, Protocol, Slot } from "./types";
 
 /**
@@ -36,8 +38,12 @@ export const recapLines = (state: EncounterState, protocol: Protocol): RecapLine
   const lines: RecapLine[] = [];
   for (const slot of protocol.slots) {
     const a = answerText(slot, state.slots[slot.key]);
-    if (a) lines.push({ question: slot.prompt, answer: a });
+    // Tapped on the figure: said so, because a clinician reads a pointed-at spot differently from a chosen word.
+    const marked = regionsLine(state.slots[regionsKey(slot.key)]);
+    if (a || marked) lines.push({ question: slot.prompt, answer: [a, marked ? `Marked on the body diagram: ${marked}` : null].filter(Boolean).join(". ") });
   }
+  // The intake tool's own follow-ups, as asked and as answered — the clinician sees both halves.
+  for (const q of ownQuestions(state)) lines.push({ question: q.question, answer: q.answer });
   return lines;
 };
 

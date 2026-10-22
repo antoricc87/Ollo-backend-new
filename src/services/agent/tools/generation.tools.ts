@@ -1,5 +1,6 @@
 import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
+import { withTheirWords } from "./registry";
 import { getLLM } from "../llm/openai.client";
 import { randomUUID } from "crypto";
 import { defineTool, subjectField } from "./registry";
@@ -197,7 +198,10 @@ export const generateMealPlan = defineTool({
     const mealsPerDay = slots.length || input.mealsPerDay;
     const slotEnum = slots.length ? slots : ["BREAKFAST", "LUNCH", "DINNER", "SNACK"];
     type Plan = { title: string; days: PlanDay[]; notes: string };
-    const generate = (revision?: { previous: Plan; issues: string[] }) => getLLM().json<Plan>({
+    // The last revision carries the plan's own check, so the shared client can escalate that one call (llm/policy.ts).
+    const generate = (revision?: { previous: Plan; issues: string[] }, last = false) => getLLM().json<Plan>({
+      task: "design",
+      ...(last ? { accept: (p: Plan) => { const left = checkMealPlan(p.days, planTargets, context.foodAllergies, slots); return left.length ? left.join("; ") : true; } } : {}),
       system: `You are a registered-dietitian-style meal planner. Produce realistic, repeatable meals with explicit portions in grams. Every day's totals MUST land inside the daily calorie and macro ranges when given — use perMealGuide as the size of each meal (a weight-loss day is still ~1,500 kcal, not 800) and put a real protein portion (120–180 g meat/fish, 200 g Greek yogurt, 3 eggs, 150 g tofu…) in every main meal. Count calories per meal honestly from the portions (protein 4 kcal/g, carbs 4, fat 9). Respect watch-outs (keep flagged nutrients low), allergies (never include, in any form), intolerances, dislikes and stated preferences. Vary meals across days. No supplements, no medical claims.${
         coverage
           ? ` This plan covers ONLY ${slots.map((t) => t.toLowerCase()).join(" and ")}: each day has exactly one meal per covered slot and nothing else. The targets you are given are already that share of the day — size each meal with perMealGuide.perSlot as a normal ${slots.map((t) => t.toLowerCase()).join(" / ")}, never as a whole day's food.`
@@ -210,7 +214,7 @@ export const generateMealPlan = defineTool({
         mealsPerDay,
         ...(coverage ? { covers: slots } : {}),
         perMealGuide: perMealGuide(planTargets, mealsPerDay, slots),
-        request: input.request ?? null,
+        request: withTheirWords(input.request, ctx),
         context: { ...context, dailyTargets: planTargets, ...(coverage ? { wholeDayTargets: dayTargets, coveredShare: coverage.share } : {}) },
         remembered: memories.map((m) => m.content),
         ...(revision ? { previousPlan: revision.previous, issues: revision.issues, stillNeeded: deficits(revision.previous.days, planTargets) } : {}),
@@ -238,14 +242,13 @@ export const generateMealPlan = defineTool({
         additionalProperties: false,
       },
       schemaName: "meal_plan",
-      model: getLLM().defaultModel,
     });
     const MAX_REVISIONS = 2;
     let plan = await generate();
     let issues = checkMealPlan(plan.days, planTargets, context.foodAllergies, slots);
     let revised = false;
     for (let i = 0; i < MAX_REVISIONS && issues.length; i++) {
-      const revision = await generate({ previous: plan, issues });
+      const revision = await generate({ previous: plan, issues }, i === MAX_REVISIONS - 1);
       const revisedIssues = checkMealPlan(revision.days, planTargets, context.foodAllergies, slots);
       // Keep whichever attempt is closer; an allergen hit is never "closer".
       const allergen = (xs: string[]) => xs.some((x) => /\(allergy\)/.test(x));
@@ -295,6 +298,7 @@ export const generateRecipe = defineTool({
     const subject = await ctx.resolveSubject(input.subjectId);
     const context = await nutritionContext(ctx.patientId, subject.id);
     const recipe = await getLLM().json<any>({
+      task: "design",
       system: "Write a precise home-cook recipe. Metric quantities with household equivalents. Respect allergies (never include), intolerances, dislikes, watch-outs (keep flagged nutrients low) and the stated constraints. Per-serving nutrition must be a realistic estimate.",
       user: JSON.stringify({ dish: input.dish, servings: input.servings, constraints: input.constraints ?? null, context }),
       schema: {
@@ -332,6 +336,7 @@ export const buildGroceryList = defineTool({
   risk: "generate",
   async run(_ctx, input) {
     const list = await getLLM().json<{ sections: { section: string; items: { item: string; quantity: string }[] }[]; itemCount: number }>({
+      task: "design",
       system: "Consolidate ingredient lines into one shopping list. Merge duplicates and sum quantities (scale by servingsMultiplier), round to buyable amounts, drop pantry staples the user says they have, and group by store section (Produce, Meat & Fish, Dairy & Eggs, Bakery, Pantry, Frozen, Other).",
       user: JSON.stringify(input),
       schema: {

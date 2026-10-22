@@ -52,8 +52,15 @@ export const EXERTION_PROTOCOLS = ["chest_discomfort", "breathlessness", "dizzin
 /** At or above this, on the 0–10 "at its worst" answer, the session is kept general. */
 export const CAUTION_SEVERITY = 7;
 
-/** How long after its last change a check-in still shapes training. Covers the follow-up loop (days 2, 5, 10). */
+/**
+ * How long after its last change a check-in still shapes training. A follow-up
+ * answer counts as a change (Oct 18 2026: the gate lapsed on day 14 although
+ * the person had reported on day 10 and was still reporting).
+ */
 export const GATE_DAYS = 14;
+
+/** The latest follow-up answer ("how is it now?"), or null when none was given. */
+export type LatestFollowUp = { trend: "BETTER" | "SAME" | "WORSE"; day: number } | null;
 
 const SAFETY_KEYS = ["associated", "safety"];
 
@@ -81,7 +88,13 @@ const cautionReasons = (state: EncounterState, protocol: Protocol): string[] => 
 export const trainingGateFor = (
   input: { id: string; status: string; state: EncounterState; protocol: Protocol },
   /** The latest assessment of THIS check-in, or null. An ended check-in may carry one too (ended after assessing). */
-  lastAssessment: { possibilities?: { condition?: string | null }[] } | null = null
+  lastAssessment: { possibilities?: { condition?: string | null }[] } | null = null,
+  /**
+   * The person's latest "how is it now?" answer. "Worse" weighs like "it has
+   * been getting worse" in the interview (Oct 18 2026: "it flared up again"
+   * was recorded, and the next session was designed as if nothing was said).
+   */
+  latestFollowUp: LatestFollowUp = null
 ): TrainingGate => {
   const { state, protocol } = input;
   const base = {
@@ -102,6 +115,7 @@ export const trainingGateFor = (
   if (!lastAssessment || input.status !== "OPEN" || state.phase !== "ROUTE")
     return { ...base, level: "hold", pending: true, reasons: ["the check-in is not finished"] };
   const reasons = cautionReasons(state, protocol);
+  if (latestFollowUp?.trend === "WORSE") reasons.push(`at the latest follow-up (day ${latestFollowUp.day}) it was worse`);
   return reasons.length ? { ...base, level: "general", pending: false, reasons } : { ...base, level: "normal", pending: false, reasons: [] };
 };
 

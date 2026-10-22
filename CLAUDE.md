@@ -22,6 +22,30 @@ analysis and lab extraction. Mobile app lives in `../healtcare-mobile-app-main`.
 - Full `tsc` has ~7 pre-existing errors (lab_extraction `unknown` narrowing,
   @napi-rs/canvas Float16Array) — runtime uses transpile-only, don't block on them.
 
+## One model policy (R1, Oct 2026) — `src/services/agent/llm/policy.ts`
+
+Plan: `../docs/ollie-request-handling-plan.md`. Ruling (Oct 19 2026): Ollie is ONE infrastructure, gpt-4
+is being retired, GPT-6 Luna first and GPT-6.1 Sol only where Luna falls short.
+- Every model call names a `Task` (converse, checkin, safety, summarize, classify, extract,
+  extract_vision, verify, design, plan, review), never a model. `route(task)` gives model, effort and the
+  escalation model; `policyTable()` is logged at boot (`[llm] policy …`). Override per task:
+  `LLM_<TASK>=model[:effort]`, `LLM_<TASK>_ESCALATE=model[:effort]|off`. `AGENT_MODEL`,
+  `AGENT_CHECKIN_MODEL/EFFORT`, `AGENT_FAST_MODEL` still work as aliases.
+- Shared client (`openai.client.ts`): `chat({task})`, `json({task, accept?, images?})`. `accept` is the
+  caller's own check; when it fails (or the JSON is unusable) the call runs once on the escalation model
+  — the same rule for every area, every escalation logged `[llm] escalate …`. Design loops pass `accept`
+  on their LAST revision only, so Sol is used when the cheap retries did not fix it.
+- The Responses-API callers (meals, labs, insurance) take model + effort from the same table via
+  `modelRequestParams(model, effort)`. gpt-6 counts as a reasoning model; effort "none" is cast past the
+  SDK's types.
+- Safety stays on gpt-4.1-mini until its own tests match on the new model (ruling: only if it matches).
+- Deleted as dead (Oct 19 2026, his go): the old lab parsers in `openAI/model/openai.model.ts`, the
+  `MEAL_ANALYSIS_ENGINE=legacy` calorie prompts (`openAI/model/legacy/`), `LAB_EXTRACTION_ENGINE=legacy`,
+  the unrouted utils photo/transcription/PDF handlers, `generatePortionsFromAI`, `generateOptimalCalories`,
+  `generateNutrientsTotalAmountAndCalories` and `POST /api/nutrition/generateOptimalValues` (no app caller).
+- Worktree gotcha: with `node_modules` linked to the main repo, Prisma fills any env var the copy leaves
+  unset from the MAIN `.env` — set model variables explicitly (empty) in test copies.
+
 ## Health Plan v1 (Aug 2026) — `src/services/plan/`
 
 Goal → pillar targets (SLEEP/EXERCISE/NUTRITION) + nutrition watch-outs.
@@ -458,6 +482,43 @@ chips matched at most one question and the rest had to be listed in text.
 - Evals: `checkin_one_question_no_reask` replays the device conversation turn
   by turn (second request acknowledged, no re-ask, one question each);
   `pain_checkin_mild_normal_training` asks "does it go away by itself?".
+
+### The body map (Oct 9 2026) — `domain/bodyRegions.ts`, `POST /encounters/:id/regions`
+
+The "where is it?" question as a figure to tap (user mockup: 41 regions on the
+front, 31 on the back, 62 keys — arms and shoulders share a key across views).
+- `bodyRegions.ts` (pure, `tests/encounter/bodyRegions.test.ts`): the region
+  KEYS and labels (sides are the PERSON's), and `bodyFor(protocolKey, slotKey)`
+  = which questions show the figure: chest / headache / abdominal / back /
+  rash `location` and joint `which_joints`, each with a starting view and a
+  focus (head · torso · full) so the cells are big enough. Never for a
+  complaint with no place. The geometry is the app's (`Ollo/docs/body-map/*.svg`
+  → mobile `functionalities/encounter/bodyMapPaths.ts`); a test checks both
+  sides carry the same keys.
+- `threadView().question.body` carries it (regions with labels), so the app
+  draws the figure instead of the chips for that question only.
+- The slots and their options are UNCHANGED (no protocol version bump). A tap
+  does not settle the question: `markRegions` stores the keys beside the answer
+  (`slots[<slotKey>_regions]`, event `regions {via: "bodymap"}`), then the app
+  sends the same places as WORDS — an ordinary message through `record_checkin`
+  like any chip — so one path still decides what was answered (an option when
+  the words fit one, their words otherwise).
+- `recapLines` (so the handout too) adds "Marked on the body diagram: …".
+- `askNext.how` tells the model a figure is on screen: one sentence, tap or
+  tell, no list of places.
+- Not done: no red-flag or gate rule reads a region; severity per region; the
+  stepped pages do not show the figure.
+
+### The model runs the interview and chooses the step (Oct 9 2026, user ruling)
+
+"Rely on the LLM's intelligence in running the check-in… evaluate the urgency and choose among the five options… everything about the patient factored in."
+- **Order:** warning signs → WHERE (`protocols.ts` `tail()` puts `WHERE_KEYS` first) → the rest of the protocol's standard questions. Those stay the minimum.
+- **Own follow-ups** (`domain/ownQuestions.ts`, pure): once `historyComplete`, the model asks up to `MAX_OWN_QUESTIONS` (4) questions of its own and records each with `record_checkin {followUps: [{question, answer}]}` → `slots.own_questions`, event `own_question`, printed by `recapLines` (so on the handout). `turnChecks` `checkin_complete_not_assessed` stands down while follow-ups are left and the reply is a question (`ownQuestionsLeft`).
+- **The next step is the model's call** among the five `NEXT_STEP_KINDS`, from everything heard and on record; "between two steps, the earlier one". A tripped rule still overrides upward. `assessment.ts` `BANNED` is UNCHANGED: the step is chosen, but "can wait / not urgent / within 48 hours" still cannot be written.
+- **The record is part of the history:** the prompt says to use conditions, medications, allergies, flagged labs, signals and nights for follow-ups and in `fits` ("On record: …", facts never conclusions). Snapshot gained `signals` (findings of the last 30 days via `describeFinding`) and `nights` (last 3 `NightlyVitals`); both are stripped from the clinician seam.
+- **Model:** `AGENT_CHECKIN_MODEL` (+ `AGENT_CHECKIN_EFFORT`, default medium) is used for turns in check-in mode; unset = the usual agent model. Chat Completions refuses tools + reasoning for gpt-5.4 and later, so `llm/openai.client.ts` sends those (and the pro models) through the Responses API: `needsResponses(model)`, `toResponsesInput`, and `asChatChunks`, which reads the Responses stream as chat chunks so `streamed()` and its watchdogs serve both (idle limit `AGENT_LLM_THINKING_IDLE_MS`, 120 s, while a reasoning model thinks). Stateless: reasoning items are not carried between calls. Verified with tools on gpt-5.5 and gpt-5.6-luna / sol / terra. Local `.env` uses gpt-5.6-luna. Railway needs the variable set to change anything in production.
+- A follow-up's QUESTION is read from Ollie's previous message (`questionAsked`) and only its answer comes from the model (`followUp: {answer}`): left to pair them itself, it stored the question it was about to ask against the previous answer.
+- Seen on gpt-5.6-luna (lower-right pain): 2 own questions, `SEE_SOMEONE_TODAY`, ~6 s a turn. Not yet covered by an eval scenario.
 
 ### Phase 2 — the follow-up loop and own-data context (2026-09-10)
 
@@ -1031,6 +1092,76 @@ dashboard after it was opened.
   a signal note whose Finding has RESOLVED. Opened notes stay in history.
   Tests `tests/agent/noteAnnounce.test.ts`.
 
+## Signals: health findings vs habit findings (Oct 12 2026)
+
+Ruling: the app's Signals page lists check-ins plus what Ollo notices about the
+BODY — never habits. `Detector.domain` ("health" | "habit") says which:
+health = `recovery.dip`, `recovery.restored`, `labs.report`, `weight.change`;
+habit = training.*, `logging.stopped`, `nutrition.protein_short`, `sleep.debt`
+(against the plan's target) and `weight.off_track` (against the plan's pace).
+`registry.domainOf(key)` (unknown key → habit), `GET /signals/findings` adds
+`domain` per row and takes `?domain=health`. Habit findings still become notes
+and feed nothing else in the app. New detector `detectors/weight.ts`
+`weight.change`: 5% or more between the latest weigh-in (≤10 days old) and the
+earliest one 14–30 days before it, loss or gain, worded in the unit last used;
+it fires under a weight-loss plan too and says the plan aims for loss. The 5%
+bar is drafted — clinical review. Tests `signals/tests/weight.test.ts`.
+
+## Background tasks + the morning digest (Oct 16 2026)
+
+Ruling: Ollie does work unasked, leaves it READY in the app, and the push names
+the work done. "Go with the digest", first build = the gate + three tasks.
+Defaults taken without his answer (say so if asked): drafts only — every task
+ends in a proposal or a draft card, nothing is saved; a push names the work,
+never a symptom, finding or lab value.
+
+- **Gate** `notifications/gate.ts` (pure): Ollie's kinds (`AGENT_KINDS`) pass it
+  inside `queueNotification`; messages from people (bookings, care team) never
+  do. `mode: "digest"` → row `held`; `now` → pushed, but quiet hours
+  21:30–07:30 local move it to 07:30, and over `DAILY_CAP` 1 / `WEEKLY_CAP` 5
+  it is `held` instead (rides the next digest). `proactive.service DELIVERY`:
+  digest = weekly_review, signal, missed_session; now = plan_week (Sunday 18:00),
+  watch_out (just uploaded), lighter_today (today's session).
+- **Digest** `notifications/digest.ts`: the hourly tick, at 09:00 local, AFTER
+  the morning tasks and the signal scan: held rows whose note was already
+  opened drop out (`merged`/`seen`); the rest become ONE `digest` row (one item
+  → its own line, opens its note; several → "Ready for you: a, b and c.",
+  opens `ollie/ready`); held rows → `merged` / `digest:<id>`. The digest is
+  exempt from the daily cap (worst case 2 pushes a day), counts to the weekly.
+- **Task 1 — missed session → moved** `agent/proactive/tasks.ts
+  runMissedSessionFor`, pure rule `workouts/design/reschedule.ts`: yesterday's
+  day in the ACTIVE saved week is `missed` (nothing else trained that day) →
+  the earliest free day from today to the week's end, preferring rest on both
+  sides, else neighbours training different muscles (word overlap; untagged
+  overlaps all); none → silent. The agent calls `move_workout` (proposal).
+- **Task 2 — low recovery → lighter today** `runLighterTodayFor`, rule
+  `signals/domain/lastNight.ts`: runs on `POST /signals/nightly` (nights only
+  reach the server when the app opens — no clock can know last night), only if
+  today has a PLANNED session whose time has not passed, ≥25 min, not mobility,
+  nothing done today, and last night's HRV ≥1 SD below or sleeping HR ≥1 SD
+  above their usual (same baselines/cut-off as the readiness card's labels).
+  The agent calls `generate_workout` with `replaceSessionId`, ~70% length; the
+  original stays unless they tap Put in plan.
+- **Task 3 — one number worth knowing** `review/domain/weekStats.ts` +
+  `weekStatFor` (review model): 28 days, two groups of their own days (sleep
+  and HRV after training vs rest days, protein training vs rest days, calories
+  and sleep weekend vs weekdays), each with minimum days per group and a bar;
+  strongest one that was not last week's → `get_week_review` result
+  `worthKnowing`; the prompt says one sentence, never a cause or advice.
+- Idempotency: `AgentPreference.taskRuns` Json (additive column) —
+  `missed_session` = session id, `lighter_today` = date, `week_stat` =
+  "<weekStart>|<key>". Training tasks obey `planWeekEnabled`.
+- Prompt sections `missed_session` / `lighter_today` in `prompt/system.ts`;
+  turn guards `missed_session_without_move` / `lighter_today_without_card` (the
+  first local run DID describe the move without calling the tool — the guard
+  made it).
+- Dev: `POST /api/agent/proactive/{missed_session|lighter_today|digest}` runs it
+  for the caller and says why not. Tests `tests/agent/backgroundTasks.test.ts`.
+- Not built from the proposal: food tasks (week's meals + groceries, yesterday
+  filled in), screening → booking held, check-in follow-up, visit prep, monthly
+  report; HealthKit background delivery (would let task 2 run before the app
+  opens); per-area switches beyond `planWeekEnabled`.
+
 ## Meal portion dial (Aug 31 2026) — `src/services/meal_analysis/mealPortion.ts`
 
 "How much of it" as ONE coarse choice per meal (light | normal | hearty | lots)
@@ -1349,6 +1480,72 @@ again. Rule now: a change to a drafted week touches only what was named.
   compares session bodies turn to turn). The caution path of the edit tool is
   covered by code sharing only — no eval runs an edit with a check-in on record.
 
+### Editing ONE drafted session, and two guards (Oct 12 2026) — `design/sessionEdit.ts`, `edit_workout`
+
+Device, Oct 11: "add pull-ups" to a single-session draft called `generate_workout`
+again and five of seven exercises, the sets and the warm-up came back different;
+the reply then said "Nothing has been logged or saved yet". Only week drafts had
+an edit path.
+- Tool `edit_workout {request, durationMin?, draftId?}` (risk generate): reads the
+  latest `workout` card of the thread (`findSessionCard`), designs against it as
+  `previous` (CHANGE_RULES), then CODE restores what the request did not touch
+  (`keepUntouched`: an exercise in both keeps its previous sets unless the request
+  names it or changes the whole dose — shorter, lighter, an hour; warm-up/cool-down
+  stay unless mentioned; title stays unless the focus changed) and states the
+  difference (`sessionChanges` / `changesLine`) for the reply. Same card type, new
+  draftId, `changedFrom`. Prompt routes every change to a session draft here.
+- `turnChecks` `claim_without_save`: after a generate tool, "I've added…" is not a
+  claim that something was saved (`CLAIMS_LOGGED` without "added") — that nudge was
+  what produced the "Nothing has been logged" reply.
+- `turnChecks` `plan_week_without_card`: the Sunday run described a split and said
+  "save it from the card" with NO tool call (prod, Oct 11) — nudged once to call
+  `generate_workout_plan`.
+- **Defaults come from the person, and nothing asks first** (`design/defaults.ts`,
+  pure, `tests/workouts/defaults.test.ts`; user ruling Oct 12): each setting falls
+  back said → training profile → their own completed sessions of the last eight
+  weeks (last place, median length of non-sport sessions, weekdays trained, lifting
+  count for experience) → plan (the kind of session) → fixed value (a gym, 45 min,
+  a general mixed session). `askDefaults` loads it for both design tools; the
+  `needsInfo` question is gone. What was assumed goes on the card's `assumptions`
+  and to the model as `assumed` ("mention in one clause, never ask"). A session the
+  person described in words gets no default focus. The snapshot's "profile not
+  set" line no longer tells the model to ask (it did, and it asked five things).
+  The user's production profile was `gym` and nothing else.
+- Tests `tests/workouts/sessionEdit.test.ts`, more cases in `tests/agent/turnChecks.test.ts`.
+  No eval scenario yet (a `workout_draft_edit_keeps_the_rest` like the week one is due).
+
+### Lengths in words, the last saved week, and a worse follow-up (Oct 18 2026)
+
+Prod thread 0807b49e + Sunday run 7a710204: "session should be 45 minutes" came
+back at 35 (one session even lost a set; the reply said "more volume"); the
+default was "35 min, your usual length" though the last saved week was asked at
+60; the Sunday draft (back squats, Mon/Wed/Sat) ignored that week; a "worse"
+follow-up changed nothing, and the check-in had dropped out of the gate.
+- `design/sessionEdit.ts` `lengthAsked(request, previousMin?)` reads a length
+  from words (45-minute, an hour, 1.5 hours; "15 minutes longer" relative to
+  the session; a warm-up's length is not the session's). Used by
+  `edit_workout`, `edit_workout_plan` (per edit), `generate_workout` and
+  `generate_workout_plan`. A length SAID for a week (`minutesFixed`) is kept on
+  every session; otherwise the layout may still shorten a lighter day.
+- `sessionChanges` adds `minutes`, `moreSets`, `fewerSets`; `changesLine` says
+  "FEWER sets of …". The week edit log uses it per changed day (it used to say
+  only "X changed → X"). A week edited to one length sets `brief.sessionMinutes`
+  and the result carries `keepLength` (offer once to save it to the profile).
+- `design/defaults.ts`: length and days fall back said → profile → **last saved
+  week** (`plan.model.ts lastSavedWeek`: request, sessionMinutes, weekdays) →
+  history → fixed. `from` gains `last_week`.
+- `plan_week` instruction hands over the last saved week's request, days and
+  length verbatim (`request=…`, `sessionMinutes=…`); prompt: nothing recorded
+  this week is never "you didn't log any workouts".
+- Gate: `trainingGateFor(…, latestFollowUp)` — the latest follow-up WORSE is a
+  `general` reason; same/better leave the interview's answers to decide; it
+  never lowers a hold. `trainingGate()` / `existingFor()` count a check-in
+  as current while follow-ups arrive (a child row never touched `updatedAt`).
+- Evals `week_draft_length_in_words`, `followup_worse_makes_week_general`
+  (fixture `seedFollowedCheckin`). Not done: phased programmes across weeks
+  ("upper body only at first, then lower"), and the readiness strain button
+  ignoring what was already done today / late evening.
+
 ## Labs journey (Aug 27 2026) — `src/services/labs_journey/`
 
 How a patient gets labs done. `domain/screening.rules.ts` `buildPanel(profile)`
@@ -1475,7 +1672,7 @@ Railway after deploy).
   Quest scan, ~13/67 flagged "check". The PDF pages go to OpenAI unredacted
   (can't text-redact an image) — `LAB_VISION_FALLBACK=false` re-enables the
   422 rejection. The app tells the user a scan was read visually.
-  `LAB_EXTRACTION_ENGINE=legacy` restores the old path.
+  The old `LAB_EXTRACTION_ENGINE=legacy` path was deleted Oct 19 2026 (R1).
   **Summary wording (Sep 15 2026):** the model no longer writes `labReport`
   or `recommendations` (the old prompt produced "above the recommended range
   and may increase your risk for heart disease", "no exercise changes are
@@ -1704,6 +1901,33 @@ Patient-token chat routes are BACK (`services/messaging/messaging.routes.ts`:
 the phone's chat screen can now be rebuilt on them. Plan: `../docs/physician-app-plan.md`. Tests: `tests/seam/`.
 Local key lives in `.env` (`SEAM_SERVICE_KEY`) and must equal the one in
 `Ollo-Clinician-Service/.env`. Not on Railway yet (physician app is local-only).
+
+## Weekly review card (Oct 2 2026) — `src/services/review/`
+
+The Monday review now carries a card (`week_review`, user mockup) built in
+code. `domain/weekReview.ts` `buildWeekReview()` (pure, 12 tests in
+`review/tests/`) turns one ISO week + the week before into rows — SLEEP,
+RECOV (HRV), TRAIN, KCAL, PROT, WT — each with AVG, VS LAST, one line under
+the name, and its coverage. The rule (user: never mislead when the data the
+person has to provide is missing): an average needs `MIN_DAYS` (5 of 7, user ruling Oct 4 2026) full
+days/nights; below that the row stays with `value: null` (the card prints a
+dash) and says how much was recorded; calories + protein collapse into ONE
+"Food log" row; a "vs last" needs BOTH weeks to have enough; a row is flagged
+(amber tag, max 2) and counts toward the title only with enough data; no
+nights on record at all → no sleep/HRV rows; no weigh-in → no weight row. A
+full food day = two meal types or more (the Health Score's rule); usual-day
+fills count. With food targets set but the food log missing, the title never
+gives a whole-week verdict. Strings are formatted server-side — the app does
+no arithmetic. `model/weekReview.model.ts` `weekReviewFor(patientId, monday,
+tz)` reads NightlyVitals (so this depends on the unpushed Signals commit),
+DailyFood, WorkoutSession, WeightEntry (shown in the unit last used) and the
+plan targets. Agent: `tools/review.tools.ts` `get_week_review {weekOf?}`
+(read, cardRole result; finished weeks only, default last week); the weekly
+instruction, the read-guard nudge and `PROACTIVE.weekly_review` now go
+through it (the card carries the table — the reply does not recite it, and
+never estimates a null row). `scripts/week-review.ts <email> [day] [--json]`
+prints it without the agent. `agent-proactive-smoke.ts` asserts the tool and
+the card (its daily_checkin block is stale since Sep 25 and will fail).
 
 ## Insurance — card, plan summary, estimates (Oct 8 2026) — `src/services/insurance/`
 

@@ -195,3 +195,16 @@ export async function seedFinishedCheckin(patientId: string, daysAgo: number, co
   await prisma.encounterEvent.create({ data: { encounterId: row.id, seq: 0, kind: "assessment", payload: { possibilities: [] }, createdAt } });
   return row.id;
 }
+
+/**
+ * The Oct 18 2026 shape: a back-pain check-in finished `daysAgo` days ago (so
+ * older than the 14-day gate on its own), followed up since, the latest
+ * follow-up `trend` given `followUpDaysAgo` days ago.
+ */
+export async function seedFollowedCheckin(patientId: string, daysAgo: number, trend: "BETTER" | "SAME" | "WORSE", followUpDaysAgo: number) {
+  const id = await seedFinishedCheckin(patientId, daysAgo);
+  const old = new Date(Date.now() - daysAgo * 86400000);
+  await prisma.encounter.update({ where: { id }, data: { updatedAt: old } });
+  await prisma.encounterCheckIn.create({ data: { encounterId: id, day: daysAgo - followUpDaysAgo, trend, note: "played football again, it flared up", createdAt: new Date(Date.now() - followUpDaysAgo * 86400000) } });
+  return id;
+}

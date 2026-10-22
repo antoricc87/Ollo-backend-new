@@ -6,13 +6,11 @@ import { UploadedFile } from "express-fileupload"; // Import UploadedFile if the
 import prisma from "../../../utility/prismaClient";
 import { summarizePatientRecord } from "../../../utility/recordSummary";
 import { queueNotification } from "../../notifications/notifications.service";
-import { parseLabPdf } from "../../../utils/redactPI";
 import {
   extractLabReport,
   ScannedPdfError,
 } from "../../lab_extraction/extractLabs";
 import { Util } from "../../../utils/response";
-import { generateLabDataJSON } from "../../openAI/model/openai.model";
 import {
   checkExistingPatient,
   createPatientInsurance,
@@ -289,13 +287,9 @@ export class PatientHandler {
       let labDataJSON: any;
       let detectedCollectedAt: Date | null = null;
       let extraction: any = undefined;
-      if (process.env.LAB_EXTRACTION_ENGINE === "legacy") {
-        // Old path: pdf-parse text → gpt-4o-mini prompt (no validation)
-        const parsed = await parseLabPdf(file, firstName, lastName, dob);
-        detectedCollectedAt = parsed.detectedCollectedAt;
-        labDataJSON = await generateLabDataJSON(parsed.redactedText, patientIdToUse);
-      } else {
-        // Layout-aware extraction with code-side validation (see lab_extraction/)
+      // Layout-aware extraction with code-side validation (see lab_extraction/). The old
+      // LAB_EXTRACTION_ENGINE=legacy path (pdf-parse → gpt-4o-mini, no validation) was deleted Oct 19 2026.
+      {
         const result = await extractLabReport(file.data, {
           firstName,
           lastName,

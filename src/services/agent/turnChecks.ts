@@ -33,6 +33,8 @@ export type TurnFacts = {
     active: boolean;
     /** Every required question is covered. */
     historyComplete: boolean;
+    /** How many of its own follow-up questions Ollie may still ask (0 outside an interview). */
+    ownQuestionsLeft: number;
     /** A published warning sign matched — the turn's job is the escalation, not an assessment. */
     flagged: boolean;
     /** What assess_checkin said when it refused the assessment this turn, if it did. */
@@ -48,6 +50,9 @@ export const CLAIMS_CARD =
 
 /** The reply says something was saved. Only true after a commit this turn. */
 export const CLAIMS_SAVED = /\b(?:i'?ve|i have|i)\s+(?:logged|saved|recorded|added)\b|\b(?:is|was|been|got)\s+(?:logged|saved|recorded)\b|\blogged\s+(?:it|that|your|the)\b/i;
+
+/** The same without "added": after a design tool, "I've added pull-ups" describes the draft on the card, which is true. */
+const CLAIMS_LOGGED = /\b(?:i'?ve|i have|i)\s+(?:logged|saved|recorded)\b|\b(?:is|was|been|got)\s+(?:logged|saved|recorded)\b|\blogged\s+(?:it|that|your|the)\b/i;
 
 const CHECKIN_TOOLS = ["start_checkin", "record_checkin", "assess_checkin", "resume_checkin"];
 
@@ -78,7 +83,35 @@ const CHECKS: ((f: TurnFacts) => TurnNudge | null)[] = [
     f.proactive === "weekly_review" && !f.usedTools
       ? {
           stage: "weekly_review_without_reads",
-          message: "[System: the snapshot describes the CURRENT week, not the week under review. Call get_nutrition_summary, get_activity and get_workouts for the exact range given in the review instruction, then write the review from those results.]",
+          message: "[System: the snapshot describes the CURRENT week, not the week under review. Call get_week_review (it reads last week and shows the review card), then write the review from its result.]",
+        }
+      : null,
+
+  // Sunday planning: the note listed a split and said "save it from the card"
+  // with no tool called, so there was no card and nothing to save (Oct 11 2026).
+  (f) =>
+    f.proactive === "plan_week" && f.toolsCalled.indexOf("generate_workout_plan") < 0
+      ? {
+          stage: "plan_week_without_card",
+          message: "[System: you described next week's training without designing it, so there is no card and nothing the user can save. Call get_workouts for this week, then generate_workout_plan for next week, and write the note from its result.]",
+        }
+      : null,
+
+  // Background tasks (Oct 16 2026): the note exists to carry the work. A note
+  // that describes a move or a lighter session without making it is a promise
+  // with nothing behind it.
+  (f) =>
+    f.proactive === "missed_session" && f.toolsCalled.indexOf("move_workout") < 0
+      ? {
+          stage: "missed_session_without_move",
+          message: "[System: you described the move without preparing it, so there is nothing to confirm. Call move_workout with the sessionId and plannedFor from the instruction, then write the note from its result.]",
+        }
+      : null,
+  (f) =>
+    f.proactive === "lighter_today" && f.toolsCalled.indexOf("generate_workout") < 0
+      ? {
+          stage: "lighter_today_without_card",
+          message: "[System: you described a lighter session without designing it, so there is no card. Call generate_workout with the date, replaceSessionId, durationMin, focus and request from the instruction, then write the note from its result.]",
         }
       : null,
 
@@ -99,7 +132,9 @@ const CHECKS: ((f: TurnFacts) => TurnNudge | null)[] = [
   // voice channel the moment the prompt said logs are saved at once): nothing
   // was saved. The tool must run, or the reply must not claim it did.
   (f) =>
-    !f.saved && !f.proposed && !f.proactive && CLAIMS_SAVED.test(f.text)
+    // Oct 11 2026: "I've added pull-ups to the session" after a design tool drew this nudge,
+    // and the reply became "Nothing has been logged or saved yet" — with no word on the pull-ups.
+    !f.saved && !f.proposed && !f.proactive && (f.generated ? CLAIMS_LOGGED : CLAIMS_SAVED).test(f.text)
       ? {
           stage: "claim_without_save",
           message:
@@ -114,6 +149,8 @@ const CHECKS: ((f: TurnFacts) => TurnNudge | null)[] = [
   (f) =>
     f.checkin.active &&
     f.checkin.historyComplete &&
+    // Asking one of its own follow-ups is not "ending the turn without the assessment" (Oct 9 2026).
+    !(f.checkin.ownQuestionsLeft > 0 && /\?/.test(f.text) && !ABOUT_ASSESSMENT.test(f.text)) &&
     !f.checkin.flagged &&
     !f.proactive &&
     f.toolsCalled.every((t) => CHECKIN_TOOLS.indexOf(t) >= 0) &&

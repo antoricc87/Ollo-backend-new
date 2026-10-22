@@ -45,6 +45,22 @@ describe("trainingGateFor", () => {
     expect(trainingGateFor(enc("back_pain", { ...mildBack, ...slots }), assessment).level).toBe("general");
   });
 
+  it("general: the latest follow-up said worse (device, Oct 18 2026: 'it flared up again')", () => {
+    const g = trainingGateFor(enc("back_pain", mildBack), assessment, { trend: "WORSE", day: 14 });
+    expect(g.level).toBe("general");
+    expect(g.reasons).toEqual(["at the latest follow-up (day 14) it was worse"]);
+  });
+
+  it("only the LATEST follow-up counts: same or better after a worse one leaves the interview's answers to decide", () => {
+    expect(trainingGateFor(enc("back_pain", mildBack), assessment, { trend: "SAME", day: 10 }).level).toBe("normal");
+    expect(trainingGateFor(enc("back_pain", mildBack), assessment, { trend: "BETTER", day: 10 }).level).toBe("normal");
+  });
+
+  it("a worse follow-up never lowers a hold", () => {
+    const flag = { ruleId: "back.weakness", level: "SEEK_CARE_NOW" as const, criterion: "Back pain with new leg weakness", source: { org: "NICE", year: 2025 } };
+    expect(trainingGateFor(enc("back_pain", mildBack, { redFlags: [flag] }), assessment, { trend: "WORSE", day: 5 }).level).toBe("hold");
+  });
+
   it("hold: a matched warning sign, whatever else was answered", () => {
     const flag = { ruleId: "back.weakness", level: "SEEK_CARE_NOW" as const, criterion: "Back pain with new leg weakness", source: { org: "NICE", year: 2025 } };
     const g = trainingGateFor(enc("back_pain", mildBack, { redFlags: [flag] }), assessment);

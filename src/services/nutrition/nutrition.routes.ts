@@ -28,16 +28,6 @@ export default class Routes {
     this.app.put("/api/nutrition/favorites/:favoriteId", verifyToken, nutritionApi.updateFavorite);
     this.app.delete("/api/nutrition/favorites/:favoriteId", verifyToken, nutritionApi.removeFavorite);
     this.app.post("/api/nutrition/favorites/:favoriteId/log", verifyToken, nutritionApi.logFavorite);
-    this.app.post(
-      "/api/nutrition/generateOptimalValues",
-      verifyToken,
-      nutritionApi.generateOptimalCaloricAmountAndNutrients
-    );
-    // this.app.post(
-    //   "/api/nutrition/generateOptimalCalories",
-    //   verifyToken,
-    //   nutritionApi.generateOptimalCalories
-    // );
   }
 
   routesConfig() {

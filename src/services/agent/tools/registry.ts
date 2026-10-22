@@ -25,6 +25,19 @@ export type ToolContext = {
   resolveSubject: (subjectId?: string | null) => Promise<{ id: string; name: string; isSelf: boolean }>;
   /** Phone-side data sent with this turn (HealthKit); null when not a user turn. */
   client?: ClientContext | null;
+  /**
+   * The person's own last messages in this thread, verbatim, newest last (R2, Oct 2026). A tool's
+   * arguments are the model's summary of them, and a summary loses what a designer needs ("I played
+   * soccer today", "at the end of the week") — tools that design from free text read these too.
+   */
+  userWords?: string[];
+};
+
+/** The request as the model summarised it, plus their own words — what a designer should read. */
+export const withTheirWords = (request: string | null | undefined, ctx: Pick<ToolContext, "userWords">): string | null => {
+  const words = (ctx.userWords ?? []).filter((w) => w.trim());
+  if (!words.length) return request ?? null;
+  return `${request?.trim() ? `${request.trim()}\n` : ""}Their own words, newest last: ${words.map((w) => `"${w.slice(0, 600)}"`).join(" / ")}`;
 };
 
 export type ToolOutcome = {
@@ -49,6 +62,13 @@ export type ToolOutcome = {
    * rather than a refusal. Never model-written, never advice.
    */
   facts?: string;
+  /**
+   * R3 "Ask" (docs/ollie-request-handling-plan.md, Oct 2026): the ONE way a tool asks something back.
+   * The tool builds the question in code (`text`) and says how to carry on once it is answered
+   * (`resumeWith`); the loop handles it the same for every tool — Ollie asks exactly it, at most one
+   * question per turn, and on a proactive run (nobody to answer) the likeliest reading is taken instead.
+   */
+  question?: { text: string; resumeWith: string };
   /**
    * A write the card's own button performs ("Log it"). Prepared here from the
    * exact numbers the card shows; the loop stores it as a pending proposal
@@ -126,8 +146,9 @@ export class ToolRegistry {
     return Array.from(this.tools.keys());
   }
 
-  specs(): ToolSpec[] {
-    return Array.from(this.tools.values()).map((t) => ({
+  /** Tool specs in registration order (stable, so the prompt prefix caches); `only` = the turn's packs. */
+  specs(only?: Set<string>): ToolSpec[] {
+    return Array.from(this.tools.values()).filter((t) => !only || only.has(t.name)).map((t) => ({
       name: t.name,
       description: t.description,
       parameters: jsonSchemaFor(t.schema),

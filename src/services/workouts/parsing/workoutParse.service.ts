@@ -5,6 +5,7 @@
  * resolution — the model only transcribes.
  */
 import moment from "moment-timezone";
+import { route } from "../../agent/llm/policy";
 import { getLLM } from "../../agent/llm/openai.client";
 import { activityByKey, activityKeyFromText } from "../domain/activity.catalog";
 import { canonicalExercise } from "../domain/exercise.catalog";
@@ -43,14 +44,16 @@ const toSet = (s: ParsedSession["exercises"][number]["sets"][number]): SetInput 
 export async function parseWorkout(text: string, opts: { today: string; timeZone: string; model?: string }): Promise<ParsedWorkout> {
   const started = Date.now();
   const llm = getLLM();
-  const model = opts.model ?? process.env.WORKOUT_PARSE_MODEL ?? llm.defaultModel;
+  // Which model: llm/policy.ts task "extract" (opts.model only when an eval compares models).
+  const model = opts.model ?? route("extract").model;
   const weekday = moment.tz(opts.today, "YYYY-MM-DD", opts.timeZone).format("dddd");
   const raw = await llm.json<ParsedSession>({
     system: buildSystemPrompt(),
     user: buildUserPrompt(text, opts.today, weekday, opts.timeZone),
     schema: PARSED_SESSION_SCHEMA as unknown as Record<string, unknown>,
     schemaName: "workout_session",
-    model,
+    task: "extract",
+    ...(opts.model ? { model: opts.model } : {}),
   });
 
   const dayOk = !!raw.dateReference && /^\d{4}-\d{2}-\d{2}$/.test(raw.dateReference) && raw.dateReference <= opts.today;

@@ -9,6 +9,7 @@ import prisma from "../../../utility/prismaClient";
 import { buildCurrentLabs, labFreshness, LabFreshness } from "../../../utils/labBiomarkers";
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
 import memoryStore from "../memory/memory.store";
+import { describeFinding } from "../../signals/domain/describe";
 import MealPlanService from "../../meal_plan/model/meal_plan.model";
 import { favoriteLine } from "../../meal_analysis/mealFavorite";
 import {
@@ -184,6 +185,10 @@ export type PatientSnapshot = {
   exercise: { frequency: string | null; preferences: string[] };
   subAccounts: { id: string; name: string; age: number | null }[];
   memories: { id: string; category: string; content: string }[];
+  /** Signals found in their data in the last 30 days (services/signals), in code-built words. */
+  signals: { since: string; title: string; line: string; ongoing: boolean }[];
+  /** The last nights the phone synced (sleep, HRV, sleeping heart rate) — the only wearable data the server holds. */
+  nights: { date: string; asleepMinutes: number | null; hrvMs: number | null; sleepingHr: number | null }[];
   client: ClientContext | null;
 };
 
@@ -306,6 +311,20 @@ export async function buildPatientSnapshot(
     orderBy: { date: "desc" },
     select: { date: true },
   });
+  // What the signal detectors found lately and the last synced nights: part of "everything about this person".
+  const [signals, nights] = await Promise.all([
+    prisma.finding
+      .findMany({
+        where: { patientId, OR: [{ status: { in: ["OPEN", "ONGOING"] } }, { firstDetectedAt: { gte: moment(now).subtract(30, "days").toDate() } }] },
+        orderBy: { firstDetectedAt: "desc" },
+        take: 5,
+      })
+      .then((rows) => rows.map((f) => ({ since: dayKey(tz, f.firstDetectedAt), ongoing: f.status !== "RESOLVED", ...describeFinding(f) })))
+      .catch(() => []),
+    prisma.nightlyVitals
+      .findMany({ where: { patientId, date: { lte: today } }, orderBy: { date: "desc" }, take: 3, select: { date: true, asleepMinutes: true, hrvMs: true, sleepingHr: true } })
+      .catch(() => []),
+  ]);
   const savedMeals = (
     await prisma.favMeal
       .findMany({
@@ -532,6 +551,8 @@ export async function buildPatientSnapshot(
       age: s.dob ? calculateAgeFromDob(s.dob) : null,
     })),
     memories: memories.map((m) => ({ id: m.id, category: m.category, content: m.content })),
+    signals,
+    nights,
     client,
   };
 }
@@ -685,10 +706,22 @@ export function renderSnapshot(s: PatientSnapshot): string {
       `; supplements ${n.supplements.length ? n.supplements.map((x) => `${x.name} ${x.quantity}`.trim()).join(", ") : "none"}`
   );
   L.push(`exercise prefs: ${s.exercise.frequency ?? "—"}; ${list(s.exercise.preferences, 6)}`);
-  L.push(`training: ${s.training ?? "profile not set (ask once when designing a workout: place, equipment, experience, any limitations — update_training_profile)"}`);
+  L.push(`training: ${s.training ?? "profile not set — design anyway, never ask first: the design tools assume what is missing (a gym, 45 min, a general mixed session) and say so; save what they tell you with update_training_profile"}`);
 
   if (s.subAccounts.length)
     L.push(`sub-accounts: ` + s.subAccounts.map((a) => `${a.name}${a.age !== null ? ` (${a.age})` : ""}`).join(", "));
+
+  if (s.signals?.length) {
+    L.push("signals in their data (last 30 days — observations against their own usual or plan, not clinical findings):");
+    for (const g of s.signals) L.push(`  - ${g.since}${g.ongoing ? " (ongoing)" : ""}: ${g.title}${g.line ? ` — ${g.line}` : ""}`);
+  }
+  if (s.nights?.length)
+    L.push(
+      "last nights (wearable): " +
+        s.nights
+          .map((n) => `${n.date} ${[n.asleepMinutes != null ? `${Math.floor(n.asleepMinutes / 60)}h${String(n.asleepMinutes % 60).padStart(2, "0")} asleep` : null, n.hrvMs != null ? `HRV ${Math.round(n.hrvMs)} ms` : null, n.sleepingHr != null ? `sleeping HR ${Math.round(n.sleepingHr)}` : null].filter(Boolean).join(", ")}`)
+          .join(" · ")
+    );
 
   if (s.memories.length) {
     L.push("remembered about this person:");

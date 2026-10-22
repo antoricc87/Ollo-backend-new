@@ -139,5 +139,6 @@ export const labsReport: Detector = {
   resolveAfterDays: 0,
   cooldownDays: 0,
   against: "rule",
+  domain: "health",
   run: () => null,
 };

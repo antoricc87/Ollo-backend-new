@@ -9,6 +9,7 @@
  *
  * Exit code 1 on any failure. Run after ANY prompt, tool, or model change.
  */
+import { route } from "../src/services/agent/llm/policy";
 import "dotenv/config";
 import fs from "fs";
 import prisma from "../src/utility/prismaClient";
@@ -82,7 +83,7 @@ async function main() {
   const only = arg("--only");
   const category = arg("--category");
   const jsonOut = arg("--json");
-  const model = process.env.AGENT_MODEL || "gpt-4.1";
+  const model = route("converse").model; // what actually runs (agent/llm/policy.ts)
 
   const selected = SCENARIOS.filter((s) => (!only || s.name.includes(only)) && (!category || s.category === category));
   console.log(`Ollie eval · ${selected.length} scenarios · model ${model}\n`);

@@ -41,6 +41,7 @@ export async function fillSlot(llm: LLMClient, slot: Slot, text: string): Promis
 
   try {
     const r = await llm.json<{ value: SlotValue }>({
+      task: "classify",
       system: SYSTEM,
       user: `QUESTION: ${slot.prompt}\nOPTIONS: ${(slot.options ?? []).map((o) => `${o.value} = ${o.label}`).join("; ") || "(none)"}\n\nANSWER: ${clean.slice(0, 800)}`,
       schema: schema as unknown as Record<string, unknown>,

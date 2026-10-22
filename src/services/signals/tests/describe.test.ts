@@ -12,6 +12,7 @@ const SAMPLES: Record<string, { evidence: unknown; baseline?: unknown; line: str
   "logging.stopped": { evidence: { daysWithNoMealLogged: 4 }, line: "4 days with no meal logged" },
   "nutrition.protein_short": { evidence: { targetG: 130, loggedDays: 6, shortDays: 5 }, line: "5 of 6 logged days under your target of 130 g" },
   "weight.off_track": { evidence: { targetKgPerWeek: -0.5, observedKgPerWeek: 0.3 }, line: "+0.3 kg a week against a plan of -0.5 kg a week" },
+  "weight.change": { evidence: { direction: "down", change: 4.2, changePercent: 5.1, unit: "kg", days: 30, planAimsForLoss: true }, line: "Down 4.2 kg (5.1%) in 30 days; your plan aims for loss" },
   "labs.report": { evidence: { newlyFlagged: [{}, {}], changed: [], backInRange: [{}] }, line: "2 values newly outside the lab's range and 1 value back inside the range" },
 };
 

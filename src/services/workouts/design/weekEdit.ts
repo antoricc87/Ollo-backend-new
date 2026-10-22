@@ -10,6 +10,7 @@
  */
 import moment from "moment-timezone";
 import type { FOCUS, PlannedSessionInput, WEEKDAYS } from "../domain/workout.schema";
+import { changesLine, sessionChanges } from "./sessionEdit";
 
 const DAY = "YYYY-MM-DD";
 type Weekday = (typeof WEEKDAYS)[number];
@@ -91,7 +92,12 @@ export const applyWeekEdits = async (week: WeekDraftState, edits: WeekEdit[], de
       const made = await design({ ...fields, day, date: dateOfDay(week.startDate, day), previous: existing?.session ?? null, others });
       sessions = others.concat({ ...made, day, session: { ...made.session, plannedFor: dateOfDay(week.startDate, day) } });
       designed.push(day);
-      log.push(existing ? `"${existing.session.title}" (${dayLabel(week.startDate, day)}) changed → "${made.session.title}"` : `"${made.session.title}" added on ${dayLabel(week.startDate, day)}`);
+      // What actually differs, not just the title: "changed → (same title)" let the reply invent the change (Oct 18 2026).
+      log.push(
+        existing
+          ? `"${existing.session.title}" (${dayLabel(week.startDate, day)})${made.session.title !== existing.session.title ? ` → "${made.session.title}"` : ""}: ${changesLine(sessionChanges(existing.session, made.session))}`
+          : `"${made.session.title}" added on ${dayLabel(week.startDate, day)}`
+      );
     }
   }
   sessions.sort((a, b) => a.day - b.day);

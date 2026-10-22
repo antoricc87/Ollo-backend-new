@@ -92,6 +92,20 @@ class EncounterHandler {
     }
   }
 
+  /** The body figure was tapped: keep which regions (the words follow as an ordinary message). */
+  async regions(request: any, response: Response) {
+    const { id } = request.user;
+    const { slotKey, regions } = request.body ?? {};
+    if (typeof slotKey !== "string" || !slotKey) return response.status(400).json(Util.error({}, "slotKey is required"));
+    try {
+      const result = await EncounterService.markRegions(id, request.params.encounterId, slotKey, regions);
+      if (!result) return response.status(404).json(Util.error({}, "Check-in not found"));
+      return response.status(200).json(Util.success(result, "Regions recorded"));
+    } catch (error: any) {
+      return response.status(400).json(Util.error({}, error?.message ?? "Could not record that"));
+    }
+  }
+
   async handout(request: any, response: Response) {
     const { id } = request.user;
     try {

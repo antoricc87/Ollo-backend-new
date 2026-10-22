@@ -1,80 +1,9 @@
 import { ObjectId } from "../../../utils/idValidation";
 import Util from "../../../utils/response";
-import e, { Request, Response } from "express";
+import { Response } from "express";
 import NutritionService from "../model/nutrition.model";
 import FavoritesService, { FavoriteError } from "../model/favorites.service";
-import { getPatientById } from "../../patient/model/patient.model";
 class NutritionHandler {
-  //generate portions
-  async generatePortions(request: Request, response: Response) {
-    const { patientId, mealType, ingredients } = request.body;
-
-    // Validate required fields
-    if (!patientId || !ObjectId.isValid(patientId)) {
-      return response
-        .status(400)
-        .json(
-          Util.error({}, "PatientId is required and must be a valid ObjectId")
-        );
-    }
-
-    if (!mealType) {
-      return response
-        .status(400)
-        .json(
-          Util.error(
-            {},
-            "MealType is required (e.g., breakfast, lunch, dinner)"
-          )
-        );
-    }
-
-    if (
-      !ingredients ||
-      !Array.isArray(ingredients) ||
-      ingredients.length === 0
-    ) {
-      return response
-        .status(400)
-        .json(
-          Util.error(
-            {},
-            "Ingredients are required and must be a non-empty array"
-          )
-        );
-    }
-
-    try {
-      // Fetch patient summary
-      const patient = await getPatientById(patientId);
-      if (!patient) {
-        return response.status(404).json(Util.error({}, "Patient not found"));
-      }
-
-      const caloricAmount = patient.patientSummary.caloricAmount;
-      if (!caloricAmount) {
-        return response
-          .status(400)
-          .json(Util.error({}, "Patient caloric amount is not defined"));
-      }
-
-      // Generate portions using OpenAI API
-      const portions = await NutritionService.generatePortionsFromAI(
-        mealType,
-        caloricAmount,
-        ingredients
-      );
-
-      return response
-        .status(200)
-        .json(Util.success(portions, "Portions generated successfully"));
-    } catch (error) {
-      console.error("Error generating portions", error);
-      return response
-        .status(500)
-        .json(Util.error({ error }, "Error generating portions"));
-    }
-  }
 
   //fetch nutrient tracker
   async fetchNutrientsTracker(request: any, response: Response) {
@@ -266,45 +195,6 @@ class NutritionHandler {
     }
   }
 
-  //generate caloric amount and optimal nutrients amount
-  async generateOptimalCaloricAmountAndNutrients(
-    request: any,
-    response: Response
-  ) {
-    const { id } = request.user;
-    const { tdee, goals, pace } = request.body;
-    try {
-      // First, generate optimal caloric intake and macronutrient distribution
-      const caloricResult = await NutritionService.generateOptimalCalories(
-        id,
-        tdee ?? 0,
-        goals,
-        pace
-      );
-
-      // Pass the result to generateNutrientsTotalAmountAndCalories
-      const generatedValues =
-        await NutritionService.generateNutrientsTotalAmountAndCalories(
-          caloricResult,
-          id
-        );
-
-      if (generatedValues) {
-        return response
-          .status(200)
-          .json(
-            Util.success(
-              generatedValues,
-              "Optimal values generated successfully"
-            )
-          );
-      }
-    } catch (error: unknown) {
-      return response
-        .status(400)
-        .json(Util.error({ error }, "Error generating optimal values"));
-    }
-  }
 
   //generate caloric amount and optimal calories
   // async generateOptimalCalories(request: any, response: Response) {

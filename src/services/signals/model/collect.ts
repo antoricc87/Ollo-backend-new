@@ -32,6 +32,7 @@ export const planTargetsFor = async (patientId: string): Promise<PlanTargets | n
     // number a clinician might read behind a guess. `weight.off_track` stays
     // quiet until the plan carries a rate.
     weightRateKgPerWeek: null,
+    outcome: plan.outcome,
   };
 };
 
@@ -87,6 +88,7 @@ export const collect = async (patientId: string, today: string, timeZone: string
     days,
     workouts,
     weights,
+    weightUnit: (weightTracker?.weightEntries ?? []).slice().sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt)).pop()?.unit?.toLowerCase().startsWith("lb") ? "lb" : "kg",
     plan,
     openFindings: open.map((f) => ({ detectorKey: f.detectorKey, firstDetectedAt: dayKey(f.firstDetectedAt, timeZone), peakSeverity: f.peakSeverity })),
   };

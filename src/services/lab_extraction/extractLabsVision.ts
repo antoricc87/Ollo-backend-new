@@ -16,7 +16,8 @@
  * PRIVACY: a scanned PDF cannot be text-redacted, so the pages go to the
  * model with identifiers visible. Disable with LAB_VISION_FALLBACK=false.
  */
-import OpenAI from "openai";
+import { DEADLINE_MS, structuredClient } from "../agent/llm/structured";
+import { route } from "../agent/llm/policy";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 import { LabCategoryEnum } from "../openAI/schemas/openai.schema";
@@ -24,10 +25,11 @@ import { modelRequestParams } from "../meal_analysis/mealAnalysis.service";
 import { validateEntries, ValidatedEntry, ExtractedEntry } from "./validateLabs";
 import { renderPdfPages, cutStrips, PageSegment } from "./pdfRender";
 
-export const DEFAULT_LAB_VISION_MODEL =
-  process.env.LAB_VISION_MODEL || process.env.LAB_EXTRACTION_MODEL || "gpt-4.1";
-/** Independent second reader; a different model family catches correlated misreads. */
-export const DEFAULT_LAB_VISION_VERIFY_MODEL = process.env.LAB_VISION_VERIFY_MODEL || "";
+// Model and effort: agent/llm/policy.ts tasks "extract_vision" (reading the strips) and "verify" (the
+// independent read-back) — R1, Oct 19 2026; both were gpt-4.1.
+export const DEFAULT_LAB_VISION_MODEL = route("extract_vision").model;
+/** Independent second reader. */
+export const DEFAULT_LAB_VISION_VERIFY_MODEL = route("verify").model;
 const RENDER_SCALE = Number(process.env.LAB_VISION_SCALE || 3);
 /** Horizontal strips per page for transcription (1 = whole page). */
 const STRIPS = Math.max(1, Number(process.env.LAB_VISION_STRIPS || 3));
@@ -47,11 +49,8 @@ const mapLimit = async <T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
   return out;
 };
 
-let client: OpenAI | null = null;
-const getClient = () => {
-  if (!client) client = new OpenAI({ apiKey: process.env.REACT_APP_OPENAI_API_KEY || "" });
-  return client;
-};
+// The shared structured-call connection, with a deadline per strip (agent/llm/structured.ts).
+const getClient = () => structuredClient(DEADLINE_MS.page);
 
 const Entry = z.object({
   testType: z.string(),
@@ -125,7 +124,7 @@ export const extractLabsVision = async (
   const transcribed = await mapLimit(segments, CONCURRENCY, async (sg) => {
     const r = await getClient().responses.parse({
       model,
-      ...(modelRequestParams(model) as any),
+      ...(modelRequestParams(model, model === DEFAULT_LAB_VISION_MODEL ? route("extract_vision").effort : undefined, route("extract_vision").tier) as any),
       input: [
         { role: "system", content: TRANSCRIBE_PROMPT },
         {
@@ -173,7 +172,7 @@ export const extractLabsVision = async (
       if (items.length === 0) return null;
       const r = await getClient().responses.parse({
         model: verifyModel,
-        ...(modelRequestParams(verifyModel) as any),
+        ...(modelRequestParams(verifyModel, verifyModel === DEFAULT_LAB_VISION_VERIFY_MODEL ? route("verify").effort : undefined, route("verify").tier) as any),
         input: [
           { role: "system", content: VERIFY_PROMPT },
           {

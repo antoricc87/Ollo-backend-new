@@ -117,6 +117,7 @@ export async function checkOutput(
     ? `${SYSTEM}\n${assessedAllowance(assessed)}`
     : SYSTEM;
   const v = await llm.json<RawVerdict>({
+    task: "safety",
     system,
     user: `ON RECORD — conditions: ${onRecord.conditions.join(", ") || "none"}; medications: ${onRecord.medications.join(", ") || "none"}\n\nUSER MESSAGE:\n${userMessage.slice(0, 2000)}\n\nASSISTANT ANSWER:\n${answer.slice(0, 6000)}`,
     schema: SCHEMA as unknown as Record<string, unknown>,
@@ -148,6 +149,7 @@ export async function rewriteUnsafe(llm: LLMClient, answer: string, verdict: Saf
     .filter(Boolean)
     .join("; ");
   const r = await llm.json<{ answer: string }>({
+    task: "safety",
     system: `Rewrite the assistant answer so it keeps every useful, allowed part (education, lifestyle guidance, data the user asked about) but removes the violation: ${problems}. Replace removed advice with a warm, specific hand-off to the user's doctor/care team (offer to message them). Keep the same tone and length or shorter. Return only the rewritten answer.`,
     user: `REVIEWER NOTE: ${verdict.reasons}\n\nANSWER TO REWRITE:\n${answer}`,
     schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false },

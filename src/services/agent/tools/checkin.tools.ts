@@ -1,3 +1,6 @@
+import { MAX_OWN_QUESTIONS, OwnQuestion, ownQuestionsLeft, questionAsked } from "../../encounter/domain/ownQuestions";
+import threadStore from "../memory/thread.store";
+import { bodyFor } from "../../encounter/domain/bodyRegions";
 import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
 import { defineTool } from "./registry";
@@ -51,6 +54,8 @@ const protocolPlan = (protocol: Protocol, state: { slots: Record<string, unknown
             ask: step.slot.prompt,
             how: isSafetySlot(step.slot)
               ? "The warning-sign question: list EVERY sign so each one is read, and end with 'or none of these'."
+              : bodyFor(protocol.key, step.slot.key)
+              ? "One natural sentence. A body figure is on screen: say they can tap where it is, or just tell you. Do not list places. Their answer may name several spots — record it as they said it."
               : step.slot.options
               ? "One natural sentence. Its options are on screen as tappable choices — do not list them."
               : "One natural sentence.",
@@ -148,8 +153,12 @@ export const recordCheckin = defineTool({
           text: z.string().max(1000).optional().describe("Their own words, when no option fits — kept as the answer, so the question is not asked again."),
         })
       )
-      .min(1)
-      .max(8),
+      .max(8)
+      .optional(),
+    followUp: z
+      .object({ answer: z.string().max(400).describe("What they just answered, in their words.") })
+      .optional()
+      .describe("Their answer to the follow-up question of YOUR OWN that your previous message asked (only once the standard questions are covered). The question itself is taken from that message — you only pass the answer."),
     asking: z
       .string()
       .optional()
@@ -163,8 +172,23 @@ export const recordCheckin = defineTool({
 
     const before = active.state.redFlags.length;
     // `z.infer` leaves every field optional in this project (no strictNullChecks) — zod already validated it.
-    const answers = input.answers as { slotKey: string; value?: SlotValue; text?: string }[];
+    const answers = (input.answers ?? []) as { slotKey: string; value?: SlotValue; text?: string }[];
     const { unplaced } = await encounterService.recordAnswers(ctx.patientId, active.row.id, answers);
+    // An own follow-up exists only once the standard questions were covered BEFORE this turn; its
+    // question is read from the message Ollie actually sent, its answer is what the person said.
+    let own = { added: 0 };
+    let ownNote: string | null = null;
+    const followAnswer = String((input.followUp as any)?.answer ?? "").trim();
+    if (followAnswer) {
+      if (!historyComplete(active.state as any, active.protocol)) ownNote = "`followUp` was not stored: a standard question was still open, so that answer belongs in `answers` under its slotKey.";
+      else {
+        const thread = ctx.threadId ? await threadStore.getWithMessages(ctx.patientId, ctx.threadId).catch(() => null) : null;
+        const previous = [...(thread?.messages ?? [])].reverse().find((m: any) => m.role === "ASSISTANT" && String(m.content ?? "").trim());
+        const question = questionAsked(previous?.content);
+        if (!question) ownNote = "`followUp` was not stored: your previous message asked no question.";
+        else own = await encounterService.recordOwnQuestions(ctx.patientId, active.row.id, [{ question, answer: followAnswer }] as OwnQuestion[]);
+      }
+    }
     const after = await encounterService.stateFor(ctx.patientId, active.row.id);
     if (!after) return { result: { error: "That check-in could not be read back." } };
     // Logged on every record (null = in order), so the question named for one turn never outlives it.
@@ -192,15 +216,18 @@ export const recordCheckin = defineTool({
 
     return {
       result: {
-        recorded: input.answers.length - unplaced.length,
+        recorded: answers.length - unplaced.length + own.added,
         unplaced: unplaced.length ? unplaced : undefined,
+        ...(ownNote ? { followUpNote: ownNote } : {}),
         ...protocolPlan(after.protocol, after.state, asking),
         matchedNow: flagView(newFlags),
         escalation: newFlags.length ? escalation : null,
         note: newFlags.length
           ? "They matched a published criterion. Say so plainly THIS TURN, with the criterion and who publishes it, and give the action from the escalation. Do not soften it, do not wait for the assessment."
           : historyComplete(after.state as any, after.protocol)
-          ? "The history is covered — call assess_checkin now rather than asking anything else. Anything still unanswered is optional and will not change what you say."
+          ? ownQuestionsLeft(after.state as any) > 0
+            ? `The standard questions are covered. Now YOUR follow-ups: you have asked ${MAX_OWN_QUESTIONS - ownQuestionsLeft(after.state as any)} of up to ${MAX_OWN_QUESTIONS}. Ask the ONE question a careful clinician would ask next, given where it is, how it is behaving and what is on this person's record — it must be the last sentence of your message. On their reply, record it with \`followUp: {answer}\` (the question is taken from your message). If nothing more would change what you say, call assess_checkin now instead.`
+            : "Your follow-ups are used up — call assess_checkin now rather than asking anything else."
           : unplaced.length
           ? "Something could not be recorded (see `unplaced`): if they did answer it, record it again with their own words as `text` — do not ask it a second time. Then ask ONE question: `askNext`, the way its `how` says."
           : "Ask ONE question in this reply: `askNext`, the way its `how` says. Nothing else with a question mark.",
@@ -219,7 +246,7 @@ export const assessCheckin = defineTool({
       .array(
         z.object({
           condition: z.string().min(2).max(120).describe("In plain language — 'tension-type headache', not 'cephalalgia'."),
-          fits: z.array(z.string().max(300)).min(1).max(4).describe("Their OWN answers that point at it."),
+          fits: z.array(z.string().max(300)).min(1).max(5).describe("Their OWN answers that point at it — and anything ON THEIR RECORD that bears on it, stated as a fact and prefixed 'On record:' (a condition, a medication, a flagged lab with its date, a recent signal, last nights' readings). Never a conclusion drawn from the record."),
           doesNotFit: z.array(z.string().max(300)).max(4).optional().describe("What argues against it. Worth more than another `fits` line."),
           wouldChange: z.string().max(300).optional().describe("The answer or test that would move it up or down."),
         })
@@ -228,8 +255,12 @@ export const assessCheckin = defineTool({
       .max(4),
     nextStep: z
       .object({
-        kind: z.enum(NEXT_STEP_KINDS as [string, ...string[]]).describe("BOOK_OLLO_DOCTOR unless they already have someone (OWN_DOCTOR). A tripped criterion overrides this."),
-        why: z.string().max(300).optional().describe("One line on what the clinician would sort out. No urgency verdict."),
+        kind: z
+          .enum(NEXT_STEP_KINDS as [string, ...string[]])
+          .describe(
+            "YOUR call, from everything you heard and everything on their record — the step a careful clinician would choose: EMERGENCY · SEE_SOMEONE_TODAY · BOOK_OLLO_DOCTOR (a visit in the coming days) · OWN_DOCTOR (the same, when they have someone) · WATCH_AND_CHECK_BACK (only when nothing in the answers or the record raises concern). Weigh where it is, how it is behaving, how bad, your follow-ups, their age, conditions, medications, labs and recent signals. Between two steps, choose the earlier one. A tripped criterion overrides this upward."
+          ),
+        why: z.string().max(300).optional().describe("One line: the facts that led to this step, in their words ('lower right, getting worse since last night'), and what the clinician would sort out. The step speaks for itself — never write that something can wait, is or is not urgent, or any time frame."),
       })
       .optional(),
   }),

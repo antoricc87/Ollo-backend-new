@@ -202,4 +202,21 @@ class WorkoutPlanService {
   }
 }
 
+/**
+ * The training week they saved last (active or since replaced): what it was
+ * asked for, at what length, on which weekdays. Feeds the defaults and the
+ * Sunday planning run, so a new week starts from the last one they chose.
+ */
+export const lastSavedWeek = async (patientId: string): Promise<{ title: string; request: string | null; sessionMinutes: number | null; days: string[]; focus: string | null } | null> => {
+  const plan = await prisma.workoutPlan.findFirst({
+    where: { patientId, status: { in: ["ACTIVE", "REPLACED", "COMPLETED"] } },
+    orderBy: { createdAt: "desc" },
+    select: { title: true, brief: true, sessions: { select: { plannedFor: true } } },
+  });
+  if (!plan) return null;
+  const brief = (plan.brief ?? {}) as { request?: string | null; sessionMinutes?: number | null; focus?: string | null };
+  const days = Array.from(new Set(plan.sessions.filter((s) => s.plannedFor).map((s) => moment.utc(s.plannedFor!, "YYYY-MM-DD").format("ddd").toLowerCase())));
+  return { title: plan.title, request: brief.request ?? null, sessionMinutes: typeof brief.sessionMinutes === "number" ? brief.sessionMinutes : null, days, focus: brief.focus ?? null };
+};
+
 export default new WorkoutPlanService();

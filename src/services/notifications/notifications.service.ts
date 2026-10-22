@@ -1,4 +1,7 @@
+import moment from "moment-timezone";
 import prisma from "../../utility/prismaClient";
+import { safeTz } from "../agent/memory/dates";
+import { AGENT_KINDS, decideDelivery, isAgentKind, type DeliveryMode } from "./gate";
 import { apnsConfigured, sendApns, type ApnsEnv, type ApnsResult } from "./apns/client";
 import { activeDevices, disableDevice, setDeviceEnv } from "./devices.store";
 
@@ -8,10 +11,10 @@ import { activeDevices, disableDevice, setDeviceEnv } from "./devices.store";
  *   trigger → queueNotification() → Notification row (status queued)
  *          → sendDue() sweep (every minute) → APNs → device(s) → row sent/failed
  *
- * Nothing else in the backend talks to APNs. The policy gate (quiet hours,
- * budget, merge — plan §3.2) slots in between the row and the send once the
- * catalogue is decided; today only dedupe runs, so the transport can be
- * tested on its own.
+ * Nothing else in the backend talks to APNs. Ollie's own work passes the gate
+ * (gate.ts: digest, quiet hours, daily and weekly caps) on its way into the
+ * table — a held row waits for the morning digest (digest.ts), which merges
+ * everything held into one push. Messages from people only get the dedupe.
  *
  * `kind` is free text here (the catalogue is still open) — callers pass a
  * stable snake_case name; the enum arrives with the gate.
@@ -29,22 +32,48 @@ export type QueueInput = {
   scheduledFor?: Date;
   /** Same key already queued/sent today for this user → row is suppressed as a duplicate. */
   dedupeKey?: string | null;
+  /**
+   * Ollie's own work only (gate.ts AGENT_KINDS): `digest` holds the row for
+   * the morning digest, `now` pushes it subject to quiet hours and the caps.
+   * Default `now`. Ignored for every other kind.
+   */
+  mode?: DeliveryMode;
 };
 
 export type NotificationRow = Awaited<ReturnType<typeof prisma.notification.create>>;
 
 const startOfUtcDay = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 
+/** Ollie's pushes already out (or about to go) today and this week, in the person's own days. */
+export async function agentPushCounts(userId: string, now: Date, timeZone: string) {
+  const local = moment(now).tz(timeZone);
+  const rows = await prisma.notification.findMany({
+    where: { userId, kind: { in: [...AGENT_KINDS] }, status: { in: ["queued", "sent"] }, scheduledFor: { gte: local.clone().startOf("isoWeek").toDate(), lt: local.clone().endOf("isoWeek").toDate() } },
+    select: { scheduledFor: true },
+  });
+  const today = local.format("YYYY-MM-DD");
+  return { pushedThisWeek: rows.length, pushedToday: rows.filter((r) => moment(r.scheduledFor).tz(timeZone).format("YYYY-MM-DD") === today).length };
+}
+
 export async function queueNotification(input: QueueInput): Promise<NotificationRow> {
-  const scheduledFor = input.scheduledFor ?? new Date();
+  let scheduledFor = input.scheduledFor ?? new Date();
   let status = "queued";
   let suppressedReason: string | null = null;
+  // Ollie's own work goes through the gate; a person's message never does.
+  if (isAgentKind(input.kind) && input.kind !== "digest") {
+    const patient = await prisma.patient.findUnique({ where: { id: input.userId }, select: { timeZone: true } });
+    const timeZone = safeTz(patient?.timeZone);
+    const verdict = decideDelivery({ mode: input.mode ?? "now", now: scheduledFor, timeZone, ...(await agentPushCounts(input.userId, scheduledFor, timeZone)) });
+    status = verdict.status;
+    scheduledFor = verdict.scheduledFor;
+    suppressedReason = verdict.reason;
+  }
   if (input.dedupeKey) {
     const dup = await prisma.notification.findFirst({
       where: {
         userId: input.userId,
         dedupeKey: input.dedupeKey,
-        status: { in: ["queued", "sent"] },
+        status: { in: ["queued", "sent", "held", "merged"] },
         createdAt: { gte: startOfUtcDay(scheduledFor) },
       },
       select: { id: true },

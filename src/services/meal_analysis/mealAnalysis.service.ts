@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
-import OpenAI from "openai";
+import { DEADLINE_MS, structuredClient } from "../agent/llm/structured";
+import { timed, withMealTiming } from "./timing";
 import { zodTextFormat } from "openai/helpers/zod";
 import { calculateAgeFromDob } from "../../utils/calculateAgefromDob";
 import { getPatientById } from "../patient/model/patient.model";
@@ -21,6 +22,9 @@ import {
   MealAnalysisResult,
   MealAnalysisSchema,
   Unit,
+  FOOD_GROUPS,
+  MEAL_TYPES,
+  NutrientsSchema,
 } from "./mealAnalysis.schema";
 import {
   AnalyzeOptions,
@@ -29,13 +33,15 @@ import {
   PatientContext,
 } from "./mealAnalysis.types";
 import { modelRequestParams } from "./modelParams";
+import { route } from "../agent/llm/policy";
 
 dotenv.config();
 
-// Phase 4 bake-off (2026-08-24): gpt-5.6-luna at effort "none" beat gpt-4o-mini on portion
-// labelling (97 % vs 86 %), grounded share and within-tolerance at equal latency, ~1.7× cost.
-export const DEFAULT_MEAL_MODEL = process.env.NUTRITION_MODEL || "gpt-5.6-luna";
-export const FALLBACK_MEAL_MODEL = process.env.NUTRITION_FALLBACK_MODEL || "gpt-4o-mini";
+// Model and effort come from agent/llm/policy.ts, task "extract" (a photo: "extract_vision"); the
+// task's escalation model is the fallback when the chosen one is unavailable to this key (R1, Oct 19 2026).
+// History: Phase 4 bake-off (Aug 24 2026) — gpt-5.6-luna at effort "none" beat gpt-4o-mini on portion labelling.
+export const DEFAULT_MEAL_MODEL = route("extract").model;
+export const FALLBACK_MEAL_MODEL = route("extract").escalate?.model ?? DEFAULT_MEAL_MODEL;
 
 /** 404 / "model not found" / "does not have access to model" style errors — not rate limits or bad requests. */
 export function isModelUnavailableError(err: any): boolean {
@@ -46,17 +52,10 @@ export function isModelUnavailableError(err: any): boolean {
 }
 export const DEFAULT_RESOLVER = (process.env.NUTRITION_RESOLVER || "usda") as "usda" | "llm";
 
-let client: OpenAI | null = null;
-export const getClient = () => {
-  if (!client) {
-    client = new OpenAI({
-      apiKey: process.env.REACT_APP_OPENAI_API_KEY || "",
-      timeout: Number(process.env.NUTRITION_OPENAI_TIMEOUT_MS || 20_000), // typical call 3-6 s; hung requests seen at ~45 s
-      maxRetries: 1,
-    });
-  }
-  return client;
-};
+// The shared structured-call connection; a meal call is quick (agent/llm/structured.ts).
+// A single meal is quick; a long narration or a catch-up of many days is not (a two-week catch-up timed
+// out at 20 s twice, Oct 19 2026) — the deadline follows the size of what is read.
+export const getClient = (inputChars = 0) => structuredClient(inputChars > 400 ? DEADLINE_MS.page : DEADLINE_MS.quick);
 
 // ---------------------------------------------------------------------------
 // Patient context
@@ -111,7 +110,11 @@ export { isReasoningModel, modelRequestParams } from "./modelParams";
 // analyzeMeal
 // ---------------------------------------------------------------------------
 
-export async function analyzeMeal(
+export async function analyzeMeal(input: MealAnalysisInput, opts: AnalyzeOptions = {}): Promise<MealAnalysisResult> {
+  return withMealTiming(input.imageDataUrl ? "analyzeMeal(photo)" : "analyzeMeal", () => analyzeMealTimed(input, opts));
+}
+
+async function analyzeMealTimed(
   input: MealAnalysisInput,
   opts: AnalyzeOptions = {}
 ): Promise<MealAnalysisResult> {
@@ -123,7 +126,9 @@ export async function analyzeMeal(
     (opts.patientId
       ? await loadPatientContext(opts.patientId)
       : EMPTY_PATIENT_CONTEXT);
-  const model = opts.model || DEFAULT_MEAL_MODEL;
+  const r = route(input.imageDataUrl ? "extract_vision" : "extract");
+  const model = opts.model || r.model;
+  const fallback = r.escalate?.model ?? FALLBACK_MEAL_MODEL;
 
   const content: any[] = [
     { type: "input_text", text: buildUserMessage(ctx, input) },
@@ -138,9 +143,9 @@ export async function analyzeMeal(
 
   const started = Date.now();
   const request = (m: string) =>
-    getClient().responses.parse({
+    getClient((input.text?.length ?? 0) + (input.imageDataUrl ? 1000 : 0)).responses.parse({
       model: m,
-      ...(modelRequestParams(m, opts.reasoningEffort) as any),
+      ...(modelRequestParams(m, opts.reasoningEffort ?? (m === model ? r.effort : r.escalate?.effort ?? r.effort), r.tier) as any),
       input: [
         { role: "system", content: buildSystemPrompt() },
         { role: "user", content },
@@ -150,14 +155,14 @@ export async function analyzeMeal(
   let response;
   let usedModel = model;
   try {
-    response = await request(model);
+    response = await timed("model", () => request(model));
   } catch (err: any) {
     // Safety net: if the configured model is not available to this API key
     // (e.g. a newer model on an older account), fall back rather than fail the log.
-    if (!isModelUnavailableError(err) || model === FALLBACK_MEAL_MODEL) throw err;
-    console.warn(`[meal-analysis] model "${model}" unavailable (${err?.status}); falling back to ${FALLBACK_MEAL_MODEL}`);
-    usedModel = FALLBACK_MEAL_MODEL;
-    response = await request(FALLBACK_MEAL_MODEL);
+    if (!isModelUnavailableError(err) || model === fallback) throw err;
+    console.warn(`[meal-analysis] model "${model}" unavailable (${err?.status}); falling back to ${fallback}`);
+    usedModel = fallback;
+    response = await timed("model", () => request(fallback));
   }
   const parsed = response.output_parsed as MealAnalysisOutput | null;
   if (!parsed) throw new Error("analyzeMeal: no structured output returned");
@@ -181,6 +186,57 @@ export async function analyzeMeal(
 }
 
 export type ResolvedIngredient = { ingredient: Ingredient; resolution: IngredientResolution };
+// ---------------------------------------------------------------------------
+// analyzeDesignedMeal — a meal Ollie DESIGNED (suggest_meal), straight to USDA
+// ---------------------------------------------------------------------------
+
+/** One designed item: what the designer already knows about it (agent/tools/suggest.tools.ts). */
+export type DesignedItem = { item: string; grams: number; searchTerm: string; kcal: number; foodGroup: (typeof FOOD_GROUPS)[number]; glycemicIndex: number; isProcessedFood: boolean };
+
+const ZERO_NUTRIENTS = Object.fromEntries(Object.keys(NutrientsSchema.shape).map((k) => [k, 0])) as Ingredient["nutrients"];
+
+/**
+ * A suggestion's ingredients and grams are already decided, so re-reading them with the full analysis
+ * model (9.4 of a 20 s dinner suggestion in production, Oct 19 2026) is wasted work. Each item goes
+ * straight to the USDA lookup with the designer's kcal estimate for the plausibility check. Only when
+ * EVERY item resolves is that used; otherwise the whole meal takes the full analysis as before.
+ */
+export async function analyzeDesignedMeal(
+  meal: { name: string; mealType: (typeof MEAL_TYPES)[number]; items: DesignedItem[] },
+  opts: { patientId?: string; todayLocal?: string } = {}
+): Promise<MealAnalysisResult> {
+  return withMealTiming("designedMeal", async () => {
+    const started = Date.now();
+    const ings: Ingredient[] = meal.items.map((d) => ({
+      name: d.item,
+      searchTerm: d.searchTerm || d.item,
+      brand: null,
+      quantity: d.grams,
+      unit: "g",
+      grams: d.grams,
+      gramsLow: d.grams,
+      gramsHigh: d.grams,
+      portionSource: "standard_serving",
+      portionAssumption: null,
+      confidence: 0.8,
+      foodGroup: d.foodGroup,
+      isProcessedFood: d.isProcessedFood,
+      glycemicIndex: d.glycemicIndex,
+      vegetableServings: 0,
+      fruitServings: 0,
+      calories: d.kcal,
+      nutrients: { ...ZERO_NUTRIENTS },
+    }));
+    const resolved = ings.length ? await resolveIngredients(ings) : [];
+    const allUsda = resolved.length > 0 && resolved.every((r) => r.resolution.nutrientSource === "usda");
+    const text = `${meal.name}: ${meal.items.map((d) => `${d.grams} g ${d.item}`).join(", ")}`;
+    if (!allUsda) return analyzeMeal({ text, mealTypeHint: meal.mealType, todayLocal: opts.todayLocal }, { patientId: opts.patientId });
+    const ctx = opts.patientId ? await loadPatientContext(opts.patientId) : EMPTY_PATIENT_CONTEXT;
+    const parsed: MealAnalysisOutput = { meals: [{ mealName: meal.name, mealType: meal.mealType, mealDate: "today", portion: null, ingredients: ings }], dateReference: null, dateConfidence: 1 };
+    return compose(parsed, ctx, { model: "usda-direct", latencyMs: Date.now() - started, usage: null }, [resolved]);
+  });
+}
+
 
 /** Resolve every ingredient of every meal; returns a per-meal array aligned with `parsed.meals`. */
 export async function resolveMeals(
