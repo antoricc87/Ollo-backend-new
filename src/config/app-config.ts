@@ -26,12 +26,18 @@ export default class AppConfig {
       "https://ollo-health.com",
       "https://www.ollo-health.com",
     ];
+    // Promotional landings (one subdomain per product test, e.g.
+    // deposit.get-sleek.ink) post to the public waitlist.
+    const allowedOriginPatterns = [/^https:\/\/([a-z0-9-]+\.)*get-sleek\.ink$/];
 
     this.app.use(
       cors({
         origin: function (origin, callback) {
           if (!origin) return callback(null, true);
-          if (allowedOrigins.includes(origin)) {
+          if (
+            allowedOrigins.includes(origin) ||
+            allowedOriginPatterns.some((pattern) => pattern.test(origin))
+          ) {
             return callback(null, origin);
           } else {
             const msg =
