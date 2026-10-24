@@ -27,7 +27,7 @@ export default class AppConfig {
       "https://www.ollo-health.com",
     ];
     // Promotional landings (one subdomain per product test, e.g.
-    // deposit.get-sleek.ink) post to the public waitlist.
+    // deposit.get-sleek.ink) post to the public waitlist
     const allowedOriginPatterns = [/^https:\/\/([a-z0-9-]+\.)*get-sleek\.ink$/];
 
     this.app.use(
@@ -50,7 +50,7 @@ export default class AppConfig {
         methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         preflightContinue: false,
         optionsSuccessStatus: 204,
-      })
+      }),
     );
   }
 
