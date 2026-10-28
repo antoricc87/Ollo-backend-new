@@ -202,7 +202,7 @@ export type ScheduledKind = "weekly_review" | "plan_week";
 export async function duePatients(kind: ScheduledKind, now = new Date()) {
   const patients = await prisma.patient.findMany({
     where: { subAccountOf: null, onBoardingComplete: true },
-    select: { id: true, timeZone: true, agentPreference: true, trainingProfile: { select: { patientId: true } }, workoutPlans: { where: { status: "ACTIVE" }, select: { id: true }, take: 1 }, healthPlans: { where: { status: "ACTIVE" }, select: { id: true }, take: 1 } },
+    select: { id: true, timeZone: true, agentPreference: true, trainingProfile: { select: { patientId: true } }, workoutPlans: { where: { status: { in: ["ACTIVE", "COMPLETED", "REPLACED"] } }, select: { id: true }, take: 1 }, healthPlans: { where: { status: "ACTIVE" }, select: { id: true }, take: 1 } },
   });
   const due: string[] = [];
   for (const p of patients) {

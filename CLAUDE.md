@@ -1449,6 +1449,21 @@ the user's words) is the structured brief every design reads.
   and Plan v1 use the workouts API); the backend keeps it only for today's
   `get_activity` ring minutes and the legacy exercises_tracker routes.
 
+### A week ends; the draft is offered (Oct 28 2026)
+
+Prod bug: the week screen showed Oct 5–11 three weeks later — an ACTIVE plan
+never expired and every later week (Sunday runs, "New week") stayed an unsaved
+card. Rulings: drafts only (Sunday never saves), no past-weeks view, no
+"missed" history. `plan.model.ts` `findCurrent`: an ACTIVE week past its last
+day is retired on read (COMPLETED, still-PLANNED rows soft-deleted) — used by
+getActive / putOnDay / forSnapshot. `pendingDraft` = newest unsaved
+`workout_plan` card in the patient's ASSISTANT rows newer than the last saved
+week, last 14 days, week not over (`GET /api/workouts/plan/draft`).
+`repeatLast` copies the last saved week's sessions (targets, else actuals)
+onto this week's weekdays, past days skipped, no model (`POST
+/api/workouts/plan/repeat`). Sunday eligibility counts any saved week. Smoke
+`scripts/workoutweek-expiry-smoke.ts`.
+
 ### Editing a week draft (Oct 5 2026) — `design/weekEdit.ts`, `edit_workout_plan`
 
 Device conversation: "Sessions should be Monday Wednesday and Thursday" (they

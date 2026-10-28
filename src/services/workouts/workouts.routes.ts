@@ -18,6 +18,8 @@ export default class Routes {
     // Training week (planned rows under a header) + single planned workouts — fixed paths before :sessionId
     this.app.get("/api/workouts/plan/active", verifyToken, workoutApi.planActive);
     this.app.post("/api/workouts/plan", verifyToken, workoutApi.planCreate);
+    this.app.get("/api/workouts/plan/draft", verifyToken, workoutApi.planDraft);
+    this.app.post("/api/workouts/plan/repeat", verifyToken, workoutApi.planRepeat);
     this.app.put("/api/workouts/plan/:planId/status", verifyToken, workoutApi.planStatus);
     this.app.post("/api/workouts/planned", verifyToken, workoutApi.planned);
     this.app.get("/api/training-profile", verifyToken, workoutApi.profileGet);

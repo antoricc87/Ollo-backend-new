@@ -4,6 +4,12 @@
  * WorkoutService completes in place. The view groups every session in the
  * week's date range by day — planned, completed-from-plan, and anything else
  * the user did that day — so "done" is read off the rows, never derived.
+ *
+ * A week ends on its last day: the first read after that marks it COMPLETED
+ * and drops its sessions still PLANNED (his ruling: past weeks keep only what
+ * was done — no "missed" history). Until a new week is saved there is no
+ * current week; Ollie's newest unsaved draft (Sunday run or chat) is offered
+ * instead, read from the card it already stored in the conversation.
  */
 import moment from "moment-timezone";
 import prisma from "../../../utility/prismaClient";
@@ -47,6 +53,26 @@ export type WorkoutPlanView = {
 };
 
 const findActive = (patientId: string) => prisma.workoutPlan.findFirst({ where: { patientId, status: "ACTIVE" }, orderBy: { createdAt: "desc" } });
+type PlanRow = NonNullable<Awaited<ReturnType<typeof findActive>>>;
+
+const SAVED: PlanStatusName[] = ["ACTIVE", "COMPLETED", "REPLACED"];
+const endOf = (plan: Pick<PlanRow, "startDate" | "days">) => shiftDay(plan.startDate, plan.days - 1);
+const todayIn = async (patientId: string) => moment().tz(await WorkoutService.tzOf(patientId)).format(DAY);
+
+/** Close a week whose last day has passed: COMPLETED, unfinished PLANNED rows dropped. */
+const retire = async (patientId: string, planId: string) => {
+  await prisma.workoutSession.updateMany({ where: { patientId, planId, status: "PLANNED", deletedAt: null }, data: { deletedAt: new Date() } });
+  await prisma.workoutPlan.update({ where: { id: planId }, data: { status: "COMPLETED" } });
+};
+
+/** The ACTIVE week if it still covers today or later; an ended one is retired on the way. */
+const findCurrent = async (patientId: string): Promise<PlanRow | null> => {
+  const plan = await findActive(patientId);
+  if (!plan) return null;
+  if (endOf(plan) >= (await todayIn(patientId))) return plan;
+  await retire(patientId, plan.id);
+  return null;
+};
 
 /** Sets as the prescription reads on the card: "4 × 8–10 @ 60 kg". */
 export const fmtTargets = (sets: SessionRecord["exercises"][number]["sets"]) => {
@@ -60,14 +86,14 @@ export const fmtTargets = (sets: SessionRecord["exercises"][number]["sets"]) => 
 
 class WorkoutPlanService {
   async getActive(patientId: string): Promise<WorkoutPlanView | null> {
-    const plan = await findActive(patientId);
+    const plan = await findCurrent(patientId);
     return plan ? this.view(patientId, plan) : null;
   }
 
-  async view(patientId: string, plan: NonNullable<Awaited<ReturnType<typeof findActive>>>): Promise<WorkoutPlanView> {
+  async view(patientId: string, plan: PlanRow): Promise<WorkoutPlanView> {
     const tz = await WorkoutService.tzOf(patientId);
     const today = moment().tz(tz).format(DAY);
-    const endDate = shiftDay(plan.startDate, plan.days - 1);
+    const endDate = endOf(plan);
     const from = moment.tz(plan.startDate, DAY, tz).startOf("day").toDate();
     const to = moment.tz(endDate, DAY, tz).endOf("day").toDate();
     const rows = await WorkoutService.list(patientId, { from, to }, { status: "ALL", limit: 200 });
@@ -150,9 +176,9 @@ class WorkoutPlanService {
    * shows a whole week with this session on its day, never a one-day plan.
    */
   async putOnDay(patientId: string, input: PlannedSessionInput) {
-    const active = await findActive(patientId);
+    const active = await findCurrent(patientId);
     if (active) {
-      const endDate = shiftDay(active.startDate, active.days - 1);
+      const endDate = endOf(active);
       if (input.plannedFor >= active.startDate && input.plannedFor <= endDate) {
         const current = await prisma.workoutSession.findFirst({ where: { patientId, planId: active.id, plannedFor: input.plannedFor, status: "PLANNED", deletedAt: null }, select: { id: true } });
         if (current) await WorkoutService.replacePlanned(patientId, current.id, input);
@@ -166,6 +192,84 @@ class WorkoutPlanService {
     return { plan, replaced: false };
   }
 
+  /**
+   * Ollie's newest week card not yet saved: the Sunday draft or one from chat,
+   * newer than the last saved week and not over yet. The card is the one the
+   * conversation stored (drafts in memory don't survive a deploy).
+   */
+  async pendingDraft(patientId: string): Promise<{ card: any; threadId: string; at: Date } | null> {
+    const today = await todayIn(patientId);
+    const lastSaved = await prisma.workoutPlan.findFirst({ where: { patientId, status: { in: SAVED } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+    const since = new Date(Math.max(lastSaved?.createdAt.getTime() ?? 0, Date.now() - 14 * 86_400_000));
+    const rows = await prisma.agentMessage.findMany({
+      where: { role: "ASSISTANT", createdAt: { gt: since }, thread: { patientId } },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      select: { cards: true, threadId: true, createdAt: true },
+    });
+    for (const r of rows) {
+      const cards = Array.isArray(r.cards) ? (r.cards as any[]) : [];
+      for (const c of [...cards].reverse()) {
+        const d = c?.type === "workout_plan" ? c.data : null;
+        if (!d || d.saved || !d.sessions?.length || !d.startDate) continue;
+        if (endOf({ startDate: d.startDate, days: Number(d.days) || 7 }) < today) return null; // the newest draft is already over
+        return { card: d, threadId: r.threadId, at: r.createdAt };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The last saved week again, on the same weekdays of this week (days already
+   * past are skipped; with none left it goes on next week). Built in code from
+   * the sessions as they were planned — no model call. Null with no saved week.
+   */
+  async repeatLast(patientId: string) {
+    const last = await prisma.workoutPlan.findFirst({ where: { patientId, status: { in: SAVED } }, orderBy: { createdAt: "desc" } });
+    if (!last) return null;
+    // One row per planned day: the live row, else the newest dropped one (a replaced or retired planned row).
+    const rows = await prisma.workoutSession.findMany({ where: { patientId, planId: last.id, plannedFor: { not: null } }, orderBy: { createdAt: "desc" }, include: { exercises: { orderBy: { sortOrder: "asc" }, include: { sets: { orderBy: { sortOrder: "asc" } } } } } });
+    const byDay = new Map<string, (typeof rows)[number]>();
+    for (const r of rows) {
+      const kept = byDay.get(r.plannedFor!);
+      if (!kept || (kept.deletedAt && !r.deletedAt)) byDay.set(r.plannedFor!, r);
+    }
+    if (!byDay.size) return null;
+    const today = await todayIn(patientId);
+    const thisMonday = moment.utc(today, DAY).startOf("isoWeek").format(DAY);
+    const weekdays = [...byDay.keys()].map((d) => moment.utc(d, DAY).isoWeekday());
+    const monday = weekdays.some((w) => shiftDay(thisMonday, w - 1) >= today) ? thisMonday : shiftDay(thisMonday, 7);
+    const sessions = [...byDay.values()]
+      .map((r) => ({ r, day: moment.utc(r.plannedFor!, DAY).isoWeekday() }))
+      .filter(({ day }) => shiftDay(monday, day - 1) >= today)
+      .map(({ r, day }) => ({
+        day,
+        activityKey: r.activityKey as PlannedSessionInput["activityKey"],
+        title: r.title ?? activityByKey(r.activityKey).label,
+        durationMin: Math.max(5, Math.round((r.durationSec ?? 2700) / 60)),
+        focus: (r.focus ?? "mixed") as PlannedSessionInput["focus"],
+        place: (r.place ?? null) as PlannedSessionInput["place"],
+        muscleGroups: r.muscleGroups,
+        why: r.why,
+        warmup: r.warmup,
+        cooldown: r.cooldown,
+        notes: r.notes,
+        distanceKm: r.distanceKm,
+        // The prescription; a set completed without one keeps what was done as the target.
+        exercises: r.exercises.map((e) => ({
+          exerciseKey: e.exerciseKey,
+          name: e.name,
+          muscleGroup: e.muscleGroup,
+          equipment: e.equipment,
+          notes: e.notes,
+          loadNote: e.loadNote,
+          alternatives: e.alternatives,
+          sets: e.sets.map((x) => ({ durationSec: x.durationSec, distanceM: x.distanceM, isWarmup: x.isWarmup, targetReps: x.targetReps ?? x.reps, targetRepsMax: x.targetRepsMax, targetKg: x.targetKg ?? x.weightKg, restSec: x.restSec })),
+        })),
+      }));
+    return this.create(patientId, { title: last.title, notes: last.notes, startDate: monday, days: 7, brief: last.brief as any, fit: null, source: "manual", sessions });
+  }
+
   async updateStatus(patientId: string, planId: string, status: PlanStatusName) {
     const owned = await prisma.workoutPlan.findFirst({ where: { id: planId, patientId } });
     if (!owned) return null;
@@ -176,7 +280,7 @@ class WorkoutPlanService {
 
   /** Compact block for the agent snapshot: today's session, the next one, the week's tally. */
   async forSnapshot(patientId: string, today: string) {
-    const plan = await findActive(patientId);
+    const plan = await findCurrent(patientId);
     if (!plan) return null;
     const v = await this.view(patientId, plan);
     const line = (s: SessionRecord) =>

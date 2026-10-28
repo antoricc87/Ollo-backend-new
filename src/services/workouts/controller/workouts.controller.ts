@@ -120,6 +120,31 @@ class WorkoutHandler {
     }
   }
 
+  /** Ollie's newest unsaved week (Sunday run or chat), as its card data — null when none is waiting. */
+  async planDraft(request: any, response: Response) {
+    const { id } = request.user;
+    try {
+      const draft = await WorkoutPlanService.pendingDraft(id);
+      return response.status(200).json(Util.success(draft, draft ? "Draft week" : "No draft week"));
+    } catch (error) {
+      console.error("Error reading draft week", error);
+      return response.status(400).json(Util.error({ error }, "Error reading draft week"));
+    }
+  }
+
+  /** The last saved week again, on this week's matching days. */
+  async planRepeat(request: any, response: Response) {
+    const { id } = request.user;
+    try {
+      const plan = await WorkoutPlanService.repeatLast(id);
+      if (!plan) return response.status(404).json(Util.error({}, "No saved week to repeat"));
+      return response.status(200).json(Util.success(plan, "Training week saved"));
+    } catch (error) {
+      console.error("Error repeating training week", error);
+      return response.status(400).json(Util.error({ error }, "Error repeating training week"));
+    }
+  }
+
   /** Put one designed workout on a day (replaces that day's planned session; opens a 1-day plan when none is active). */
   async planned(request: any, response: Response) {
     const { id } = request.user;
