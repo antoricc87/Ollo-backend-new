@@ -65,7 +65,7 @@ const existingMealsByDay = async (userId: string, dates: string[]): Promise<Reco
   if (!dates.length) return {};
   const days = await prisma.dailyFood.findMany({
     where: { userId, OR: dates.map((d) => ({ date: { startsWith: d } })) },
-    select: { date: true, foodEntries: { select: { mealType: true, description: true, calories: true } } },
+    select: { date: true, foodEntries: { select: { mealType: true, description: true, calories: true, createdAt: true } } },
   });
   const out: Record<string, ExistingEntry[]> = {};
   for (const d of days) (out[d.date.slice(0, 10)] ??= []).push(...d.foodEntries);

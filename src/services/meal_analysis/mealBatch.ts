@@ -37,6 +37,8 @@ export type BatchMeal = AnalyzedMeal & {
   portion: PortionStop;
   /** "Already logged" note: description of the existing entry with the same slot. */
   duplicateOf: string | null;
+  /** The same food logged in the last two hours: its calories are reused and voice asks before saving. */
+  repeatOf?: { description: string; calories: number } | null;
   /** "usual_day" = copied onto a catch-up day from the person's normal day. Anything else is decided at commit (see entrySource). */
   source?: MealSource | null;
   /** Logged from a saved meal (see mealFavorite.ts) — which one, and what was different this time. */
@@ -415,22 +417,55 @@ export function applyMealEdits(rawPreview: any, rawEdits: unknown): MealPreview 
 
 /* ------------------------------ overlaps -------------------------------- */
 
-export type ExistingEntry = { mealType: string | null; description: string; calories: number };
+export type ExistingEntry = { mealType: string | null; description: string; calories: number; createdAt?: string | null };
 const MAIN_SLOTS = ["BREAKFAST", "LUNCH", "DINNER"];
+
+/** How recent a logged food must be for the same words to read as a repeat rather than a second helping. */
+export const REPEAT_WINDOW_MS = 2 * 3600 * 1000;
+const NAME_NOISE = new Set(["a", "an", "and", "the", "with", "of", "my", "some", "plus", "snack", "breakfast", "lunch", "dinner"]);
+const nameWords = (name: string) => new Set(name.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w && !NAME_NOISE.has(w)));
+
+/** Same food by its words, in any order ("Banana + cappuccino", "Cappuccino and a banana"). */
+export function sameFood(a: string, b: string): boolean {
+  const [wa, wb] = [nameWords(a), nameWords(b)];
+  if (!wa.size || !wb.size) return false;
+  const shared = [...wa].filter((w) => wb.has(w)).length;
+  return shared / new Set([...wa, ...wb]).size >= 0.6;
+}
+
+/** A second estimate of the same food takes the first one's calories, so one snack never carries two numbers. */
+function withCaloriesOf(m: BatchMeal, calories: number): BatchMeal {
+  const ingredients = m.ingredients.map((i) => ({ ...i }));
+  const now = sum(ingredients.map((i) => i.calories));
+  if (now > 0 && calories > 0) for (const ing of ingredients) rescaleTo(ing, (Number(ing.grams) || 0) * (calories / now));
+  return { ...m, ingredients };
+}
 
 /**
  * Marks meals that collide with something already logged. A main-slot
  * collision unticks the meal (the user can tick it back); a snack collision
- * only gets the note.
+ * only gets the note. The same food logged within the last two hours is a
+ * likely repeat in any slot: it reuses the logged calories, and the voice path
+ * asks before saving it (needsConfirmation).
  */
-export function markDuplicates(meals: BatchMeal[], existing: Record<string, ExistingEntry[]>): BatchMeal[] {
+export function markDuplicates(meals: BatchMeal[], existing: Record<string, ExistingEntry[]>, now = new Date()): BatchMeal[] {
   return meals.map((m) => {
-    const hit = (existing[m.date] ?? []).find((e) => e.mealType === m.mealType);
+    const entries = existing[m.date] ?? [];
+    const repeat = entries.find((e) => {
+      const at = e.createdAt ? new Date(e.createdAt).getTime() : NaN;
+      return now.getTime() - at <= REPEAT_WINDOW_MS && sameFood(m.mealName ?? "", e.description);
+    });
+    const hit = repeat ?? entries.find((e) => e.mealType === m.mealType);
     if (!hit) return m;
     const duplicateOf = `${hit.description} (${hit.calories} kcal)`;
-    return { ...m, duplicateOf, included: MAIN_SLOTS.includes(m.mealType) ? false : m.included };
+    const marked = { ...m, duplicateOf, included: MAIN_SLOTS.includes(m.mealType) ? false : m.included };
+    return repeat ? { ...withCaloriesOf(marked, repeat.calories), repeatOf: { description: repeat.description, calories: repeat.calories } } : marked;
   });
 }
+
+/** A log the voice path must not save unasked: it repeats something logged moments ago. */
+export const needsConfirmation = (preview: unknown): boolean =>
+  ((preview as { analysis?: { meals?: { repeatOf?: unknown }[] } })?.analysis?.meals ?? []).some((m) => !!m.repeatOf);
 
 /* ------------------------------ catch-up -------------------------------- */
 

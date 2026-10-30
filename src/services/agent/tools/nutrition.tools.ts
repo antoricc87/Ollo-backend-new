@@ -1,3 +1,4 @@
+import moment from "moment-timezone";
 import { z } from "zod";
 import prisma from "../../../utility/prismaClient";
 import { clampRange, dateRange, defineTool, subjectField } from "./registry";
@@ -94,6 +95,20 @@ export const getNutritionSummary = defineTool({
         fruitServings: r1(sum(d.foodEntries.map((e) => e.fruitServings))),
         ...(d.foodEntries.some((e) => e.source === "usual_day") ? { usualDay: true } : {}),
       }));
+    // The rest of "how am I doing": sessions against the plan, and last night's sleep from the phone.
+    const planTarget = (key: string) => plan?.targets.find((t) => t.metricKey === key) ?? null;
+    const sessionTarget = planTarget("exercise_sessions");
+    const sleepTarget = planTarget("sleep_minutes");
+    const sessionsDone = sessionTarget
+      ? await prisma.workoutSession.count({
+          where: {
+            patientId: subject.id,
+            status: "COMPLETED",
+            startedAt: { gte: moment.tz(range.from, ctx.timeZone).startOf("day").toDate(), lte: moment.tz(range.to, ctx.timeZone).endOf("day").toDate() },
+          },
+        })
+      : null;
+    const sleepMinutes = subject.isSelf ? ctx.client?.sleepMinutesLastNight ?? null : null;
     const avg = (k: keyof (typeof rows)[number]) =>
       rows.length ? r1(sum(rows.map((r) => r[k] as number)) / rows.length) : null;
     const result = {
@@ -109,6 +124,8 @@ export const getNutritionSummary = defineTool({
         : [],
       watchOuts: plan ? plan.watchOuts.map((w) => ({ nutrientKey: w.nutrientKey, level: w.level, limit: w.limit, unit: w.unit })) : [],
       days: rows,
+      training: sessionTarget ? { done: sessionsDone ?? 0, target: sessionTarget.min } : null,
+      sleep: sleepMinutes != null ? { minutes: sleepMinutes, target: sleepTarget?.min ?? null } : null,
     };
     // One day with nothing to compare it to is a row of empty bars — the numbers belong in the reply, not a card.
     const worthACard = rows.length > 1 || (rows.length === 1 && result.dailyTargets.length > 0);

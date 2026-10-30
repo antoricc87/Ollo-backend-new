@@ -32,6 +32,7 @@ export default class Routes {
     this.app.get("/api/agent/proposals", verifyToken, agentApi.listProposals);
     this.app.post("/api/agent/proposals/:proposalId/confirm", verifyToken, agentApi.confirmProposal);
     this.app.post("/api/agent/proposals/:proposalId/cancel", verifyToken, agentApi.cancelProposal);
+    this.app.post("/api/agent/proposals/:proposalId/undo", verifyToken, agentApi.undoProposal);
 
     this.app.get("/api/agent/preferences", verifyToken, agentApi.getPreferences);
     this.app.put("/api/agent/preferences", verifyToken, agentApi.updatePreferences);

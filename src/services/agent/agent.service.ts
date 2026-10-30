@@ -21,6 +21,7 @@ import { checkinModeFor, CheckinMode } from "../encounter/domain/mode";
 import encounterService, { CheckinThreadView } from "../encounter/model/encounter.model";
 import { historyComplete } from "../encounter/domain/stateMachine";
 import { turnEndNudge } from "./turnChecks";
+import { needsConfirmation } from "../meal_analysis/mealBatch";
 
 /**
  * The agent loop, as an event stream. Two entry points share it:
@@ -383,10 +384,12 @@ async function* runLoop(p: {
         if (call.name === "assess_checkin") assessRejected = (out.result as any)?.rejected ? String((out.result as any).fix ?? "rejected") : null;
         if (out.ok && out.proposal) {
           const pr = await proposalStore.create(patientId, threadId, call.name, out.input, out.proposal);
-          const auto = p.channel === "voice" && VOICE_AUTOSAVE_TOOLS.has(call.name) ? await proposalStore.confirm(patientId, pr.id, null, undefined, { auto: "voice" }) : null;
+          const auto = p.channel === "voice" && VOICE_AUTOSAVE_TOOLS.has(call.name) && !needsConfirmation(pr.preview) ? await proposalStore.confirm(patientId, pr.id, null, undefined, { auto: "voice" }) : null;
           if (auto && auto.status === 200) {
             // Voice: saved at once; the person hears it and can say "undo".
-            for (const card of auto.cards) {
+            for (const saved of auto.cards) {
+              // The id lets the card's UNDO reverse this exact log.
+              const card = { ...saved, data: { ...(saved.data as object), proposalId: pr.id } };
               cards.push(card);
               yield { type: "card", card };
             }

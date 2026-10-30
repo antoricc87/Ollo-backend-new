@@ -334,6 +334,20 @@ class AgentHandler {
     }
   }
 
+  /** The logged card's UNDO: reverses that one log through its tool, no model turn. */
+  async undoProposal(request: any, response: Response) {
+    const { id } = request.user;
+    const { proposalId } = request.params;
+    try {
+      const r = await proposalStore.undo(id, proposalId);
+      if (r.status !== 200) return response.status(r.status).json(Util.error({}, r.error));
+      return response.status(200).json(Util.success({ undone: r.undone }, "Undone"));
+    } catch (error) {
+      console.error("agent undoProposal", error);
+      return response.status(400).json(Util.error({}, "Error undoing"));
+    }
+  }
+
   /* ---------------------------- preferences ---------------------------- */
   async getPreferences(request: any, response: Response) {
     const { id } = request.user;
