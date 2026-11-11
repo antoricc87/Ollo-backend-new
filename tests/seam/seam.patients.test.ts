@@ -27,7 +27,7 @@ describe("SeamPatientService", () => {
   });
 
   it("strips the patient's private context from the snapshot", async () => {
-    buildPatientSnapshot.mockResolvedValueOnce({ patientId: "p1", profile: {}, memories: [{ id: "m" }], subAccounts: [{ id: "s" }], client: { x: 1 }, mealPlan: { id: "mp" }, labs: {} });
+    buildPatientSnapshot.mockResolvedValueOnce({ patientId: "p1", profile: {}, memories: [{ id: "m" }], subAccounts: [{ id: "s" }], client: { x: 1 }, mealPlan: { id: "mp" }, healthId: "health id: …", labs: {} });
     const s = await SeamPatientService.snapshot("p1");
     expect(s).toEqual({ patientId: "p1", profile: {}, labs: {} });
   });

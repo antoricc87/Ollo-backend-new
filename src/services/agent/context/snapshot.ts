@@ -9,6 +9,7 @@ import prisma from "../../../utility/prismaClient";
 import { buildCurrentLabs, labFreshness, LabFreshness } from "../../../utils/labBiomarkers";
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
 import memoryStore from "../memory/memory.store";
+import HealthIdService from "../../health_id/model/healthId.model";
 import { describeFinding } from "../../signals/domain/describe";
 import MealPlanService from "../../meal_plan/model/meal_plan.model";
 import { favoriteLine } from "../../meal_analysis/mealFavorite";
@@ -185,6 +186,8 @@ export type PatientSnapshot = {
   exercise: { frequency: string | null; preferences: string[] };
   subAccounts: { id: string; name: string; age: number | null }[];
   memories: { id: string; category: string; content: string }[];
+  /** Health ID block (facts from the record + their story), rendered; null when nothing is known. */
+  healthId: string | null;
   /** Signals found in their data in the last 30 days (services/signals), in code-built words. */
   signals: { since: string; title: string; line: string; ongoing: boolean }[];
   /** The last nights the phone synced (sleep, HRV, sleeping heart rate) — the only wearable data the server holds. */
@@ -312,7 +315,7 @@ export async function buildPatientSnapshot(
     select: { date: true },
   });
   // What the signal detectors found lately and the last synced nights: part of "everything about this person".
-  const [signals, nights] = await Promise.all([
+  const [signals, nights, healthId] = await Promise.all([
     prisma.finding
       .findMany({
         where: { patientId, OR: [{ status: { in: ["OPEN", "ONGOING"] } }, { firstDetectedAt: { gte: moment(now).subtract(30, "days").toDate() } }] },
@@ -324,6 +327,10 @@ export async function buildPatientSnapshot(
     prisma.nightlyVitals
       .findMany({ where: { patientId, date: { lte: today } }, orderBy: { date: "desc" }, take: 3, select: { date: true, asleepMinutes: true, hrvMs: true, sleepingHr: true } })
       .catch(() => []),
+    HealthIdService.forAgent(patientId).catch((e) => {
+      console.error("snapshot: health id", e);
+      return null;
+    }),
   ]);
   const savedMeals = (
     await prisma.favMeal
@@ -551,6 +558,7 @@ export async function buildPatientSnapshot(
       age: s.dob ? calculateAgeFromDob(s.dob) : null,
     })),
     memories: memories.map((m) => ({ id: m.id, category: m.category, content: m.content })),
+    healthId,
     signals,
     nights,
     client,
@@ -589,6 +597,7 @@ export function renderSnapshot(s: PatientSnapshot): string {
       `; height ${p.height ? `${p.height.value} ${p.height.unit}` : "—"}, weight on file ${p.weight ? `${p.weight.value} ${p.weight.unit}` : "—"}` +
       `; activity ${p.activityLevel ?? "—"}; smoking ${p.smoking ?? "—"}; alcohol ${p.alcohol ?? "—"}; caffeine ${p.caffeine ?? "—"}`
   );
+  if (s.healthId) L.push(s.healthId);
 
   if (s.plan) {
     const pl = s.plan;
