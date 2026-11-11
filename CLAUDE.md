@@ -1306,7 +1306,7 @@ peak/low HR, `zoneSeconds[5]`, distance) come from the watch when linked
 (`"estimate"`). Heart-rate TRACES are never stored — the phone reads them.
 Layout (keep it): `domain/` pure code shared by REST + agent —
 `activity.catalog.ts` (canonical activity keys ↔ HealthKit names, MET,
-`activitiesCompatible`), `exercise.catalog.ts` (~65 canonical lifts with
+`activitiesCompatible`), `exercise.catalog.ts` (~79 canonical lifts with
 aliases incl. Italian; `canonicalExercise()` → key or `custom:<slug>`; extend
 aliases when the parser invents spellings), `workout.schema.ts` (zod:
 `WatchWorkoutSummary`, `SyncRequest`, `SessionInput`, `PreviewEdits`),
