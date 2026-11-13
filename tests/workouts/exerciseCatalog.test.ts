@@ -1,4 +1,5 @@
-import { canonicalExercise, EXERCISES } from "../../src/services/workouts/domain/exercise.catalog";
+import { canonicalExercise, EXERCISES, exerciseByKey, musclesFor } from "../../src/services/workouts/domain/exercise.catalog";
+import { DETAILS, LEVELS } from "../../src/services/workouts/domain/exercise.details";
 
 const key = (name: string) => canonicalExercise(name).key;
 
@@ -60,5 +61,45 @@ describe("exercise catalog", () => {
     expect(key("seated cable row")).toBe("seated_row");
     expect(key("squats")).toBe("back_squat");
     expect(key("curls")).toBe("bicep_curl");
+  });
+
+  describe("details: pattern, level, muscles, easier/harder", () => {
+    it("every exercise has a details row, and every row an exercise", () => {
+      for (const e of EXERCISES) expect(DETAILS[e.key]).toBeDefined();
+      for (const k of Object.keys(DETAILS)) expect(exerciseByKey(k)).not.toBeNull();
+    });
+
+    it("every exercise mainly works at least one muscle, never the same one as primary and secondary", () => {
+      for (const e of EXERCISES) {
+        expect(e.primary.length).toBeGreaterThan(0);
+        for (const m of e.secondary) expect(e.primary).not.toContain(m);
+      }
+    });
+
+    it("easier links point down (or level), harder links up, and no easier chain loops", () => {
+      const rank = (k: string) => LEVELS.indexOf(exerciseByKey(k)!.level);
+      for (const e of EXERCISES) {
+        if (e.easier) {
+          expect(exerciseByKey(e.easier)).not.toBeNull();
+          expect(rank(e.easier)).toBeLessThanOrEqual(rank(e.key));
+        }
+        if (e.harder) {
+          expect(exerciseByKey(e.harder)).not.toBeNull();
+          expect(rank(e.harder)).toBeGreaterThanOrEqual(rank(e.key));
+        }
+        const seen = new Set([e.key]);
+        for (let k = e.easier; k; k = exerciseByKey(k)!.easier) {
+          if (seen.has(k)) throw new Error(`easier chain loops at ${k}`);
+          seen.add(k);
+        }
+      }
+    });
+
+    it("single-muscle words are finer than groups", () => {
+      expect(musclesFor("biceps")).toEqual(["biceps"]);
+      expect(musclesFor("Hamstrings")).toEqual(["hamstrings"]);
+      expect(musclesFor("arms")).toEqual([]);
+      expect(exerciseByKey("tricep_pushdown")!.primary).not.toContain("biceps");
+    });
   });
 });

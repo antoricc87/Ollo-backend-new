@@ -146,14 +146,14 @@ export const WorkoutPlanInput = z.object({
 });
 export type WorkoutPlanInput = z.infer<typeof WorkoutPlanInput>;
 
-export const EQUIPMENT = ["barbell", "dumbbell", "machine", "cable", "kettlebell", "band", "bodyweight", "bike", "rower", "treadmill", "pull_up_bar", "bench"] as const;
+export const EQUIPMENT = ["barbell", "dumbbell", "machine", "cable", "kettlebell", "band", "bodyweight", "bike", "rower", "treadmill", "pull_up_bar", "bench", "dip_bars", "box", "ab_wheel", "jump_rope", "battle_rope"] as const;
 export const EXPERIENCE = ["new", "some", "experienced"] as const;
 export const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 
 /** How the user trains — every generated workout reads this. */
 export const TrainingProfileInput = z.object({
   place: z.enum(["gym", "home", "outdoor", "mixed"]).nullable().optional(),
-  equipment: z.array(z.enum(EQUIPMENT)).max(12).optional(),
+  equipment: z.array(z.enum(EQUIPMENT)).max(20).optional(),
   experience: z.enum(EXPERIENCE).nullable().optional(),
   sessionMinutes: z.number().int().min(10).max(180).nullable().optional(),
   preferredDays: z.array(z.enum(WEEKDAYS)).max(7).optional(),

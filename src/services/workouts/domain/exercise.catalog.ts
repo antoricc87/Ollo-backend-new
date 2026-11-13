@@ -4,16 +4,54 @@
  * "bench", "flat bench" and "barbell bench press" all land on `bench_press`.
  * Extend the alias lists when the parser invents new spellings.
  */
+import { EQUIPMENT } from "./workout.schema";
+import { DETAILS, type ExerciseDetails, type Muscle } from "./exercise.details";
+
+/** One piece of kit, in the same words the training profile stores (EQUIPMENT). */
+export type Kit = (typeof EQUIPMENT)[number];
+
 export type ExerciseDef = {
   key: string;
   name: string;
   muscleGroup: "chest" | "back" | "shoulders" | "arms" | "legs" | "glutes" | "core" | "full_body" | "cardio";
-  // The cardio machines carry their own key (the EQUIPMENT enum has them) so a home treadmill or bike counts as available.
-  equipment: "barbell" | "dumbbell" | "machine" | "cable" | "bodyweight" | "kettlebell" | "band" | "treadmill" | "bike" | "rower" | "other";
+  /** The main piece of kit (shown on the card, stored on the exercise row). */
+  equipment: Kit;
+  /** EVERYTHING the exercise needs — a dumbbell bench press needs dumbbells AND a bench, a pull-up a bar. Empty = nothing (bodyweight). */
+  needs: Kit[];
   aliases: string[];
+} & ExerciseDetails;
+
+/** Kit needed beyond the main piece. Only what the exercise cannot be done without — no rack, no "a chair works too". */
+const EXTRA_NEEDS: Record<string, Kit[]> = {
+  bench_press: ["bench"],
+  incline_bench_press: ["bench"],
+  dumbbell_bench_press: ["bench"],
+  incline_dumbbell_press: ["bench"],
+  chest_fly: ["bench"],
+  close_grip_bench_press: ["bench"],
+  skull_crusher: ["bench"],
+  preacher_curl: ["bench"],
+  hip_thrust: ["bench"],
+  pull_up: ["pull_up_bar"],
+  chin_up: ["pull_up_bar"],
+  hanging_leg_raise: ["pull_up_bar"],
+  hanging_knee_raise: ["pull_up_bar"],
+  toes_to_bar: ["pull_up_bar"],
+  dip: ["dip_bars"],
 };
 
-const E = (key: string, name: string, muscleGroup: ExerciseDef["muscleGroup"], equipment: ExerciseDef["equipment"], aliases: string[] = []): ExerciseDef => ({ key, name, muscleGroup, equipment, aliases });
+// A key with no DETAILS row is a bug the catalog test catches; at runtime it degrades to "no facts" rather than failing boot.
+const NO_DETAILS: ExerciseDetails = { pattern: "isolation", level: "beginner", primary: [], secondary: [] };
+
+const E = (key: string, name: string, muscleGroup: ExerciseDef["muscleGroup"], equipment: Kit, aliases: string[] = []): ExerciseDef => ({
+  key,
+  name,
+  muscleGroup,
+  equipment,
+  needs: Array.from(new Set([...(equipment === "bodyweight" ? [] : [equipment]), ...(EXTRA_NEEDS[key] ?? [])])),
+  aliases,
+  ...(DETAILS[key] ?? NO_DETAILS),
+});
 
 export const EXERCISES: ExerciseDef[] = [
   // chest
@@ -39,7 +77,7 @@ export const EXERCISES: ExerciseDef[] = [
   E("seated_row", "Seated cable row", "back", "cable", ["cable row", "seated row", "low row", "seated cable row"]),
   E("t_bar_row", "T-bar row", "back", "barbell", ["t bar", "tbar row"]),
   E("face_pull", "Face pull", "shoulders", "cable", ["face pulls"]),
-  E("back_extension", "Back extension", "back", "bodyweight", ["hyperextension", "hyperextensions", "45 degree back extension"]),
+  E("back_extension", "Back extension", "back", "machine", ["hyperextension", "hyperextensions", "45 degree back extension"]),
   // shoulders
   E("overhead_press", "Overhead press", "shoulders", "barbell", ["ohp", "military press", "shoulder press", "strict press", "barbell overhead press", "lento avanti"]),
   E("dumbbell_shoulder_press", "Dumbbell shoulder press", "shoulders", "dumbbell", ["db shoulder press", "db press", "seated dumbbell press", "arnold press"]),
@@ -84,7 +122,7 @@ export const EXERCISES: ExerciseDef[] = [
   E("hanging_leg_raise", "Hanging leg raise", "core", "bodyweight", ["hanging leg raises", "leg raises", "leg raise"]),
   E("hanging_knee_raise", "Hanging knee raise", "core", "bodyweight", ["hanging knee raises", "knee raises", "knee raise"]),
   E("toes_to_bar", "Toes to bar", "core", "bodyweight", ["toes to bars", "t2b", "ttb"]),
-  E("ab_wheel", "Ab wheel rollout", "core", "other", ["ab rollout", "ab wheel", "rollouts"]),
+  E("ab_wheel", "Ab wheel rollout", "core", "ab_wheel", ["ab rollout", "ab wheel", "rollouts"]),
   E("russian_twist", "Russian twist", "core", "bodyweight", ["russian twists", "twists"]),
   E("dead_bug", "Dead bug", "core", "bodyweight", ["dead bugs"]),
   // full body / conditioning
@@ -94,10 +132,10 @@ export const EXERCISES: ExerciseDef[] = [
   E("snatch", "Snatch", "full_body", "barbell", ["power snatch", "hang snatch", "snatches"]),
   E("thruster", "Thruster", "full_body", "barbell", ["thrusters"]),
   E("burpee", "Burpee", "full_body", "bodyweight", ["burpees"]),
-  E("box_jump", "Box jump", "legs", "other", ["box jumps"]),
+  E("box_jump", "Box jump", "legs", "box", ["box jumps"]),
   E("farmers_walk", "Farmer's walk", "full_body", "dumbbell", ["farmers carry", "farmer carry", "farmers walk", "loaded carry"]),
-  E("battle_rope", "Battle ropes", "cardio", "other", ["battle ropes", "ropes"]),
-  E("jump_rope", "Jump rope", "cardio", "other", ["skipping", "skip rope", "jumping rope", "double unders"]),
+  E("battle_rope", "Battle ropes", "cardio", "battle_rope", ["battle ropes", "ropes"]),
+  E("jump_rope", "Jump rope", "cardio", "jump_rope", ["skipping", "skip rope", "jumping rope", "double unders"]),
   E("rowing_machine", "Rowing machine", "cardio", "rower", ["erg", "rower", "row erg", "concept2"]),
   E("assault_bike", "Assault bike", "cardio", "bike", ["air bike", "echo bike", "airdyne"]),
   E("treadmill_run", "Treadmill", "cardio", "treadmill", ["treadmill", "tapis roulant"]),
@@ -144,10 +182,10 @@ export const canonicalExercise = (name: string, hintKey?: string | null): { key:
 /** Compact catalog listing for the parser prompt: "key — name (aliases…)". */
 export const catalogForPrompt = () => EXERCISES.map((e) => `${e.key}: ${e.name}${e.aliases.length ? ` (${e.aliases.slice(0, 4).join(", ")})` : ""}`).join("\n");
 
-/** Catalog listing for the planner prompt — WITH muscle group and equipment, grouped. */
+/** Catalog listing for the planner prompt — WITH muscle group and everything each exercise needs ("dumbbell+bench"), grouped. */
 export const catalogForPlanner = () => {
   const groups = new Map<string, string[]>();
-  for (const e of EXERCISES) (groups.get(e.muscleGroup) ?? groups.set(e.muscleGroup, []).get(e.muscleGroup)!).push(`${e.key} (${e.equipment})`);
+  for (const e of EXERCISES) (groups.get(e.muscleGroup) ?? groups.set(e.muscleGroup, []).get(e.muscleGroup)!).push(`${e.key} (${e.needs.join("+") || "bodyweight"}${e.level === "advanced" ? ", advanced" : ""})`);
   return [...groups.entries()].map(([g, xs]) => `${g}: ${xs.join(", ")}`).join("\n");
 };
 
@@ -177,4 +215,38 @@ export const muscleGroupsFor = (word: string): string[] => {
   };
   if (map[w]) return map[w];
   return (MUSCLE_GROUPS as readonly string[]).includes(w) ? [w] : [];
+};
+
+/**
+ * Words people use for ONE muscle, finer than a catalog group: "biceps" is not "arms" (a triceps pushdown is arms
+ * too). Empty when the word is a group or unknown — then the group check is the whole check.
+ */
+export const musclesFor = (word: string): Muscle[] => {
+  const w = word.trim().toLowerCase().replace(/[-\s]+/g, "_");
+  const map: Record<string, Muscle[]> = {
+    biceps: ["biceps"], bicep: ["biceps"],
+    triceps: ["triceps"], tricep: ["triceps"],
+    quads: ["quads"], quad: ["quads"], quadriceps: ["quads"],
+    hamstrings: ["hamstrings"], hamstring: ["hamstrings"],
+    calves: ["calves"], calf: ["calves"],
+    lats: ["lats"],
+    traps: ["traps"], trapezius: ["traps"],
+    obliques: ["obliques"],
+    rear_delts: ["rear_delts"], rear_delt: ["rear_delts"],
+    forearms: ["forearms"], grip: ["forearms"],
+  };
+  return map[w] ?? [];
+};
+
+/**
+ * The first exercise down the `easier` chain that passes `ok` (the exercise itself excluded), or null. The chain is
+ * acyclic (catalog test), so this always ends.
+ */
+export const stepDown = (key: string, ok: (e: ExerciseDef) => boolean): ExerciseDef | null => {
+  let cur = exerciseByKey(key)?.easier ? exerciseByKey(exerciseByKey(key)!.easier) : null;
+  while (cur) {
+    if (ok(cur)) return cur;
+    cur = cur.easier ? exerciseByKey(cur.easier) : null;
+  }
+  return null;
 };

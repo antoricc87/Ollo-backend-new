@@ -14,7 +14,8 @@ import prisma from "../../../utility/prismaClient";
 import { getLLM } from "../../agent/llm/openai.client";
 import { route } from "../../agent/llm/policy";
 import { ACTIVITY_KEYS, activityByKey } from "../domain/activity.catalog";
-import { canonicalExercise, catalogForPlanner, muscleGroupsFor } from "../domain/exercise.catalog";
+import { canonicalExercise, catalogForPlanner, exerciseByKey, muscleGroupsFor, musclesFor, stepDown, type ExerciseDef } from "../domain/exercise.catalog";
+import type { Muscle, Pattern } from "../domain/exercise.details";
 import { fmtSets } from "../domain/workout.metrics";
 import { FOCUS, PLACE, PlannedSessionInput, type ExerciseInput } from "../domain/workout.schema";
 import TrainingProfileService from "../model/training_profile.model";
@@ -243,17 +244,68 @@ export const checkSession = (s: PlannedSessionInput, ask: DesignAsk, brief: Desi
   }
   if (s.durationMin !== ask.durationMin) s.durationMin = ask.durationMin;
 
-  // equipment (outside a gym, only what they have; bodyweight always ok)
-  const allowed = new Set<string>([...(ask.equipment ?? []), ...(brief.training?.equipment ?? []), "bodyweight", "other"]);
+  // level: someone new — or a session kept lighter by a check-in — never gets an advanced lift. Stepped down the
+  // `easier` chain in code (no redesign, the card says so); with no easier version the reviser picks another.
+  if (brief.training?.experience === "new" || ask.caution) {
+    for (const e of s.exercises ?? []) {
+      const def = exerciseByKey(e.exerciseKey);
+      if (def?.level !== "advanced") continue;
+      const down = stepDown(def.key, (x) => x.level !== "advanced");
+      if (!down) {
+        issues.push(`${def.name} is an advanced lift and ${ask.caution ? "this session is kept lighter" : "they are new to training"} — pick a beginner or intermediate exercise for the same job`);
+        continue;
+      }
+      const weighted = (e.sets ?? []).some((set) => set.targetKg != null) || !!e.loadNote;
+      assumptions.push(`${def.name} → ${down.name.toLowerCase()}: the simpler version${ask.caution ? " while this is kept lighter" : " while you're new to it"}`);
+      Object.assign(e, { exerciseKey: down.key, name: down.name, muscleGroup: down.muscleGroup, equipment: down.equipment, alternatives: [] });
+      for (const set of e.sets ?? []) set.targetKg = null; // the history was for the other lift
+      e.loadNote = weighted && down.needs.length ? `a weight you could do ${e.sets?.[0]?.targetRepsMax ?? e.sets?.[0]?.targetReps ?? 10} with, leaving 2 reps in reserve` : null;
+    }
+  }
+
+  // equipment (outside a gym, only what they have; bodyweight always ok). Every piece the exercise needs is checked —
+  // a dumbbell bench press at home with dumbbells and no bench misses. The issue names only the missing kit; the app
+  // reads "<name> needs <kit>, not available (<place>: <have>)" to put the tag on the row.
+  const kit = new Set<string>([...(ask.equipment ?? []), ...(brief.training?.equipment ?? [])]);
   const place = s.place ?? ask.place ?? brief.training?.place ?? null;
-  if (place && place !== "gym" && allowed.size > 2) {
-    for (const e of s.exercises ?? []) if (e.equipment && !allowed.has(e.equipment)) issues.push(`${e.name} needs ${e.equipment}, not available (${place}: ${[...allowed].filter((x) => x !== "other").join(", ")})`);
+  if (place && place !== "gym" && kit.size > 0) {
+    const haveLine = ["bodyweight", ...[...kit].filter((x) => x !== "bodyweight")].join(", ");
+    for (const e of s.exercises ?? []) {
+      const needs = exerciseByKey(e.exerciseKey)?.needs ?? (e.equipment && e.equipment !== "bodyweight" ? [e.equipment] : []);
+      const missing = needs.filter((k) => !kit.has(k));
+      if (missing.length) issues.push(`${e.name} needs ${missing.join(" and ")}, not available (${place}: ${haveLine})`);
+    }
   }
 
   // requested muscle groups covered
   const want = new Set((ask.muscleGroups ?? []).flatMap(muscleGroupsFor));
   const have = new Set((s.exercises ?? []).map((e) => e.muscleGroup).filter(Boolean));
   for (const g of want) if (!have.has(g) && g !== "full_body" && g !== "cardio") issues.push(`asked for ${g}, no exercise targets it`);
+  // a single muscle asked for ("biceps", "hamstrings") needs an exercise that MAINLY works it — a group is not enough
+  const defs = (s.exercises ?? []).map((e) => exerciseByKey(e.exerciseKey)).filter((d): d is ExerciseDef => !!d);
+  const works = (ms: Muscle[]) => defs.some((d) => d.primary.some((m) => ms.includes(m)));
+  for (const w of ask.muscleGroups ?? []) {
+    const ms = musclesFor(w);
+    if (ms.length && !works(ms)) issues.push(`asked for ${w}, no exercise mainly works them`);
+  }
+  // balance, only where the ask names the shape of the session (sets of work, not circuits or mobility)
+  if (["strength", "hypertrophy", "mixed"].includes(s.focus ?? "")) {
+    const words = new Set((ask.muscleGroups ?? []).map((w) => w.trim().toLowerCase().replace(/[-\s]+/g, "_")));
+    const has = (ps: Pattern[]) => defs.some((d) => ps.includes(d.pattern));
+    const push = has(["push_horizontal", "push_vertical"]);
+    const pull = has(["pull_horizontal", "pull_vertical"]);
+    const lower = has(["squat", "lunge", "hinge", "olympic"]);
+    if (["full", "full_body", "total_body"].some((w) => words.has(w)) && defs.length >= 4) {
+      const missing = [!lower && "lower-body (squat, lunge or hinge)", !push && "push", !pull && "pull"].filter(Boolean);
+      if (missing.length) issues.push(`a full-body session with no ${missing.join(", no ")} exercise — add one`);
+    }
+    if (["upper", "upper_body"].some((w) => words.has(w)) && defs.length >= 3 && (!push || !pull)) issues.push(`an upper-body session with ${push ? "pushing but no pulling" : "pulling but no pushing"} — balance it`);
+    if (["lower", "lower_body", "legs", "leg"].some((w) => words.has(w)) && defs.length >= 3) {
+      if (!works(["quads"])) issues.push("a lower-body session with nothing that mainly works the quads (a squat or lunge)");
+      // squats mainly work the glutes too, so the back of the leg needs a hinge (deadlift, bridge, swing) or a hamstring move
+      if (!has(["hinge"]) && !works(["hamstrings"])) issues.push("a lower-body session with nothing for the back of the leg (a hinge such as a deadlift or bridge, or a leg curl)");
+    }
+  }
 
   // recovery: heavy groups < 48 h ago, unless asked for
   const recentHeavy = new Set(brief.recent.filter((r) => r.daysAgo <= 1 && r.shape === "strength" && r.durationMin >= 20).flatMap((r) => r.muscleGroups));

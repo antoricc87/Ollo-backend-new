@@ -327,7 +327,7 @@ export const generateWorkout = defineTool({
     focus: z.enum(FOCUS).optional(),
     muscleGroups: z.array(z.string().max(40)).max(6).optional().describe("As the user said them: 'upper body', 'legs', 'chest and back', 'core'"),
     place: z.enum(PLACE).optional(),
-    equipment: z.array(z.enum(EQUIPMENT)).max(12).optional().describe("Only when the user names what they have right now (hotel gym, dumbbells at home…)"),
+    equipment: z.array(z.enum(EQUIPMENT)).max(20).optional().describe("Only when the user names what they have right now (hotel gym, dumbbells at home…)"),
     request: z.string().max(600).optional().describe("Anything else verbatim: 'I'm tired', 'no jumping', 'want to hit PRs', 'sore knee today'"),
     date: dayString.optional().describe("Day this session is for; default today. Never in the past."),
     replaceSessionId: z.string().optional().describe("Id of the planned session this replaces (from the snapshot or get_workouts status=planned)"),
@@ -673,7 +673,7 @@ export const updateTrainingProfile = defineTool({
     "Remember how the user trains, structurally: where (gym/home/outdoor/mixed), equipment they have, experience, usual session length, preferred days and time, and any limitation IN THEIR OWN WORDS (a sore knee, 'no overhead pressing'). Only the fields you pass change. Use it when they tell you these things, or after you had to ask. The user confirms in the app. Never turn a symptom into advice — a limitation is repeated, not interpreted.",
   schema: z.object({
     place: z.enum(["gym", "home", "outdoor", "mixed"]).optional(),
-    equipment: z.array(z.enum(EQUIPMENT)).max(12).optional().describe("Full list they have (replaces the previous list)"),
+    equipment: z.array(z.enum(EQUIPMENT)).max(20).optional().describe("Full list they have (replaces the previous list)"),
     experience: z.enum(EXPERIENCE).optional(),
     sessionMinutes: z.number().int().min(10).max(180).optional(),
     preferredDays: z.array(z.enum(WEEKDAYS)).max(7).optional(),

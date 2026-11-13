@@ -1561,6 +1561,41 @@ follow-up changed nothing, and the check-in had dropped out of the gate.
   ("upper body only at first, then lower"), and the readiness strain button
   ignoring what was already done today / late evening.
 
+### Exercise catalog: variants split, equipment as a list (Nov 11 2026)
+
+Start of the "exercise selection" work (the AI picks exercises from its own
+knowledge; the catalog was too thin to steer it). Step 1 (eae2f93): aliases
+that folded a different exercise into one key were split into their own
+entries (glute bridge, cable/machine fly, barbell curl, chin-up, side plank,
+sit-up, cable crunch, split squat, seated calf raise, hanging knee raise,
+toes to bar, clean and jerk, bench dip); "row machine" / "press" no longer
+resolve. Past logs keep their old key — not recoverable (rows store the
+canonical name). Step 2: `ExerciseDef.needs` = EVERY piece of kit, in the
+profile's `EQUIPMENT` words (main piece + `EXTRA_NEEDS`: bench, pull-up bar,
+dip bars); `"other"` is gone (it always passed the check). `EQUIPMENT` gained
+dip_bars, box, ab_wheel, jump_rope, battle_rope (list cap 12 → 20).
+`checkSession` checks every needed piece and names ONLY the missing ones
+("needs barbell and bench") — the app reads that string for the row's tag
+(mobile `equipmentIssues`), so keep the `<name> needs <kit>, not available
+(<place>: <have>)` shape. Still skipped when the profile lists no kit.
+`catalogForPlanner` prints `key (dumbbell+bench)`. Tests
+`tests/workouts/exerciseCatalog.test.ts`, `equipmentCheck.test.ts`.
+Step 3: `domain/exercise.details.ts` — per exercise `pattern` (squat, hinge,
+lunge, push/pull horizontal/vertical, isolation, core, carry, olympic,
+conditioning, cardio), `level`, `primary`/`secondary` muscles (19, finer than
+muscleGroup), `easier`/`harder` keys (only defensible links; test: levels
+monotone, no loops). `checkSession` uses them: experience "new" OR caution →
+an advanced lift is STEPPED DOWN the easier chain in code (`stepDown`, kg
+dropped, an assumption line on the card), else an issue; a single muscle
+asked for (`musclesFor`: biceps, hamstrings…) needs an exercise that mainly
+works it; balance only when the ask names the shape and the focus is
+strength/hypertrophy/mixed — full body = lower + push + pull (≥4 exercises),
+upper = push + pull, legs/lower = quads + a hinge or hamstring move. These
+are revision issues. Planner listing
+marks `advanced`. `tests/workouts/exerciseChoice.test.ts`. No eval run yet.
+Next (proposed): what-it-loads, measured-as, swaps, unilateral, role; then
+~110 missing exercises; then code narrows the catalog per person.
+
 ## Labs journey (Aug 27 2026) — `src/services/labs_journey/`
 
 How a patient gets labs done. `domain/screening.rules.ts` `buildPanel(profile)`
