@@ -11,6 +11,7 @@
 import moment from "moment-timezone";
 import type { FOCUS, PlannedSessionInput, WEEKDAYS } from "../domain/workout.schema";
 import { changesLine, sessionChanges } from "./sessionEdit";
+import { muscleGroupsFor } from "../domain/exercise.catalog";
 
 const DAY = "YYYY-MM-DD";
 type Weekday = (typeof WEEKDAYS)[number];
@@ -102,4 +103,29 @@ export const applyWeekEdits = async (week: WeekDraftState, edits: WeekEdit[], de
   }
   sessions.sort((a, b) => a.day - b.day);
   return { startDate: week.startDate, days: week.days, priorityDay, sessions, designed: Array.from(new Set(designed)).sort((a, b) => a - b), log };
+};
+
+/**
+ * What an edit disturbed next door (Nov 15 2026). Adding glute work to Wednesday when Thursday is a
+ * lower-body day put glutes on consecutive days, and the edit only reported it. A trainer adjusts the
+ * neighbour instead: for each heavy day an edit designed that now shares muscle groups with an UNTOUCHED
+ * heavy neighbour, the neighbour is the one to adjust (the edited day is what they asked for). Pure.
+ */
+export type NeighbourClash = { fix: number; because: number; groups: string[] };
+export const neighbourClashes = (sessions: { day: number; session: Pick<PlannedSessionInput, "focus" | "muscleGroups"> }[], designed: number[]): NeighbourClash[] => {
+  const heavy = (f?: string | null) => ["strength", "hypertrophy"].includes(f ?? "");
+  const groups = (s: { session: Pick<PlannedSessionInput, "muscleGroups"> }) => new Set((s.session.muscleGroups ?? []).flatMap(muscleGroupsFor).filter((g) => g !== "core" && g !== "full_body" && g !== "cardio"));
+  const out: NeighbourClash[] = [];
+  for (const d of designed) {
+    const edited = sessions.find((s) => s.day === d);
+    if (!edited || !heavy(edited.session.focus)) continue;
+    for (const n of [d - 1, d + 1]) {
+      const next = sessions.find((s) => s.day === n);
+      if (!next || designed.includes(n) || !heavy(next.session.focus) || out.some((c) => c.fix === n)) continue;
+      const mine = groups(edited);
+      const shared = [...groups(next)].filter((g) => mine.has(g));
+      if (shared.length) out.push({ fix: n, because: d, groups: shared });
+    }
+  }
+  return out;
 };

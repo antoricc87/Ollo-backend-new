@@ -136,3 +136,10 @@ export const DETAILS: Record<string, ExerciseDetails> = {
   treadmill_run: D("cardio", "beginner", ["quads", "calves"], ["hamstrings", "glutes"]),
   stair_climber: D("cardio", "beginner", ["quads", "glutes"], ["calves"]),
 };
+
+/**
+ * Exercises that are only ever SUPPORTING work, whatever the day's focus: one-joint moves (pattern
+ * "isolation") plus these, whose pattern is a push or pull but which nobody trains heavy for low reps
+ * (a face pull at 5 reps was designed on Nov 15 2026). A check holds them to 8+ reps.
+ */
+export const SUPPORTING_ONLY = new Set(["chest_fly", "cable_fly", "machine_fly", "face_pull", "rear_delt_fly"]);

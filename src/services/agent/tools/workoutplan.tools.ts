@@ -10,8 +10,8 @@ import TrainingProfileService from "../../workouts/model/training_profile.model"
 import { activityByKey } from "../../workouts/domain/activity.catalog";
 import { fmtDuration, fmtSets } from "../../workouts/domain/workout.metrics";
 import { EQUIPMENT, EXPERIENCE, FOCUS, PLACE, PlannedSessionInput, WEEKDAYS, WorkoutPlanInput, timeString } from "../../workouts/domain/workout.schema";
-import { asPrevious, buildBrief, DEFAULT_SESSION_MIN, designSession, designWeek, weekShapeIssues } from "../../workouts/design/workoutDesign.service";
-import { applyWeekEdits, dateOfDay, WeekEditError, type WeekEdit, type WeekSession } from "../../workouts/design/weekEdit";
+import { asPrevious, buildBrief, DEFAULT_SESSION_MIN, designSession, designWeek, reviewWeek, weekShapeIssues, type WeekCheck } from "../../workouts/design/workoutDesign.service";
+import { applyWeekEdits, dateOfDay, dayOfWeekday, neighbourClashes, WeekEditError, type SessionSpec, type WeekEdit, type WeekSession } from "../../workouts/design/weekEdit";
 import { changesLine, keepUntouched, lengthAsked, sessionChanges } from "../../workouts/design/sessionEdit";
 import { deriveDefaults, type Defaults, type DefaultsInput } from "../../workouts/design/defaults";
 import encounterService from "../../encounter/model/encounter.model";
@@ -376,6 +376,8 @@ export const generateWorkout = defineTool({
         ...(caution ? { caution: cautionNote(caution, "session") } : {}),
         ...assumedNote(defaults.assumed),
         cardActions: `The card has 'Log it as done' (when they've done it), 'Put in plan · ${moment.utc(designed.session.plannedFor!, "YYYY-MM-DD").format("ddd D")}' (writes it onto that day of their week — direct, no proposal) and 'Something else'. Nothing is saved and nothing needs confirming: it is a plan to do, not a log — never call log_workout for it unless they say they did it, and don't ask them to confirm. Keep your text to the highlights: the split, the one or two key lifts with their loads, and the why.`,
+        // The trainer's thinking behind it: the reply can say why the session is built this way in a line.
+        approach: designed.approach,
         design: { model: designed.model, latencyMs: designed.latencyMs },
       },
       cards: [{ type: "workout", title: designed.session.title!, data: cardData }],
@@ -438,7 +440,8 @@ export const generateWorkoutPlan = defineTool({
       priorityDay: week.keepDay,
       startDate,
       days: input.days,
-      brief: { sessionsPerWeek, sessionMinutes: durationMin, focus: input.focus ?? null, place, request: input.request ?? null },
+      // The reading travels with the card: an edit knows what the week is for and what they wanted in it.
+      brief: { sessionsPerWeek, sessionMinutes: durationMin, focus: input.focus ?? null, place, request: input.request ?? null, reading: { purpose: week.reading.purpose, wishes: week.reading.wishes } },
       fit: week.fit,
       sessions,
       rest: Array.from({ length: input.days }, (_, i) => i + 1).filter((d) => !sessions.some((s) => s.day === d)).map((d) => ({ day: d, date: shiftDay(startDate, d - 1) })),
@@ -533,37 +536,90 @@ export const editWorkoutPlan = defineTool({
     const lengthFor = (spec: { durationMin?: number; request?: string; previous?: PlannedSessionInput | null }) => spec.durationMin ?? (spec.request ? lengthAsked(spec.request, spec.previous?.durationMin) : null);
     const askedLengths: number[] = [];
     let brief: Awaited<ReturnType<typeof buildBrief>> | null = null;
+    const reading: { purpose?: string; wishes?: string[] } = card.brief?.reading ?? {};
+    // One designer for every session this edit touches. `theirWords` = false for a day they did not name
+    // (a neighbour adjusted around their change): their words are about another day and would mislead it.
+    const designOne = async (spec: SessionSpec, theirWords = true) => {
+      brief = brief ?? (await buildBrief(ctx.patientId, { today: ctx.today, timeZone: ctx.timeZone, client: ctx.client }));
+      const asked = theirWords ? lengthFor(spec) : null;
+      if (asked) askedLengths.push(asked);
+      const d = await designSession(
+        {
+          durationMin: asked ?? spec.previous?.durationMin ?? card.brief?.sessionMinutes ?? DEFAULT_SESSION_MIN,
+          focus: spec.focus ?? (spec.previous?.focus as (typeof FOCUS)[number] | undefined) ?? null,
+          muscleGroups: spec.muscleGroups ?? spec.previous?.muscleGroups ?? [],
+          place,
+          // Their own words (not only the model's summary of them), and what the week is for — the same picture a new week gets.
+          request: [
+            theirWords ? withTheirWords(spec.request, ctx) : spec.request,
+            reading.purpose ? `The week is for: ${reading.purpose}.` : card.brief?.request ? `The week was asked for as: ${card.brief.request}` : null,
+            reading.wishes?.length ? `Their wishes for the week: ${reading.wishes.join("; ")}.` : null,
+          ]
+            .filter(Boolean)
+            .join(" "),
+          date: spec.date,
+          weekContext: spec.others.map((o) => ({ date: dateOfDay(startDate, o.day), title: o.session.title ?? "", focus: o.session.focus ?? "mixed", muscleGroups: o.session.muscleGroups ?? [] })),
+          caution,
+          previous: spec.previous ? asPrevious(spec.previous) : null,
+        },
+        brief
+      );
+      return { session: d.session, fit: d.fit, assumptions: d.assumptions };
+    };
     let edited: Awaited<ReturnType<typeof applyWeekEdits>>;
     try {
       edited = await applyWeekEdits(
         { startDate, days, priorityDay: Number(card.priorityDay) || null, sessions: (card.sessions as any[]).map((s) => ({ day: s.day, session: s.session, fit: s.fit ?? { ok: true, issues: [] }, assumptions: s.assumptions ?? [] })) },
         input.edits as WeekEdit[],
-        async (spec) => {
-          brief = brief ?? (await buildBrief(ctx.patientId, { today: ctx.today, timeZone: ctx.timeZone, client: ctx.client }));
-          const asked = lengthFor(spec);
-          if (asked) askedLengths.push(asked);
-          const d = await designSession(
-            {
-              durationMin: asked ?? spec.previous?.durationMin ?? card.brief?.sessionMinutes ?? DEFAULT_SESSION_MIN,
-              focus: spec.focus ?? (spec.previous?.focus as (typeof FOCUS)[number] | undefined) ?? null,
-              muscleGroups: spec.muscleGroups ?? spec.previous?.muscleGroups ?? [],
-              place,
-              // The week's original wishes still hold for a new session (their limits, what the week is for).
-              request: [spec.request, card.brief?.request ? `The week was asked for as: ${card.brief.request}` : null].filter(Boolean).join(" "),
-              date: spec.date,
-              weekContext: spec.others.map((o) => ({ date: dateOfDay(startDate, o.day), title: o.session.title ?? "", focus: o.session.focus ?? "mixed", muscleGroups: o.session.muscleGroups ?? [] })),
-              caution,
-              previous: spec.previous ? asPrevious(spec.previous) : null,
-            },
-            brief
-          );
-          return { session: d.session, fit: d.fit, assumptions: d.assumptions };
-        }
+        (spec) => designOne(spec)
       );
     } catch (e) {
       if (e instanceof WeekEditError) return { result: { error: `${e.message}. The week is unchanged. Its sessions: ${(card.sessions as any[]).map((s) => `${moment.utc(s.date, "YYYY-MM-DD").format("ddd").toLowerCase()} "${s.session?.title}"`).join(", ")}.` } };
       throw e;
     }
+    const touched = new Set(edited.designed);
+    const label = (day: number) => moment.utc(dateOfDay(startDate, day), "YYYY-MM-DD").format("ddd D");
+    const redo = async (day: number, request: string, theirWords: boolean) => {
+      const i = edited.sessions.findIndex((x) => x.day === day);
+      const was = edited.sessions[i];
+      const made = await designOne({ request, day, date: dateOfDay(startDate, day), previous: was.session, others: edited.sessions.filter((x) => x.day !== day) }, theirWords);
+      edited.sessions[i] = { ...made, day, session: { ...made.session, plannedFor: dateOfDay(startDate, day) } };
+      touched.add(day);
+      return { was: was.session, now: edited.sessions[i].session };
+    };
+    // 1. Did the days they changed do what they asked? Their latest words against those days; a miss is redesigned once.
+    const latest = (ctx.userWords ?? []).slice(-1);
+    if (edited.designed.length && latest.length) {
+      const dayNames = Array.from({ length: days }, (_, i) => `${i + 1}: ${moment.utc(startDate, "YYYY-MM-DD").add(i, "days").format("ddd D MMM")}`);
+      const checks = await reviewWeek({
+        words: latest,
+        request: (input.edits as any[]).map((e) => e.request).filter(Boolean).join(" ") || null,
+        reading: { purpose: reading.purpose ?? "", said: [], wishes: [], openQuestion: null },
+        sessions: edited.sessions.filter((x) => edited.designed.includes(x.day)).map((x) => ({ day: x.day, session: x.session })),
+        dayNames,
+      }).catch((e) => {
+        console.error("[workouts] edit review failed", e?.message ?? e);
+        return [] as WeekCheck[];
+      });
+      const fixes = new Map<number, string[]>();
+      for (const c of checks) if (!c.met && c.fix) for (const d of c.days) if (edited.designed.includes(d)) fixes.set(d, [...(fixes.get(d) ?? []), c.fix]);
+      for (const [day, fix] of fixes) {
+        const asked = (input.edits as any[]).find((e) => "request" in e && e.request && e.day && dayOfWeekday(startDate, days, e.day) === day)?.request ?? "";
+        const { was, now } = await redo(day, `${fix.join(" ")} ${asked}`.trim(), true);
+        edited.log.push(`"${now.title}" (${label(day)}), checked against what they asked: ${changesLine(sessionChanges(was, now))}`);
+      }
+    }
+    // 2. What the change disturbed next door: the untouched neighbour is adjusted, once.
+    for (const c of neighbourClashes(edited.sessions, [...touched])) {
+      const side = c.fix < c.because ? "the day before" : "the day after";
+      const { was, now } = await redo(
+        c.fix,
+        `${label(c.because)} (${side === "the day before" ? "the next day" : "the day before"}) now also trains ${c.groups.join(" and ")}. This session is ${side} it: keep it as it is, but take the ${c.groups.join(" and ")} work out or make it light — change only the exercises that load ${c.groups.join(" and ")}, and keep its title.`,
+        false
+      );
+      edited.log.push(`"${now.title}" (${label(c.fix)}) adjusted because ${label(c.because)} now trains ${c.groups.join(" and ")}: ${changesLine(sessionChanges(was, now))}`);
+    }
+    edited.designed = [...touched].sort((a, b) => a - b);
     const draftId = randomUUID();
     const before = new Map<WeekSession["session"], any>((card.sessions as any[]).map((s) => [s.session, s]));
     const sessions = edited.sessions.map((s) => {

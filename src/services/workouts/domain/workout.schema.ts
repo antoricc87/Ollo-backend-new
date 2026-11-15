@@ -48,6 +48,13 @@ export const SetInput = z.object({
 });
 export type SetInput = z.infer<typeof SetInput>;
 
+/**
+ * What an exercise does in a designed session (Nov 15 2026). Chosen by the designer, read by the
+ * checks (a supporting exercise is never dosed like a main lift). Kept on cards and drafts; not a
+ * database column yet — it arrives with the in-workout layout.
+ */
+export const ROLES = ["main", "accessory", "core", "conditioning", "mobility"] as const;
+
 export const ExerciseInput = z.object({
   exerciseKey: z.string().min(1).max(80),
   name: z.string().min(1).max(80),
@@ -56,6 +63,7 @@ export const ExerciseInput = z.object({
   notes: z.string().max(300).nullable().optional(),
   loadNote: z.string().max(160).nullable().optional(),
   alternatives: z.array(z.string().max(80)).max(4).optional(),
+  role: z.enum(ROLES).nullable().optional(),
   sets: z.array(SetInput).max(50),
 });
 export type ExerciseInput = z.infer<typeof ExerciseInput>;

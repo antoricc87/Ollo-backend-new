@@ -1595,6 +1595,35 @@ nothing checked the result against the request.
   old pipeline 3.8/5; this design 4.2 (gpt-5.6-luna + 5.4-mini), 4.4 on
   gpt-6-luna with Sol escalation. One run each — ±0.2 is noise.
 
+### A personal trainer, not a template (Nov 15 2026)
+
+User ruling after a simulator test (GTX week + "core in every strength session, glutes on
+Wednesday"): flexibility — the designer acts as their trainer, looks at the whole picture,
+and structures the session rationally; their instructions about structure win. Code only
+catches what no trainer would do.
+- Brief: completed sessions for 28 days (exercises for the last 14), `alreadyPlanned`
+  (next 7 days — a single session fits around the saved week; inside a week the other days
+  come as `weekContext` instead) and `missed` (planned, not done, last 14 days).
+- `SESSION_OUT.approach` is written FIRST (what today is for, how it fits, the structure and
+  why) — returned as `DesignedSession.approach`, given to the reply by generate_workout;
+  not saved. Every exercise has a `role` (main / accessory / core / conditioning / mobility,
+  `ROLES` in workout.schema) and is dosed by role, not one range per session (the old prompt
+  said "strength 3–6 reps" for everything → face pulls 2×5). `role` is on ExerciseInput
+  (cards/drafts) but NOT a DB column yet — it comes with the in-workout layout.
+- checkSession safety nets: warm-up and cool-down present; never a single working set
+  (one long steady effort excepted); a supporting exercise (role accessory, pattern
+  isolation, or `SUPPORTING_ONLY` flyes/face pulls — those even when labelled main) under 8
+  reps is an issue. Tests `tests/workouts/structureCheck.test.ts`.
+- Edits (edit_workout_plan) get the same picture: their words (`withTheirWords`), the week's
+  reading (stored on the card as `brief.reading`); then the edited days are checked against
+  their latest message (`reviewWeek`) and a miss is redesigned once; a heavy UNTOUCHED
+  neighbour that now shares muscle groups with an edited day is adjusted once
+  (`neighbourClashes`, weekEdit.ts; tests `neighbourClash.test.ts`) and the change log says so.
+- Training pack rule: a wish about every session ("always core") → applied to every session
+  it covers, then offered once to remember.
+Next (his call): learned preferences (favourite exercises per muscle, dislikes, standing
+habits from what they say / log / swap), then the in-workout layout from his design.
+
 ### Exercise catalog: variants split, equipment as a list (Nov 11 2026)
 
 Start of the "exercise selection" work (the AI picks exercises from its own

@@ -15,9 +15,9 @@ import { getLLM } from "../../agent/llm/openai.client";
 import { route } from "../../agent/llm/policy";
 import { ACTIVITY_KEYS, activityByKey } from "../domain/activity.catalog";
 import { canonicalExercise, catalogForPlanner, exerciseByKey, muscleGroupsFor, musclesFor, stepDown, type ExerciseDef } from "../domain/exercise.catalog";
-import type { Muscle, Pattern } from "../domain/exercise.details";
+import { SUPPORTING_ONLY, type Muscle, type Pattern } from "../domain/exercise.details";
 import { fmtSets } from "../domain/workout.metrics";
-import { FOCUS, PLACE, PlannedSessionInput, type ExerciseInput } from "../domain/workout.schema";
+import { FOCUS, PLACE, PlannedSessionInput, ROLES, type ExerciseInput } from "../domain/workout.schema";
 import TrainingProfileService from "../model/training_profile.model";
 import WorkoutService from "../model/workouts.model";
 import { generalSessionLine, stopLine, treatmentWording, type TrainingGate } from "../../encounter/domain/trainingGate";
@@ -28,6 +28,7 @@ const MAX_REVISIONS = 2;
 const REPS_SECONDS = 3; // per rep, for the time estimate
 const WARMUP_MIN = 5;
 const COOLDOWN_MIN = 3;
+const RECENT_DAYS = 28;
 
 /* --------------------------------- brief --------------------------------- */
 
@@ -69,10 +70,17 @@ export const buildBrief = async (patientId: string, opts: { today: string; timeZ
   const weightKg = await WorkoutService.bodyWeightKg(patientId);
   const age = patient?.dob ? moment().diff(moment(patient.dob), "years") : null;
 
-  // Last 7 days, completed only — what was trained and when (recovery).
-  const from = moment.tz(opts.today, DAY, tz).subtract(7, "days").toDate();
+  // The last 4 weeks, completed only — what was trained and when (recovery, continuity, how often). A trainer
+  // looks further back than a week (Nov 15 2026); exercises are listed for the last 2 weeks only.
+  const from = moment.tz(opts.today, DAY, tz).subtract(RECENT_DAYS, "days").toDate();
   const to = moment.tz(opts.today, DAY, tz).endOf("day").toDate();
-  const recentRows = await WorkoutService.list(patientId, { from, to }, { limit: 20 });
+  const recentRows = await WorkoutService.list(patientId, { from, to }, { limit: 40 });
+  // Planned and not done: what is still coming (a single session fits around it) and what was missed lately.
+  const ahead = moment.tz(opts.today, DAY, tz).add(7, "days").format(DAY);
+  const back = moment.tz(opts.today, DAY, tz).subtract(14, "days").format(DAY);
+  const yesterday = moment.tz(opts.today, DAY, tz).subtract(1, "days").format(DAY);
+  const [plannedRows, missedRows] = await Promise.all([WorkoutService.listPlanned(patientId, opts.today, ahead), WorkoutService.listPlanned(patientId, back, yesterday)]);
+  const plannedLine = (p: (typeof plannedRows)[number]) => ({ date: p.plannedFor!, title: p.title ?? activityByKey(p.activityKey).label, focus: p.focus ?? null, muscleGroups: p.muscleGroups ?? [] });
   const recent = recentRows.map((s) => ({
     date: moment(s.startedAt).tz(tz).format(DAY),
     daysAgo: moment.tz(opts.today, DAY, tz).diff(moment(s.startedAt).tz(tz).startOf("day"), "days"),
@@ -82,7 +90,7 @@ export const buildBrief = async (patientId: string, opts: { today: string; timeZ
     focus: s.focus,
     durationMin: Math.round(s.durationSec / 60),
     muscleGroups: s.muscleGroups.length ? s.muscleGroups : Array.from(new Set(s.exercises.map((e) => e.muscleGroup).filter((x): x is string => !!x))),
-    exercises: s.exercises.slice(0, 8).map((e) => `${e.name} ${fmtSets(e.sets)}`.trim()),
+    exercises: moment.tz(opts.today, DAY, tz).diff(moment(s.startedAt).tz(tz).startOf("day"), "days") <= 14 ? s.exercises.slice(0, 8).map((e) => `${e.name} ${fmtSets(e.sets)}`.trim()) : [],
   }));
 
   // The user's own last loads per lift — the ONLY source of target kg.
@@ -120,6 +128,10 @@ export const buildBrief = async (patientId: string, opts: { today: string; timeZ
       : null,
     plan: plan ? { outcome: plan.outcome, intensity: plan.intensity, sessionsPerWeek: sessionsTarget } : null,
     recent,
+    /** Sessions already planned for the next 7 days (the saved week) — a single session is designed around them. */
+    alreadyPlanned: plannedRows.map(plannedLine),
+    /** Planned in the last 2 weeks and never done. */
+    missed: missedRows.map(plannedLine),
     lastLoads,
     remembered: memories.map((m) => `[${m.category.toLowerCase()}] ${m.content}`),
     recovery: opts.client ? { sleepMinutesLastNight: opts.client.sleepMinutesLastNight ?? null, hrvMs: opts.client.hrvMs ?? null, restingHeartRate: opts.client.restingHeartRate ?? null } : null,
@@ -131,6 +143,7 @@ export const buildBrief = async (patientId: string, opts: { today: string; timeZ
 const EXERCISE_OUT = {
   type: "object",
   properties: {
+    role: { type: "string", enum: ROLES, description: "What it does today: main (the day's key lift or work), accessory (supporting), core, conditioning, mobility" },
     exerciseKey: { type: ["string", "null"], description: "Catalog key when one fits, else null (then name is a custom exercise)" },
     name: { type: "string" },
     sets: { type: "integer" },
@@ -142,13 +155,14 @@ const EXERCISE_OUT = {
     loadNote: { type: ["string", "null"], description: "How to pick the weight when targetKg is null — SHORT, under 8 words ('a weight you could do 12 with'); null when targetKg is set" },
     alternatives: { type: "array", items: { type: "string" }, description: "0–2 catalog keys to swap in if the kit is busy or missing" },
   },
-  required: ["exerciseKey", "name", "sets", "reps", "repsMax", "durationSec", "targetKg", "restSec", "loadNote", "alternatives"],
+  required: ["role", "exerciseKey", "name", "sets", "reps", "repsMax", "durationSec", "targetKg", "restSec", "loadNote", "alternatives"],
   additionalProperties: false,
 } as const;
 
 const SESSION_OUT = {
   type: "object",
   properties: {
+    approach: { type: "string", description: "Written FIRST, before any exercise: your thinking as their trainer — 3–5 short sentences (see the system message)" },
     title: { type: "string", description: "Short: 'Upper body strength', 'Easy run', 'Hotel-room conditioning'" },
     activityKey: { type: "string", enum: ACTIVITY_KEYS },
     focus: { type: "string", enum: FOCUS },
@@ -162,11 +176,12 @@ const SESSION_OUT = {
     exercises: { type: "array", items: EXERCISE_OUT },
     notes: { type: ["string", "null"], description: "Anything the user should know (pace, intensity cue, what to skip if short on time)" },
   },
-  required: ["title", "activityKey", "focus", "place", "durationMin", "muscleGroups", "why", "warmup", "cooldown", "distanceKm", "exercises", "notes"],
+  required: ["approach", "title", "activityKey", "focus", "place", "durationMin", "muscleGroups", "why", "warmup", "cooldown", "distanceKm", "exercises", "notes"],
   additionalProperties: false,
 } as const;
 
 type SessionOut = {
+  approach: string;
   title: string;
   activityKey: string;
   focus: (typeof FOCUS)[number];
@@ -177,16 +192,39 @@ type SessionOut = {
   warmup: string[];
   cooldown: string[];
   distanceKm: number | null;
-  exercises: { exerciseKey: string | null; name: string; sets: number; reps: number | null; repsMax: number | null; durationSec: number | null; targetKg: number | null; restSec: number; loadNote: string | null; alternatives: string[] }[];
+  exercises: { role: (typeof ROLES)[number]; exerciseKey: string | null; name: string; sets: number; reps: number | null; repsMax: number | null; durationSec: number | null; targetKg: number | null; restSec: number; loadNote: string | null; alternatives: string[] }[];
   notes: string | null;
 };
 
-const SYSTEM = `You are a careful strength & conditioning coach designing ONE session for a specific person. Rules:
+/**
+ * A personal trainer, not a template (Nov 15 2026, user ruling): the designer looks at the whole picture,
+ * thinks first (`approach`), and builds the session the way a good trainer would — structure is its call,
+ * and the person's own instructions about structure win. Code only catches what no trainer would do
+ * (checkSession: a single working set, a supporting exercise at strength reps, no warm-up or cool-down).
+ */
+const SYSTEM = `You are this person's personal trainer, designing ONE session for them. Look at the whole picture before choosing anything.
+
+First write \`approach\` (3–5 short sentences, plain words): what today is for; how it fits around what comes before and after it (weekContext, alreadyPlanned, recentSessions, missed) and their recovery; what their record, goals, limits and what you remember about them change; then the structure you chose and why. If their words say how they want the session built, that structure wins — say so.
+
+Then build it the way a good trainer would. The structure is your call; a usual shape is:
+- warm-up for TODAY's work: a few minutes of easy cardio, then moving drills for the joints and muscles of the day (save long held stretches for the end); for a heavy first lift, say in the warm-up to ramp up with 2–3 lighter sets.
+- main work first, while they are fresh (the day's key lifts or efforts), then supporting work, then core where it fits or is asked for, an optional short finisher if time and the goal allow.
+- cool-down: easy movement and stretches for what was trained.
+Conditioning, endurance and mobility days follow the same idea with their own parts (e.g. warm-up → intervals → core → cool-down).
+
+Each exercise has a role, and its dose follows its role and the day's focus — never one rep range for the whole session:
+- main: strength 3–6 reps, 2–4 min rest; hypertrophy 6–12 reps, 90–120 s; mixed in between.
+- accessory (supporting, incl. every one-joint move, flyes, face pulls, curls, calf raises, leg curls): 8–15 reps, 60–90 s.
+- core: 8–15 controlled reps or 20–45 s holds; pick what the day and their needs call for (anti-extension, anti-rotation, side work, flexion), not always the same move.
+- conditioning: intervals or timed work, short rests; mobility: slow, timed holds.
+- at least 2 working sets per exercise; an exercise worth doing once is worth 2 sets, otherwise drop it.
+Continuity: keep the main lifts consistent with what they have been doing (lastLoads, recentSessions) so progress shows; vary supporting work.
+
+Rules:
 - Honour the ask exactly: duration (the whole session, warm-up and rests included), focus, muscle groups, place. Only equipment they have (bodyweight always counts; a gym has everything).
 - Pick exercises from the catalog by key; a custom exercise is allowed when nothing fits (exerciseKey null).
-- Sets/reps/rest fit the focus: strength 3–6 reps, 2–4 min rest; hypertrophy 6–12 reps, 60–120 s; conditioning/endurance intervals or timed work, short rests; mobility slow, timed holds.
 - Loads: targetKg ONLY for exercises present in lastLoads, as a small progression on that history (same weight or +2.5 kg / +5 %); everything else gets targetKg null and a loadNote telling them how to pick a weight. Never invent a kilogram.
-- Recovery: avoid heavy work on muscle groups trained hard in the last 48 h unless the ask names them; a short night or low HRV → keep it moderate and say so in why.
+- Recovery: avoid heavy work on muscle groups trained hard in the last 48 h (or planned hard the next day) unless the ask names them; a short night or low HRV → keep it moderate and say so in why.
 - Conditions/medications on record shape intensity conservatively and are stated as the reason in why (e.g. "your record lists hypertension, so no breath-holding maximal lifts") — never advice about the condition itself. If limitations are given, respect them literally and name what you avoided.
 - Experience: new → simple machine/bodyweight patterns, more coaching cues; experienced → compound barbell work first.
 - Keep it doable: 4–7 exercises for 45 min strength, fewer for shorter; supersets are fine, say so in notes. Warm-up 2–4 lines, cool-down 1–3 lines.
@@ -243,6 +281,22 @@ export const checkSession = (s: PlannedSessionInput, ask: DesignAsk, brief: Desi
     if (Math.abs(est - ask.durationMin) > tol) issues.push(`estimated ${est} min of work vs ${ask.durationMin} min asked — ${est > ask.durationMin ? "cut sets/exercises or rest" : "add a set or an exercise"}`);
   }
   if (s.durationMin !== ask.durationMin) s.durationMin = ask.durationMin;
+
+  // What no trainer would do, whatever structure was chosen (Nov 15 2026). Everything else is the designer's call.
+  if ((s.exercises?.length ?? 0) > 0) {
+    if (!(s.warmup ?? []).some((w) => w.trim())) issues.push("no warm-up — add one for today's work");
+    if (!(s.cooldown ?? []).some((w) => w.trim())) issues.push("no cool-down — add easy movement and stretches for what was trained");
+  }
+  for (const e of s.exercises ?? []) {
+    const def = exerciseByKey(e.exerciseKey);
+    const work = (e.sets ?? []).filter((set) => !set.isWarmup);
+    const steady = def?.pattern === "cardio" || work.some((set) => (set.durationSec ?? 0) >= 300); // one 20-minute run is one set
+    if (work.length === 1 && !steady) issues.push(`${e.name} has a single working set — give it at least 2, or drop it`);
+    const supporting = e.role === "accessory" || def?.pattern === "isolation" || SUPPORTING_ONLY.has(e.exerciseKey);
+    const low = work.find((set) => set.durationSec == null && set.targetReps != null && set.targetReps < 8);
+    // A curl can be the day's main lift on an arm day; a face pull or a fly never trains heavy.
+    if (low && (SUPPORTING_ONLY.has(e.exerciseKey) || (supporting && e.role !== "main"))) issues.push(`${e.name} at ${low.targetReps} reps — a supporting exercise works at 8–15 reps`);
+  }
 
   // level: someone new — or a session kept lighter by a check-in — never gets an advanced lift. Stepped down the
   // `easier` chain in code (no redesign, the card says so); with no easier version the reviser picks another.
@@ -369,6 +423,7 @@ const toPlanned = (out: SessionOut, ask: DesignAsk): PlannedSessionInput => {
       equipment: c.def?.equipment ?? null,
       loadNote: fit(e.loadNote, 160),
       alternatives: (e.alternatives ?? []).filter((k) => canonicalExercise(k, k).def).slice(0, 2),
+      role: (ROLES as readonly string[]).includes(e.role) ? e.role : null,
       sets: Array.from({ length: n }, () => ({ targetReps: e.reps, targetRepsMax: e.repsMax ?? null, targetKg: e.targetKg, restSec: e.restSec, durationSec: e.durationSec })),
     };
   });
@@ -389,7 +444,8 @@ const toPlanned = (out: SessionOut, ask: DesignAsk): PlannedSessionInput => {
   });
 };
 
-export type DesignedSession = { session: PlannedSessionInput; fit: { ok: boolean; issues: string[]; revised: boolean }; assumptions: string[]; model: string; latencyMs: number };
+/** `approach` = the trainer's thinking behind the session (not saved; the reply may use it). */
+export type DesignedSession = { session: PlannedSessionInput; approach: string; fit: { ok: boolean; issues: string[]; revised: boolean }; assumptions: string[]; model: string; latencyMs: number };
 
 export const designSession = async (ask: DesignAsk, brief: DesignBrief, opts: { model?: string } = {}): Promise<DesignedSession> => {
   const llm = getLLM();
@@ -414,6 +470,9 @@ export const designSession = async (ask: DesignAsk, brief: DesignBrief, opts: { 
         training: brief.training,
         plan: brief.plan,
         recentSessions: brief.recent,
+        // Inside a week the other days come as ask.weekContext; on its own, the saved week is what it fits around.
+        ...(ask.weekContext ? {} : { alreadyPlanned: brief.alreadyPlanned.filter((p) => p.date !== ask.date) }),
+        missed: brief.missed,
         lastLoads: brief.lastLoads,
         remembered: brief.remembered,
         recovery: brief.recovery,
@@ -438,7 +497,7 @@ export const designSession = async (ask: DesignAsk, brief: DesignBrief, opts: { 
       revised = true;
     }
   }
-  return { session, fit: { ok: check.issues.length === 0, issues: check.issues, revised }, assumptions: check.assumptions, model, latencyMs: Date.now() - t0 };
+  return { session, approach: out.approach ?? "", fit: { ok: check.issues.length === 0, issues: check.issues, revised }, assumptions: check.assumptions, model, latencyMs: Date.now() - t0 };
 };
 
 /* ---------------------------------- week --------------------------------- */

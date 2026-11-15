@@ -3,12 +3,12 @@ import { canonicalExercise } from "../../src/services/workouts/domain/exercise.c
 
 const ex = (key: string, targetKg: number | null = null) => {
   const c = canonicalExercise(key, key);
-  return { exerciseKey: c.key, name: c.name, muscleGroup: c.def?.muscleGroup ?? null, equipment: c.def?.equipment ?? null, sets: [{ targetReps: 10, targetKg, restSec: 60 }] };
+  return { exerciseKey: c.key, name: c.name, muscleGroup: c.def?.muscleGroup ?? null, equipment: c.def?.equipment ?? null, sets: [1, 2, 3].map(() => ({ targetReps: 10, targetKg, restSec: 60 })) };
 };
 const brief = (experience: string | null = "some") =>
   ({ training: { place: "gym", equipment: [], experience }, recent: [], lastLoads: {}, person: {}, plan: null, remembered: [], recovery: null }) as unknown as DesignBrief;
 const run = (keys: string[], ask: Partial<DesignAsk> = {}, experience: string | null = "some", focus = "strength") => {
-  const session: any = { title: "t", focus, place: "gym", exercises: keys.map((k) => ex(k)) };
+  const session: any = { title: "t", focus, place: "gym", warmup: ["easy bike"], cooldown: ["stretch"], exercises: keys.map((k) => ex(k)) };
   const out = checkSession(session, { durationMin: 10, date: "2026-11-11", ...ask }, brief(experience));
   return { session, issues: out.issues.filter((i) => !/^estimated/.test(i)), assumptions: out.assumptions };
 };
