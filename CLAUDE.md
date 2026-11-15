@@ -1619,6 +1619,13 @@ catches what no trainer would do.
   their latest message (`reviewWeek`) and a miss is redesigned once; a heavy UNTOUCHED
   neighbour that now shares muscle groups with an edited day is adjusted once
   (`neighbourClashes`, weekEdit.ts; tests `neighbourClash.test.ts`) and the change log says so.
+- Second sim pass (same day): `estimateMinutes` calibrated (60 s set-up per exercise, 2 ramp-up
+  sets before each main lift) — a 30-min label over 45 min of sets now fails; CHANGE_RULES:
+  shorter = fewer supporting sets, then drop a supporting exercise, main lifts kept; the week
+  review judges length on `estimatedMinutes` and time of day on `startTime` (the layout now
+  sets `startTime` from "early morning" etc.; edits keep it). A class name ("GTX") is the
+  session's NAME — designed as exercises of the kind described (user ruling). Each card
+  session carries `approach` (hidden) for review.
 - Training pack rule: a wish about every session ("always core") → applied to every session
   it covers, then offered once to remember.
 Next (his call): learned preferences (favourite exercises per muscle, dislikes, standing

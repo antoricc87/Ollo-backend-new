@@ -430,7 +430,7 @@ export const generateWorkoutPlan = defineTool({
     const notes = caution ? [week.notes, generalSessionLine(caution, "week"), stopLine(caution)].filter(Boolean).join("\n") : week.notes;
     const draftId = randomUUID();
     const active = await WorkoutPlanService.getActive(ctx.patientId);
-    const sessions = week.sessions.map((s) => ({ day: s.day, date: s.session.plannedFor, session: s.session, display: sessionDisplay(s.session), fit: s.fit, assumptions: s.assumptions }));
+    const sessions = week.sessions.map((s) => ({ day: s.day, date: s.session.plannedFor, session: s.session, display: sessionDisplay(s.session), fit: s.fit, assumptions: s.assumptions, approach: s.approach }));
     const cardData = {
       draftId,
       title: week.title,
@@ -564,12 +564,14 @@ export const editWorkoutPlan = defineTool({
         },
         brief
       );
-      return { session: d.session, fit: d.fit, assumptions: d.assumptions };
+      // A redesigned day keeps its start time ("early morning" was said about the day, not the exercises).
+      if (spec.previous?.startTime && !d.session.startTime) d.session.startTime = spec.previous.startTime;
+      return { session: d.session, fit: d.fit, assumptions: d.assumptions, approach: d.approach };
     };
     let edited: Awaited<ReturnType<typeof applyWeekEdits>>;
     try {
       edited = await applyWeekEdits(
-        { startDate, days, priorityDay: Number(card.priorityDay) || null, sessions: (card.sessions as any[]).map((s) => ({ day: s.day, session: s.session, fit: s.fit ?? { ok: true, issues: [] }, assumptions: s.assumptions ?? [] })) },
+        { startDate, days, priorityDay: Number(card.priorityDay) || null, sessions: (card.sessions as any[]).map((s) => ({ day: s.day, session: s.session, fit: s.fit ?? { ok: true, issues: [] }, assumptions: s.assumptions ?? [], approach: s.approach })) },
         input.edits as WeekEdit[],
         (spec) => designOne(spec)
       );
@@ -626,7 +628,7 @@ export const editWorkoutPlan = defineTool({
       const date = dateOfDay(startDate, s.day);
       // An untouched or moved session keeps its display rows as they were.
       const kept = [...before.values()].find((b) => b.session === s.session || (b.day !== s.day && JSON.stringify({ ...b.session, plannedFor: null }) === JSON.stringify({ ...s.session, plannedFor: null })));
-      return { day: s.day, date, session: s.session, display: kept?.display ?? sessionDisplay(s.session), fit: s.fit, assumptions: s.assumptions };
+      return { day: s.day, date, session: s.session, display: kept?.display ?? sessionDisplay(s.session), fit: s.fit, assumptions: s.assumptions, approach: s.approach };
     });
     // One length asked for, and every session now at it → that is the week's length (and worth offering to keep). One session made longer is not.
     const weekLength = askedLengths.length && sessions.every((s) => s.session.durationMin === askedLengths[0]) ? askedLengths[0] : null;

@@ -29,6 +29,8 @@ const REPS_SECONDS = 3; // per rep, for the time estimate
 const WARMUP_MIN = 5;
 const COOLDOWN_MIN = 3;
 const RECENT_DAYS = 28;
+const SETUP_SEC = 60; // per exercise: set-up and moving between stations
+const RAMP_SETS = 2; // lighter sets before a main lift
 
 /* --------------------------------- brief --------------------------------- */
 
@@ -211,6 +213,7 @@ Then build it the way a good trainer would. The structure is your call; a usual 
 - main work first, while they are fresh (the day's key lifts or efforts), then supporting work, then core where it fits or is asked for, an optional short finisher if time and the goal allow.
 - cool-down: easy movement and stretches for what was trained.
 Conditioning, endurance and mobility days follow the same idea with their own parts (e.g. warm-up → intervals → core → cool-down).
+A class or a named workout ("GTX", "bootcamp", "HIIT") is the NAME of the session: design it as exercises of that kind, from what they said it is ("a mix of conditioning and strength"), never as one exercise called the class.
 
 Each exercise has a role, and its dose follows its role and the day's focus — never one rep range for the whole session:
 - main: strength 3–6 reps, 2–4 min rest; hypertrophy 6–12 reps, 90–120 s; mixed in between.
@@ -244,7 +247,8 @@ CAUTION — the ask carries \`caution\`: this person has a symptom on record (ca
 
 /** Added when the ask carries `previous`: the person asked to change one session of a week they already have. */
 const CHANGE_RULES = `
-CHANGE — the ask carries \`previous\`: the session they already have for this day. ask.request says what to change. Keep every exercise, set, rep, rest and load the request does not touch, in the same order, with the same exerciseKey; add, remove or alter only what it asks for (a longer session = more sets or one or two more exercises, not a new session). Keep the title unless the session's purpose changes.`;
+CHANGE — the ask carries \`previous\`: the session they already have for this day. ask.request says what to change. Keep every exercise, set, rep, rest and load the request does not touch, in the same order, with the same exerciseKey; add, remove or alter only what it asks for. Keep the title unless the session's purpose changes.
+A different LENGTH changes the work, not just the label (a 45 → 30 minute edit once kept every set and said "move briskly"): shorter = first fewer sets on supporting exercises, then drop the least important supporting exercise; keep the main lifts. Longer = more sets or one or two more exercises, not a new session.`;
 
 /** A planned session as the \`previous\` a change request is designed against. */
 export const asPrevious = (s: PlannedSessionInput): NonNullable<DesignAsk["previous"]> => ({
@@ -254,11 +258,17 @@ export const asPrevious = (s: PlannedSessionInput): NonNullable<DesignAsk["previ
   exercises: (s.exercises ?? []).map((e) => ({ exerciseKey: e.exerciseKey, name: e.name, sets: e.sets?.length ?? 0, reps: e.sets?.[0]?.targetReps ?? null, repsMax: e.sets?.[0]?.targetRepsMax ?? null, durationSec: e.sets?.[0]?.durationSec ?? null, restSec: e.sets?.[0]?.restSec ?? null, targetKg: e.sets?.[0]?.targetKg ?? null })),
 });
 
-const estimateMinutes = (s: PlannedSessionInput) => {
+/**
+ * Minutes the session really takes. Calibrated Nov 15 2026: six exercises × 3 sets with 1–2.5 min rests came
+ * out at 37 min and passed as both "45" and "30" — set-up was 45 s and the warm-up sets before a main lift
+ * were not counted. Now: 60 s set-up per exercise, and 2 lighter ramp-up sets before each main lift.
+ */
+export const estimateMinutes = (s: PlannedSessionInput) => {
   let sec = (WARMUP_MIN + COOLDOWN_MIN) * 60;
   for (const e of s.exercises ?? []) {
     for (const set of e.sets ?? []) sec += set.durationSec ?? (set.targetReps ?? 10) * REPS_SECONDS;
-    sec += Math.max(0, (e.sets?.length ?? 1) - 1) * (e.sets?.[0]?.restSec ?? 60) + 45; // set-up / transition
+    sec += Math.max(0, (e.sets?.length ?? 1) - 1) * (e.sets?.[0]?.restSec ?? 60) + SETUP_SEC;
+    if (e.role === "main" && !e.sets?.[0]?.durationSec) sec += RAMP_SETS * ((e.sets?.[0]?.targetReps ?? 5) * REPS_SECONDS + 60);
   }
   return Math.round(sec / 60);
 };
@@ -520,7 +530,7 @@ export type WeekAsk = {
   caution?: DesignCaution | null;
 };
 
-type WeekOut = { reading?: WeekReading; title: string; notes: string; keepDay: number; sessions: { day: number; title: string; activityKey: string; focus: (typeof FOCUS)[number]; durationMin: number; muscleGroups: string[]; why: string; mustRespect?: string }[] };
+type WeekOut = { reading?: WeekReading; title: string; notes: string; keepDay: number; sessions: { day: number; title: string; activityKey: string; focus: (typeof FOCUS)[number]; durationMin: number; muscleGroups: string[]; why: string; mustRespect?: string; startTime?: string | null }[] };
 
 /**
  * UNDERSTAND FIRST, THEN LAY OUT (Oct 19 2026, user ruling). The layout used to
@@ -546,6 +556,8 @@ Then lay out the week so every point of the reading is honoured:
 - Session titles are SHORT and in sentence case ("Upper body and core", "Lower back recovery"), never Title Case; put the emphasis in muscleGroups.
 - why = one line per session, second person, saying which point(s) of the reading this day carries.
 - mustRespect = what THIS day's designer has to respect, from the reading: where they are and what equipment exists that day, how hard it may be and why (what comes before and after it), what to leave out. Another coach designs the exercises from this line alone, so be concrete. Empty string when nothing is special.
+- A class or named workout they mention ("GTX", "spin", "bootcamp") is the name of that day's session: keep the name in the title and lay it out as a session of the kind they described — it gets exercises like any other day.
+- startTime: HH:mm when their words give a time of day for that session ("early morning" → 06:30, "after work" → 18:00, a clock time as said), else null.
 - Respect limitations, equipment and place.
 - Output ONLY the schema.`;
 
@@ -582,8 +594,9 @@ const WEEK_OUT = {
           muscleGroups: { type: "array", items: { type: "string" } },
           why: { type: "string" },
           mustRespect: { type: "string" },
+          startTime: { type: ["string", "null"], description: "HH:mm when their words give a time of day for it, else null" },
         },
-        required: ["day", "title", "activityKey", "focus", "durationMin", "muscleGroups", "why", "mustRespect"],
+        required: ["day", "title", "activityKey", "focus", "durationMin", "muscleGroups", "why", "mustRespect", "startTime"],
         additionalProperties: false,
       },
     },
@@ -598,6 +611,7 @@ export type WeekReading = { purpose: string; said: string[]; wishes: string[]; o
 
 const REVIEW_SYSTEM = `You check a designed training week against what the person asked for. You get their own words, the coach's reading of them (wishes), and the week as designed (each day with its exercises).
 For EACH wish, and for anything else their words clearly ask that the wishes missed, say whether the week honours it. Be literal and fair: judge only what they asked, not your own preferences, and do not invent wishes. A wish that is honoured needs no fix.
+A length wish is judged on estimatedMinutes (what the sets really take, within about 5 minutes), not on the minutes label; a time-of-day wish on startTime.
 For one that is not: days = the day numbers that must change (only days that have a session), fix = one short instruction for redesigning those days (what to add, remove or change), written so a coach can apply it to that one session.`;
 
 const REVIEW_OUT = {
@@ -630,6 +644,9 @@ export const reviewWeek = async (
     title: x.session.title,
     focus: x.session.focus,
     minutes: x.session.durationMin,
+    // What the work really takes — a label of 30 over 45 minutes of sets is not 30 minutes.
+    estimatedMinutes: estimateMinutes(x.session),
+    startTime: x.session.startTime ?? null,
     warmup: x.session.warmup,
     exercises: (x.session.exercises ?? []).map((e) => `${e.name} ${(e.sets ?? []).length}×${e.sets?.[0]?.targetReps ?? (e.sets?.[0]?.durationSec ? `${e.sets[0].durationSec}s` : "")}${e.loadNote ? ` (${e.loadNote})` : ""}`),
     cooldown: x.session.cooldown,
@@ -751,6 +768,7 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
       );
       d.session.title = s.title.slice(0, 80);
       d.session.why = d.session.why ?? s.why;
+      if (s.startTime && /^\d{2}:\d{2}$/.test(s.startTime)) d.session.startTime = s.startTime;
       return { ...d, day: s.day };
     })
   );
@@ -787,6 +805,7 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
             { model }
           );
           again.session.title = was.session.title;
+          again.session.startTime = was.session.startTime ?? null;
           designed[i] = { ...again, day };
         })
       );

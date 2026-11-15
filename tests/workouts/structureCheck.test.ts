@@ -46,3 +46,19 @@ describe("structure safety nets", () => {
     expect(issues([ex("back_squat", { reps: 4, role: "main" }), ex("romanian_deadlift", { reps: 6 })])).toEqual([]);
   });
 });
+
+describe("time: what the sets really take", () => {
+  // The Nov 15 2026 Wednesday: 6 exercises × 3 sets, labelled 30 min after an edit, every set kept.
+  const wednesday = [
+    ex("back_squat", { reps: 4, role: "main" }),
+    ex("romanian_deadlift", { reps: 5, role: "main" }),
+    ex("hip_thrust", { reps: 8, role: "accessory" }),
+    ex("leg_curl", { reps: 10, role: "accessory" }),
+    ex("hip_abduction", { reps: 12, role: "accessory" }),
+    ex("calf_raise", { reps: 10, role: "accessory" }),
+  ].map((e, i) => ({ ...e, sets: e.sets.map((s) => ({ ...s, restSec: [150, 120, 75, 60, 60, 60][i] })) }));
+  const est = (minutes: number) => checkSession({ title: "t", focus: "strength", place: "gym", warmup: ["w"], cooldown: ["c"], exercises: wednesday.map((e) => ({ ...e, sets: e.sets.map((s) => ({ ...s })) })) } as any, { durationMin: minutes, date: "2026-11-18" }, brief).issues.filter((i) => /^estimated/.test(i));
+
+  it("fits a 45-minute slot", () => expect(est(45)).toEqual([]));
+  it("is not a 30-minute session", () => expect(est(30)[0]).toMatch(/^estimated 4\d min of work vs 30 min asked — cut/));
+});

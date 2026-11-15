@@ -18,7 +18,8 @@ type Weekday = (typeof WEEKDAYS)[number];
 type Focus = (typeof FOCUS)[number];
 
 /** One session of a week draft, as the `workout_plan` card carries it (display is rebuilt by the caller). */
-export type WeekSession = { day: number; session: PlannedSessionInput; fit: { ok: boolean; issues: string[]; revised?: boolean }; assumptions: string[] };
+/** `approach` = the trainer's thinking behind a designed session — kept on the card for review, never shown. */
+export type WeekSession = { day: number; session: PlannedSessionInput; fit: { ok: boolean; issues: string[]; revised?: boolean }; assumptions: string[]; approach?: string };
 
 export type WeekDraftState = { startDate: string; days: number; priorityDay: number | null; sessions: WeekSession[] };
 
