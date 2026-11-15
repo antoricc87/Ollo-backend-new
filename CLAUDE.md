@@ -1633,6 +1633,10 @@ catches what no trainer would do.
   name is honoured by a session with that title; reading.wishes = only what THEY asked.
   The card's strip shows the Mon–Sun week of day 1 only (app; a mid-week start looks
   half-empty — his design call).
+- Fourth sim pass: a default session length is never a wish (reading) and is judged by the
+  review only when `lengthSaid` (week: `minutesFixed`; edit: a length asked); `keepDay` = the
+  session that does most for the week, never a class they attend anyway;
+  update_training_profile is not proposed beside a week they asked for, nor filled with guesses.
 - Training pack rule: a wish about every session ("always core") → applied to every session
   it covers, then offered once to remember.
 Next (his call): learned preferences (favourite exercises per muscle, dislikes, standing

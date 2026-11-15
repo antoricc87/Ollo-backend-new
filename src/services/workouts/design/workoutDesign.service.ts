@@ -546,7 +546,7 @@ const WEEK_SYSTEM = `You are an experienced coach laying out ONE training week f
 First write \`reading\` — think it through before any day is placed:
 - purpose: one line, what this week is for, in their terms.
 - said: each thing their words or their record tell you about their body, what they did recently, and their schedule — each followed by what it means for THIS week, day by day where it matters (what needs time to recover and roughly how long, which days are fresher, what is fixed). Reason it out like a coach would; there is no rule table.
-- wishes: every wish THEY expressed, as a short checkable point — what, which days or which part of the week, how often, how long, and anything they want in EVERY session. Only what they asked: your own advice and what their record implies belong in \`said\`, not here.
+- wishes: every wish THEY expressed, as a short checkable point — what, which days or which part of the week, how often, how long, and anything they want in EVERY session. Only what they asked: your own advice and what their record implies belong in \`said\`, not here. A session length is a wish only when ask.minutesFixed is true (they said it); otherwise sessionMinutes is a default — never a wish.
 - openQuestion: null, unless their words can honestly be read in two ways that would give clearly different weeks and nothing in their words, the conversation or the record settles it — then ONE short, plain question that settles it. Never ask about length, place, equipment, days or how many sessions (those come in the ask). When ask.mayAsk is false it is always null: take the more careful reading and say it in purpose.
 
 Then lay out the week so every point of the reading is honoured:
@@ -580,7 +580,7 @@ const WEEK_OUT = {
     },
     title: { type: "string", description: "e.g. 'Upper / lower week', 'Three full-body sessions'" },
     notes: { type: "string", description: "2 short lines about the week: what it builds, what to do if a day is missed" },
-    keepDay: { type: "integer", description: "The one day to keep if they can only do one — the card tags it" },
+    keepDay: { type: "integer", description: "The one day to keep if they can only do one — the card tags it. The session that does most for what the week is for; never a class or fixed appointment they will attend anyway" },
     sessions: {
       type: "array",
       items: {
@@ -612,7 +612,7 @@ export type WeekReading = { purpose: string; said: string[]; wishes: string[]; o
 const REVIEW_SYSTEM = `You check a designed training week against what the person asked for. You get their own words, the coach's reading of them (wishes), and the week as designed (each day with its exercises).
 For EACH wish, and for anything else THEIR WORDS clearly ask that the wishes missed, say whether the week honours it. Be literal and fair: judge only what they asked — never your own advice, a note about their record, or anything they did not say (no "keep it adaptable to their equipment" unless they asked). A wish that is honoured needs no fix.
 A class or named workout ("GTX", "bootcamp") is the NAME of a session: a session with that title, made of exercises of the kind they described, honours it — never ask for it to be "a class" instead.
-A length wish is judged on estimatedMinutes (what the sets really take, within about 5 minutes), not on the minutes label; a time-of-day wish on startTime.
+Judge a length only when lengthSaid is true (otherwise the minutes are a default, not something they asked); a length wish is judged on estimatedMinutes (what the sets really take, within about 5 minutes), not on the minutes label; a time-of-day wish on startTime.
 For one that is not: days = the day numbers that must change (only days that have a session), fix = one short instruction for redesigning those days (what to add, remove or change), written so a coach can apply it to that one session.`;
 
 const REVIEW_OUT = {
@@ -636,7 +636,7 @@ export type WeekCheck = { wish: string; met: boolean; days: number[]; fix: strin
 
 /** Which designed days miss a wish, and how to fix them. Model judgement, applied once. */
 export const reviewWeek = async (
-  input: { words: string[]; request: string | null; reading: WeekReading; sessions: { day: number; session: PlannedSessionInput }[]; dayNames: string[] },
+  input: { words: string[]; request: string | null; reading: WeekReading; sessions: { day: number; session: PlannedSessionInput }[]; dayNames: string[]; lengthSaid?: boolean },
   opts: { model?: string } = {}
 ): Promise<WeekCheck[]> => {
   const week = input.sessions.map((x) => ({
@@ -656,7 +656,7 @@ export const reviewWeek = async (
     task: "review",
     ...(opts.model ? { model: opts.model } : {}),
     system: REVIEW_SYSTEM,
-    user: JSON.stringify({ theirWords: input.words.length ? input.words : [input.request ?? ""], wishes: input.reading.wishes, said: input.reading.said, week }),
+    user: JSON.stringify({ theirWords: input.words.length ? input.words : [input.request ?? ""], wishes: input.reading.wishes, said: input.reading.said, lengthSaid: !!input.lengthSaid, week }),
     schema: REVIEW_OUT,
     schemaName: "workout_week_review",
   });
@@ -777,7 +777,7 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
   // The week against their words: a missed wish redesigns only the days it names, once.
   let unmet: string[] = [];
   if (reading.wishes.length) {
-    const review = (list: typeof designed) => reviewWeek({ words: ask.words ?? [], request: ask.request ?? null, reading, sessions: list.map((d) => ({ day: d.day, session: d.session })), dayNames }, opts.model ? { model: opts.model } : {}).catch((e) => {
+    const review = (list: typeof designed) => reviewWeek({ words: ask.words ?? [], request: ask.request ?? null, reading, sessions: list.map((d) => ({ day: d.day, session: d.session })), dayNames, lengthSaid: !!ask.minutesFixed }, opts.model ? { model: opts.model } : {}).catch((e) => {
       console.error("[workouts] week review failed", e?.message ?? e);
       return [] as WeekCheck[];
     });

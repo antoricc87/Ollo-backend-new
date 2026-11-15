@@ -600,6 +600,8 @@ export const editWorkoutPlan = defineTool({
         reading: { purpose: reading.purpose ?? "", said: [], wishes: [], openQuestion: null },
         sessions: edited.sessions.filter((x) => edited.designed.includes(x.day)).map((x) => ({ day: x.day, session: x.session })),
         dayNames,
+        // "Make Wednesday 30 minutes" is a length they asked for; otherwise the minutes are not theirs to judge.
+        lengthSaid: askedLengths.length > 0,
       }).catch((e) => {
         console.error("[workouts] edit review failed", e?.message ?? e);
         return [] as WeekCheck[];
@@ -747,7 +749,7 @@ export const moveWorkout = defineTool({
 export const updateTrainingProfile = defineTool({
   name: "update_training_profile",
   description:
-    "Remember how the user trains, structurally: where (gym/home/outdoor/mixed), equipment they have, experience, usual session length, preferred days and time, and any limitation IN THEIR OWN WORDS (a sore knee, 'no overhead pressing'). Only the fields you pass change. Use it when they tell you these things, or after you had to ask. The user confirms in the app. Never turn a symptom into advice — a limitation is repeated, not interpreted.",
+    "Remember how the user trains, structurally: where (gym/home/outdoor/mixed), equipment they have, experience, usual session length, preferred days and time, and any limitation IN THEIR OWN WORDS (a sore knee, 'no overhead pressing'). Only the fields you pass change. Use it when they ask to keep how they train, or offer it once right after they corrected an assumption on a card. Days, times and lengths said for ONE week are that week's plan, not their profile — never propose it alongside a week they just asked for, and never fill a field with a guess (an assumed 06:00 for 'early morning'). The user confirms in the app. Never turn a symptom into advice — a limitation is repeated, not interpreted.",
   schema: z.object({
     place: z.enum(["gym", "home", "outdoor", "mixed"]).optional(),
     equipment: z.array(z.enum(EQUIPMENT)).max(20).optional().describe("Full list they have (replaces the previous list)"),
