@@ -2,6 +2,7 @@
  * What each catalog exercise IS, beyond its name and kit — the facts code needs
  * to judge a designed session instead of trusting the model's choice:
  *
+ * - category: strength / core / cardio / mobility (from the pattern, see CATEGORIES).
  * - pattern: the kind of movement, whatever the equipment (a push-up and a bench
  *   press are both a horizontal push). Balance checks read it.
  * - level: skill and practice it takes. Someone new never gets an advanced lift.
@@ -44,9 +45,21 @@ export const MUSCLES = [
 ] as const;
 export type Muscle = (typeof MUSCLES)[number];
 
-export type ExerciseDetails = { pattern: Pattern; level: Level; primary: Muscle[]; secondary: Muscle[]; easier?: string; harder?: string };
+/**
+ * What an exercise IS, in four words (Nov 15 2026, user ruling — fewer categories): strength (incl. power:
+ * olympic lifts, swings, carries), core, cardio (steady AND intervals: machines, burpees, ropes, jumps) and
+ * mobility (moving drills and stretches — none in the catalog yet). Fixed per exercise; what it DOES in one
+ * workout is the designer's `role` / the session's part (warm-up → main workout → core → cool-down).
+ */
+export const CATEGORIES = ["strength", "core", "cardio", "mobility"] as const;
+export type Category = (typeof CATEGORIES)[number];
 
-const D = (pattern: Pattern, level: Level, primary: Muscle[], secondary: Muscle[] = [], links: { easier?: string; harder?: string } = {}): ExerciseDetails => ({ pattern, level, primary, secondary, ...links });
+/** The category a movement type belongs to. */
+export const categoryOf = (pattern: Pattern): Category => (pattern === "core" ? "core" : pattern === "cardio" || pattern === "conditioning" ? "cardio" : "strength");
+
+export type ExerciseDetails = { pattern: Pattern; category: Category; level: Level; primary: Muscle[]; secondary: Muscle[]; easier?: string; harder?: string };
+
+const D = (pattern: Pattern, level: Level, primary: Muscle[], secondary: Muscle[] = [], links: { easier?: string; harder?: string } = {}): ExerciseDetails => ({ pattern, category: categoryOf(pattern), level, primary, secondary, ...links });
 
 export const DETAILS: Record<string, ExerciseDetails> = {
   // chest

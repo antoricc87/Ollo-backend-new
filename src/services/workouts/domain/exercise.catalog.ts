@@ -41,7 +41,7 @@ const EXTRA_NEEDS: Record<string, Kit[]> = {
 };
 
 // A key with no DETAILS row is a bug the catalog test catches; at runtime it degrades to "no facts" rather than failing boot.
-const NO_DETAILS: ExerciseDetails = { pattern: "isolation", level: "beginner", primary: [], secondary: [] };
+const NO_DETAILS: ExerciseDetails = { pattern: "isolation", category: "strength", level: "beginner", primary: [], secondary: [] };
 
 const E = (key: string, name: string, muscleGroup: ExerciseDef["muscleGroup"], equipment: Kit, aliases: string[] = []): ExerciseDef => ({
   key,

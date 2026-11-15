@@ -103,3 +103,15 @@ describe("exercise catalog", () => {
     });
   });
 });
+
+describe("categories: strength, core, cardio, mobility", () => {
+  const cat = (k: string) => exerciseByKey(k)!.category;
+  it("every exercise has one of the four", () => {
+    for (const e of EXERCISES) expect(["strength", "core", "cardio", "mobility"]).toContain(e.category);
+  });
+  it("power and carries are strength; intervals and jumps are cardio", () => {
+    expect([cat("clean"), cat("kettlebell_swing"), cat("farmers_walk"), cat("thruster")]).toEqual(["strength", "strength", "strength", "strength"]);
+    expect([cat("burpee"), cat("battle_rope"), cat("box_jump"), cat("rowing_machine")]).toEqual(["cardio", "cardio", "cardio", "cardio"]);
+    expect([cat("dead_bug"), cat("side_plank"), cat("cable_crunch")]).toEqual(["core", "core", "core"]);
+  });
+});
