@@ -130,3 +130,22 @@ export const neighbourClashes = (sessions: { day: number; session: Pick<PlannedS
   }
   return out;
 };
+
+const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+/**
+ * Day 1 of a week when nobody passed a start date: the next date (today counts) of the FIRST weekday their
+ * words name. "Monday I do GTX … and Sunday conditioning", said on a Sunday, starts Monday — defaulting to
+ * today put that Sunday session on the day it was asked (Nov 15 2026). Full names only ("sat" is a verb).
+ * Null when no weekday is named. Pure.
+ */
+export const firstNamedDay = (words: string[], today: string): string | null => {
+  const text = words.join(" ").toLowerCase();
+  let first: { at: number; dow: number } | null = null;
+  WEEKDAY_NAMES.forEach((name, dow) => {
+    const m = new RegExp(`\\b${name}s?\\b`).exec(text);
+    if (m && (!first || m.index < first.at)) first = { at: m.index, dow };
+  });
+  if (!first) return null;
+  const t = moment.utc(today, DAY);
+  return t.add(((first as { dow: number }).dow - t.day() + 7) % 7, "days").format(DAY);
+};

@@ -11,7 +11,7 @@ import { activityByKey } from "../../workouts/domain/activity.catalog";
 import { fmtDuration, fmtSets } from "../../workouts/domain/workout.metrics";
 import { EQUIPMENT, EXPERIENCE, FOCUS, PLACE, PlannedSessionInput, WEEKDAYS, WorkoutPlanInput, timeString } from "../../workouts/domain/workout.schema";
 import { asPrevious, buildBrief, DEFAULT_SESSION_MIN, designSession, designWeek, reviewWeek, weekShapeIssues, type WeekCheck } from "../../workouts/design/workoutDesign.service";
-import { applyWeekEdits, dateOfDay, dayOfWeekday, neighbourClashes, WeekEditError, type SessionSpec, type WeekEdit, type WeekSession } from "../../workouts/design/weekEdit";
+import { applyWeekEdits, dateOfDay, dayOfWeekday, firstNamedDay, neighbourClashes, WeekEditError, type SessionSpec, type WeekEdit, type WeekSession } from "../../workouts/design/weekEdit";
 import { changesLine, keepUntouched, lengthAsked, sessionChanges } from "../../workouts/design/sessionEdit";
 import { deriveDefaults, type Defaults, type DefaultsInput } from "../../workouts/design/defaults";
 import encounterService from "../../encounter/model/encounter.model";
@@ -395,7 +395,7 @@ export const generateWorkoutPlan = defineTool({
     sessionMinutes: z.number().int().min(10).max(180).optional(),
     focus: z.enum(FOCUS).optional().describe("Overall emphasis when the user states one"),
     place: z.enum(PLACE).optional(),
-    startDate: dayString.optional().describe("Day 1; default today (or the day they named). Never in the past."),
+    startDate: dayString.optional().describe("Day 1. Omit unless they said when the week starts: by default it starts on the first weekday their words name, else today. Never in the past."),
     request: z.string().max(600).optional().describe("Their wishes verbatim: 'I can only do mornings', 'no running', 'football on Saturdays'…"),
     subjectId: subjectField,
   }),
@@ -415,7 +415,8 @@ export const generateWorkoutPlan = defineTool({
     // A week has its own mix of sessions; only what they did not describe falls back, and "mixed" there means "the designer's split".
     const weekAssumed = defaults.assumed.filter((a) => !/session/i.test(a));
     const sessionsPerWeek = input.sessionsPerWeek ?? brief.plan?.sessionsPerWeek ?? 3;
-    const startDate = input.startDate && input.startDate >= ctx.today ? input.startDate : ctx.today;
+    // No start given: the first weekday their own words name ("Monday I do GTX…" on a Sunday → tomorrow), else today.
+    const startDate = input.startDate && input.startDate >= ctx.today ? input.startDate : firstNamedDay((ctx.userWords ?? []).slice(-1), ctx.today) ?? ctx.today;
     const words = ctx.userWords ?? [];
     // One question per conversation at most, and none on a scheduled run (nobody is there to answer it).
     const mayAsk = !ctx.proactive && words.length > 0 && !(await askedWeekQuestion(ctx.threadId));

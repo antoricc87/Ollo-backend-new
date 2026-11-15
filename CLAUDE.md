@@ -1626,6 +1626,13 @@ catches what no trainer would do.
   sets `startTime` from "early morning" etc.; edits keep it). A class name ("GTX") is the
   session's NAME — designed as exercises of the kind described (user ruling). Each card
   session carries `approach` (hidden) for review.
+- Third sim pass: with no startDate passed, day 1 = the next date of the FIRST weekday their
+  latest message names (`firstNamedDay`, weekEdit.ts; today counts; full names only), else today
+  — defaulting to today put "Sunday conditioning", asked on a Sunday, on that same day. The week
+  review judges only their words (no wishes from the record or its own advice) and a class
+  name is honoured by a session with that title; reading.wishes = only what THEY asked.
+  The card's strip shows the Mon–Sun week of day 1 only (app; a mid-week start looks
+  half-empty — his design call).
 - Training pack rule: a wish about every session ("always core") → applied to every session
   it covers, then offered once to remember.
 Next (his call): learned preferences (favourite exercises per muscle, dislikes, standing
