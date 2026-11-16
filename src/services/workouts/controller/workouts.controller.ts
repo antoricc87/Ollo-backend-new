@@ -4,6 +4,7 @@ import WorkoutService, { type StatusFilter } from "../model/workouts.model";
 import WorkoutPlanService from "../model/plan.model";
 import TrainingProfileService from "../model/training_profile.model";
 import { PlannedSessionInput, SessionInput, SyncRequest, TrainingProfileInput, WorkoutPlanInput } from "../domain/workout.schema";
+import { withExerciseFacts } from "../domain/exercise.catalog";
 
 const STATUSES: StatusFilter[] = ["COMPLETED", "PLANNED", "ALL"];
 const PLAN_STATUSES = ["ACTIVE", "PAUSED", "COMPLETED", "REPLACED"] as const;
@@ -21,7 +22,7 @@ class WorkoutHandler {
     if (!STATUSES.includes(status)) return response.status(400).json(Util.error({}, "status must be completed | planned | all"));
     try {
       const sessions = await WorkoutService.list(id, { from, to }, { status });
-      return response.status(200).json(Util.success(sessions, "Workout sessions"));
+      return response.status(200).json(Util.success(withExerciseFacts(sessions), "Workout sessions"));
     } catch (error) {
       console.error("Error listing workouts", error);
       return response.status(400).json(Util.error({ error }, "Error listing workouts"));
@@ -33,7 +34,7 @@ class WorkoutHandler {
     try {
       const session = await WorkoutService.get(id, request.params.sessionId);
       if (!session) return response.status(404).json(Util.error({}, "Not found"));
-      return response.status(200).json(Util.success(session, "Workout session"));
+      return response.status(200).json(Util.success(withExerciseFacts(session), "Workout session"));
     } catch (error) {
       console.error("Error fetching workout", error);
       return response.status(400).json(Util.error({ error }, "Error fetching workout"));
@@ -46,7 +47,7 @@ class WorkoutHandler {
     if (!parsed.success) return bad(response, parsed.error.issues.slice(0, 5), "Invalid sync payload");
     try {
       const result = await WorkoutService.syncFromHealthKit(id, parsed.data);
-      return response.status(200).json(Util.success(result, "Synced"));
+      return response.status(200).json(Util.success(withExerciseFacts(result), "Synced"));
     } catch (error) {
       console.error("Error syncing workouts", error);
       return response.status(400).json(Util.error({ error }, "Error syncing workouts"));
@@ -58,7 +59,7 @@ class WorkoutHandler {
     try {
       const ok = await WorkoutService.softDelete(id, request.params.sessionId);
       if (!ok) return response.status(404).json(Util.error({}, "Not found"));
-      return response.status(200).json(Util.success({ id: request.params.sessionId }, "Deleted"));
+      return response.status(200).json(Util.success(withExerciseFacts({ id: request.params.sessionId }), "Deleted"));
     } catch (error) {
       console.error("Error deleting workout", error);
       return response.status(400).json(Util.error({ error }, "Error deleting workout"));
@@ -73,7 +74,7 @@ class WorkoutHandler {
     try {
       const session = await WorkoutService.completeSession(id, request.params.sessionId, parsed.data, "MANUAL");
       if (!session) return response.status(404).json(Util.error({}, "Not found"));
-      return response.status(200).json(Util.success(session, "Session completed"));
+      return response.status(200).json(Util.success(withExerciseFacts(session), "Session completed"));
     } catch (error) {
       console.error("Error completing workout", error);
       return response.status(400).json(Util.error({ error }, "Error completing workout"));
@@ -88,7 +89,7 @@ class WorkoutHandler {
     try {
       const session = await WorkoutService.movePlanned(id, request.params.sessionId, plannedFor);
       if (!session) return response.status(404).json(Util.error({}, "Not found"));
-      return response.status(200).json(Util.success(session, "Session moved"));
+      return response.status(200).json(Util.success(withExerciseFacts(session), "Session moved"));
     } catch (error: any) {
       return response.status(400).json(Util.error({}, error?.message ?? "Error moving session"));
     }
@@ -100,7 +101,7 @@ class WorkoutHandler {
     const { id } = request.user;
     try {
       const plan = await WorkoutPlanService.getActive(id);
-      return response.status(200).json(Util.success(plan, "Active training week"));
+      return response.status(200).json(Util.success(withExerciseFacts(plan), "Active training week"));
     } catch (error) {
       console.error("Error fetching training week", error);
       return response.status(400).json(Util.error({ error }, "Error fetching training week"));
@@ -113,7 +114,7 @@ class WorkoutHandler {
     if (!parsed.success) return bad(response, parsed.error.issues.slice(0, 5), "Invalid training week");
     try {
       const plan = await WorkoutPlanService.create(id, parsed.data);
-      return response.status(200).json(Util.success(plan, "Training week saved"));
+      return response.status(200).json(Util.success(withExerciseFacts(plan), "Training week saved"));
     } catch (error) {
       console.error("Error saving training week", error);
       return response.status(400).json(Util.error({ error }, "Error saving training week"));
@@ -125,7 +126,7 @@ class WorkoutHandler {
     const { id } = request.user;
     try {
       const draft = await WorkoutPlanService.pendingDraft(id);
-      return response.status(200).json(Util.success(draft, draft ? "Draft week" : "No draft week"));
+      return response.status(200).json(Util.success(withExerciseFacts(draft), draft ? "Draft week" : "No draft week"));
     } catch (error) {
       console.error("Error reading draft week", error);
       return response.status(400).json(Util.error({ error }, "Error reading draft week"));
@@ -138,7 +139,7 @@ class WorkoutHandler {
     try {
       const plan = await WorkoutPlanService.repeatLast(id);
       if (!plan) return response.status(404).json(Util.error({}, "No saved week to repeat"));
-      return response.status(200).json(Util.success(plan, "Training week saved"));
+      return response.status(200).json(Util.success(withExerciseFacts(plan), "Training week saved"));
     } catch (error) {
       console.error("Error repeating training week", error);
       return response.status(400).json(Util.error({ error }, "Error repeating training week"));
@@ -152,7 +153,7 @@ class WorkoutHandler {
     if (!parsed.success) return bad(response, parsed.error.issues.slice(0, 5), "Invalid planned session");
     try {
       const out = await WorkoutPlanService.putOnDay(id, parsed.data);
-      return response.status(200).json(Util.success(out, out.replaced ? "Planned session replaced" : "Planned session added"));
+      return response.status(200).json(Util.success(withExerciseFacts(out), out.replaced ? "Planned session replaced" : "Planned session added"));
     } catch (error) {
       console.error("Error planning session", error);
       return response.status(400).json(Util.error({ error }, "Error planning session"));
@@ -166,7 +167,7 @@ class WorkoutHandler {
     try {
       const plan = await WorkoutPlanService.updateStatus(id, request.params.planId, status);
       if (!plan) return response.status(404).json(Util.error({}, "Plan not found"));
-      return response.status(200).json(Util.success(plan, "Training week status updated"));
+      return response.status(200).json(Util.success(withExerciseFacts(plan), "Training week status updated"));
     } catch (error) {
       console.error("Error updating training week", error);
       return response.status(400).json(Util.error({ error }, "Error updating training week"));
@@ -179,7 +180,7 @@ class WorkoutHandler {
     const { id } = request.user;
     try {
       const profile = await TrainingProfileService.get(id);
-      return response.status(200).json(Util.success(profile, "Training profile"));
+      return response.status(200).json(Util.success(withExerciseFacts(profile), "Training profile"));
     } catch (error) {
       console.error("Error fetching training profile", error);
       return response.status(400).json(Util.error({ error }, "Error fetching training profile"));
@@ -192,7 +193,7 @@ class WorkoutHandler {
     if (!parsed.success) return bad(response, parsed.error.issues.slice(0, 5), "Invalid training profile");
     try {
       const profile = await TrainingProfileService.upsert(id, parsed.data);
-      return response.status(200).json(Util.success(profile, "Training profile saved"));
+      return response.status(200).json(Util.success(withExerciseFacts(profile), "Training profile saved"));
     } catch (error) {
       console.error("Error saving training profile", error);
       return response.status(400).json(Util.error({ error }, "Error saving training profile"));

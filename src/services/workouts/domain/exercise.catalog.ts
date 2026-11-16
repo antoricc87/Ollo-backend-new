@@ -275,3 +275,21 @@ export const stepDown = (key: string, ok: (e: ExerciseDef) => boolean): Exercise
   }
   return null;
 };
+
+/**
+ * The catalog facts the app shows beside a stored exercise (Nov 16 2026, session page): its category (the
+ * section it sits in) and the muscles it mainly works (the muscle bars). Added on the way out to every object
+ * carrying a catalog `exerciseKey` — sessions, warm-up / cool-down items, weeks — so nothing is stored twice.
+ */
+export const withExerciseFacts = <T>(value: T): T => {
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (!v || typeof v !== "object" || v instanceof Date) return v;
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) out[k] = walk(x);
+    const def = typeof out.exerciseKey === "string" ? exerciseByKey(out.exerciseKey) : null;
+    if (def) Object.assign(out, { category: def.category, primary: def.primary });
+    return out;
+  };
+  return walk(value) as T;
+};

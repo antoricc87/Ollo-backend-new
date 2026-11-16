@@ -137,3 +137,16 @@ describe("categories: strength, core, cardio, mobility", () => {
     ["hamstring curl", "leg_curl"],
   ])("%s → %s", (name, expected) => expect(key(name)).toBe(expected));
 });
+
+describe("exercise facts on the way out", () => {
+  it("adds category and main muscles to every catalog exercise, deep, and leaves the rest alone", () => {
+    const { withExerciseFacts } = require("../../src/services/workouts/domain/exercise.catalog");
+    const at = new Date("2026-11-18T06:30:00Z");
+    const out = withExerciseFacts({ daysOut: [{ planned: { startedAt: at, warmupItems: [{ exerciseKey: "leg_swing" }], exercises: [{ exerciseKey: "back_squat", sets: [] }, { exerciseKey: "custom:gtx" }] } }] });
+    const s = out.daysOut[0].planned;
+    expect(s.startedAt).toBe(at);
+    expect(s.warmupItems[0]).toMatchObject({ category: "mobility", primary: ["hamstrings", "hip_flexors"] });
+    expect(s.exercises[0]).toMatchObject({ category: "strength", primary: ["quads", "glutes"] });
+    expect(s.exercises[1].category).toBeUndefined();
+  });
+});
