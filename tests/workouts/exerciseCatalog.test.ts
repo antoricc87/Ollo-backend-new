@@ -114,4 +114,26 @@ describe("categories: strength, core, cardio, mobility", () => {
     expect([cat("burpee"), cat("battle_rope"), cat("box_jump"), cat("rowing_machine")]).toEqual(["cardio", "cardio", "cardio", "cardio"]);
     expect([cat("dead_bug"), cat("side_plank"), cat("cable_crunch")]).toEqual(["core", "core", "core"]);
   });
+  it("mobility: moving drills for a warm-up, held stretches for a cool-down", () => {
+    const mob = EXERCISES.filter((e) => e.category === "mobility");
+    expect(mob.length).toBeGreaterThanOrEqual(20);
+    for (const e of mob) expect(["mobility", "stretch"]).toContain(e.pattern);
+    expect(exerciseByKey("leg_swing")!.pattern).toBe("mobility");
+    expect(exerciseByKey("hamstring_stretch")!.pattern).toBe("stretch");
+  });
+  it.each([
+    ["leg swings", "leg_swing"],
+    ["couch stretch", "hip_flexor_stretch"],
+    ["seated butterfly stretch", "butterfly_stretch"],
+    ["open book", "thoracic_rotation"],
+    ["cat cow", "cat_cow"],
+    ["pigeon pose", "pigeon_stretch"],
+    ["doorway chest stretch", "chest_stretch"],
+    ["band pull aparts", "band_pull_apart"],
+    // the old names still land where they did
+    ["kettlebell swings", "kettlebell_swing"],
+    ["butterfly", "machine_fly"],
+    ["calf raises", "calf_raise"],
+    ["hamstring curl", "leg_curl"],
+  ])("%s → %s", (name, expected) => expect(key(name)).toBe(expected));
 });

@@ -13,7 +13,7 @@ export type Kit = (typeof EQUIPMENT)[number];
 export type ExerciseDef = {
   key: string;
   name: string;
-  muscleGroup: "chest" | "back" | "shoulders" | "arms" | "legs" | "glutes" | "core" | "full_body" | "cardio";
+  muscleGroup: "chest" | "back" | "shoulders" | "arms" | "legs" | "glutes" | "core" | "full_body" | "cardio" | "mobility";
   /** The main piece of kit (shown on the card, stored on the exercise row). */
   equipment: Kit;
   /** EVERYTHING the exercise needs — a dumbbell bench press needs dumbbells AND a bench, a pull-up a bar. Empty = nothing (bodyweight). */
@@ -140,6 +140,30 @@ export const EXERCISES: ExerciseDef[] = [
   E("assault_bike", "Assault bike", "cardio", "bike", ["air bike", "echo bike", "airdyne"]),
   E("treadmill_run", "Treadmill", "cardio", "treadmill", ["treadmill", "tapis roulant"]),
   E("stair_climber", "Stair climber", "cardio", "machine", ["stairmaster", "stairs machine"]),
+  // mobility — moving drills (warm-up)
+  E("leg_swing", "Leg swings", "mobility", "bodyweight", ["leg swing", "leg swings front to back", "side leg swings"]),
+  E("hip_circle", "Hip circles", "mobility", "bodyweight", ["hip circle", "hip rotations", "hip openers"]),
+  E("hip_90_90", "90/90 hip switch", "mobility", "bodyweight", ["90 90", "90/90", "90 90 stretch", "hip switches"]),
+  E("worlds_greatest_stretch", "World's greatest stretch", "mobility", "bodyweight", ["worlds greatest stretch", "lunge with rotation", "spiderman lunge"]),
+  E("cat_cow", "Cat-cow", "mobility", "bodyweight", ["cat cow", "cat camel", "cat and cow"]),
+  E("thoracic_rotation", "Thoracic rotation", "mobility", "bodyweight", ["open book", "open books", "t spine rotation", "thoracic rotations"]),
+  E("arm_circle", "Arm circles", "mobility", "bodyweight", ["arm circle", "shoulder circles"]),
+  E("band_pull_apart", "Band pull-apart", "mobility", "band", ["band pull apart", "band pull aparts", "pull aparts"]),
+  E("inchworm", "Inchworm", "mobility", "bodyweight", ["inchworms", "walkouts", "walk outs"]),
+  E("squat_to_stand", "Squat to stand", "mobility", "bodyweight", ["squat to stands", "deep squat stretch", "squat hold"]),
+  E("ankle_rock", "Ankle rocks", "mobility", "bodyweight", ["ankle rock", "knee to wall", "ankle mobility"]),
+  // mobility — held stretches (cool-down)
+  E("hamstring_stretch", "Hamstring stretch", "mobility", "bodyweight", ["hamstring stretches", "toe touch", "standing hamstring stretch"]),
+  E("quad_stretch", "Quad stretch", "mobility", "bodyweight", ["quad stretches", "standing quad stretch", "quadriceps stretch"]),
+  E("hip_flexor_stretch", "Hip flexor stretch", "mobility", "bodyweight", ["hip flexor stretches", "couch stretch", "kneeling hip flexor stretch"]),
+  E("pigeon_stretch", "Pigeon stretch", "mobility", "bodyweight", ["pigeon", "pigeon pose", "figure four stretch", "glute stretch"]),
+  E("butterfly_stretch", "Butterfly stretch", "mobility", "bodyweight", ["groin stretch", "adductor stretch", "seated butterfly"]),
+  E("calf_stretch", "Calf stretch", "mobility", "bodyweight", ["calf stretches", "wall calf stretch"]),
+  E("childs_pose", "Child's pose", "mobility", "bodyweight", ["childs pose", "child pose", "lat stretch"]),
+  E("cobra_stretch", "Cobra stretch", "mobility", "bodyweight", ["cobra", "cobra pose", "ab stretch"]),
+  E("chest_stretch", "Chest stretch", "mobility", "bodyweight", ["doorway stretch", "doorway chest stretch", "pec stretch"]),
+  E("shoulder_stretch", "Cross-body shoulder stretch", "mobility", "bodyweight", ["shoulder stretch", "cross body stretch", "cross body shoulder stretch"]),
+  E("triceps_stretch", "Overhead triceps stretch", "mobility", "bodyweight", ["triceps stretch", "tricep stretch"]),
 ];
 
 export const EXERCISE_KEYS = EXERCISES.map((e) => e.key);
@@ -185,8 +209,9 @@ export const catalogForPrompt = () => EXERCISES.map((e) => `${e.key}: ${e.name}$
 /** Catalog listing for the planner prompt — WITH muscle group and everything each exercise needs ("dumbbell+bench"), grouped. */
 export const catalogForPlanner = () => {
   const groups = new Map<string, string[]>();
-  for (const e of EXERCISES) (groups.get(e.muscleGroup) ?? groups.set(e.muscleGroup, []).get(e.muscleGroup)!).push(`${e.key} (${e.needs.join("+") || "bodyweight"}${e.level === "advanced" ? ", advanced" : ""})`);
-  return [...groups.entries()].map(([g, xs]) => `${g}: ${xs.join(", ")}`).join("\n");
+  for (const e of EXERCISES.filter((x) => x.category !== "mobility")) (groups.get(e.muscleGroup) ?? groups.set(e.muscleGroup, []).get(e.muscleGroup)!).push(`${e.key} (${e.needs.join("+") || "bodyweight"}${e.level === "advanced" ? ", advanced" : ""})`);
+  const named = (p: string) => EXERCISES.filter((x) => x.pattern === p).map((x) => x.name.toLowerCase()).join(", ");
+  return [...groups.entries()].map(([g, xs]) => `${g}: ${xs.join(", ")}`).join("\n") + `\nwarm-up drills: ${named("mobility")}\ncool-down stretches: ${named("stretch")}`;
 };
 
 export const MUSCLE_GROUPS = ["chest", "back", "shoulders", "arms", "legs", "glutes", "core", "full_body", "cardio"] as const;

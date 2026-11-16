@@ -212,6 +212,7 @@ Then build it the way a good trainer would. The structure is your call; a usual 
 - warm-up for TODAY's work: a few minutes of easy cardio, then moving drills for the joints and muscles of the day (save long held stretches for the end); for a heavy first lift, say in the warm-up to ramp up with 2–3 lighter sets.
 - main work first, while they are fresh (the day's key lifts or efforts), then supporting work, then core where it fits or is asked for, an optional short finisher if time and the goal allow.
 - cool-down: easy movement and stretches for what was trained.
+- In warm-up and cool-down lines, name drills and stretches from the catalog's "warm-up drills" and "cool-down stretches" lists (e.g. "Leg swings, 10 each side", "Hamstring stretch, 30 s each side"); they stay lines, not exercises.
 Conditioning, endurance and mobility days follow the same idea with their own parts (e.g. warm-up → intervals → core → cool-down).
 A class or a named workout ("GTX", "bootcamp", "HIIT") is the NAME of the session: design it as exercises of that kind, from what they said it is ("a mix of conditioning and strength"), never as one exercise called the class.
 
@@ -300,7 +301,7 @@ export const checkSession = (s: PlannedSessionInput, ask: DesignAsk, brief: Desi
   for (const e of s.exercises ?? []) {
     const def = exerciseByKey(e.exerciseKey);
     const work = (e.sets ?? []).filter((set) => !set.isWarmup);
-    const steady = def?.pattern === "cardio" || work.some((set) => (set.durationSec ?? 0) >= 300); // one 20-minute run is one set
+    const steady = def?.pattern === "cardio" || def?.category === "mobility" || work.some((set) => (set.durationSec ?? 0) >= 300); // one 20-minute run is one set
     if (work.length === 1 && !steady) issues.push(`${e.name} has a single working set — give it at least 2, or drop it`);
     const supporting = e.role === "accessory" || def?.pattern === "isolation" || SUPPORTING_ONLY.has(e.exerciseKey);
     const low = work.find((set) => set.durationSec == null && set.targetReps != null && set.targetReps < 8);
@@ -346,7 +347,8 @@ export const checkSession = (s: PlannedSessionInput, ask: DesignAsk, brief: Desi
   const have = new Set((s.exercises ?? []).map((e) => e.muscleGroup).filter(Boolean));
   for (const g of want) if (!have.has(g) && g !== "full_body" && g !== "cardio") issues.push(`asked for ${g}, no exercise targets it`);
   // a single muscle asked for ("biceps", "hamstrings") needs an exercise that MAINLY works it — a group is not enough
-  const defs = (s.exercises ?? []).map((e) => exerciseByKey(e.exerciseKey)).filter((d): d is ExerciseDef => !!d);
+  // a stretch loosens a muscle, it does not train it — mobility never counts for coverage or balance
+  const defs = (s.exercises ?? []).map((e) => exerciseByKey(e.exerciseKey)).filter((d): d is ExerciseDef => !!d && d.category !== "mobility");
   const works = (ms: Muscle[]) => defs.some((d) => d.primary.some((m) => ms.includes(m)));
   for (const w of ask.muscleGroups ?? []) {
     const ms = musclesFor(w);
@@ -444,7 +446,7 @@ const toPlanned = (out: SessionOut, ask: DesignAsk): PlannedSessionInput => {
     durationMin: ask.durationMin,
     focus: out.focus,
     place: out.place ?? ask.place ?? null,
-    muscleGroups: Array.from(new Set(out.muscleGroups.flatMap(muscleGroupsFor).concat(exercises.map((e) => e.muscleGroup!).filter(Boolean)))).slice(0, 8),
+    muscleGroups: Array.from(new Set(out.muscleGroups.flatMap(muscleGroupsFor).concat(exercises.map((e) => e.muscleGroup!).filter((g) => g && g !== "mobility")))).slice(0, 8),
     why: out.why?.slice(0, 300) ?? null,
     warmup: out.warmup.slice(0, 8).map((w) => fit(w, 160)!),
     cooldown: out.cooldown.slice(0, 8).map((w) => fit(w, 160)!),

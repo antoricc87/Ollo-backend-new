@@ -30,6 +30,8 @@ export const PATTERNS = [
   "olympic", // clean, snatch, jerk
   "conditioning",
   "cardio",
+  "mobility", // moving drills: leg swings, cat-cow, inchworms — for a warm-up
+  "stretch", // held stretches — for a cool-down
 ] as const;
 export type Pattern = (typeof PATTERNS)[number];
 
@@ -48,14 +50,15 @@ export type Muscle = (typeof MUSCLES)[number];
 /**
  * What an exercise IS, in four words (Nov 15 2026, user ruling — fewer categories): strength (incl. power:
  * olympic lifts, swings, carries), core, cardio (steady AND intervals: machines, burpees, ropes, jumps) and
- * mobility (moving drills and stretches — none in the catalog yet). Fixed per exercise; what it DOES in one
+ * mobility (moving drills for a warm-up, held stretches for a cool-down). Fixed per exercise; what it DOES in one
  * workout is the designer's `role` / the session's part (warm-up → main workout → core → cool-down).
  */
 export const CATEGORIES = ["strength", "core", "cardio", "mobility"] as const;
 export type Category = (typeof CATEGORIES)[number];
 
 /** The category a movement type belongs to. */
-export const categoryOf = (pattern: Pattern): Category => (pattern === "core" ? "core" : pattern === "cardio" || pattern === "conditioning" ? "cardio" : "strength");
+export const categoryOf = (pattern: Pattern): Category =>
+  pattern === "core" ? "core" : pattern === "cardio" || pattern === "conditioning" ? "cardio" : pattern === "mobility" || pattern === "stretch" ? "mobility" : "strength";
 
 export type ExerciseDetails = { pattern: Pattern; category: Category; level: Level; primary: Muscle[]; secondary: Muscle[]; easier?: string; harder?: string };
 
@@ -148,6 +151,30 @@ export const DETAILS: Record<string, ExerciseDetails> = {
   assault_bike: D("cardio", "beginner", ["quads"], ["glutes", "hamstrings", "front_delts"]),
   treadmill_run: D("cardio", "beginner", ["quads", "calves"], ["hamstrings", "glutes"]),
   stair_climber: D("cardio", "beginner", ["quads", "glutes"], ["calves"]),
+  // mobility — moving drills (warm-up). primary = what it loosens, not what it trains.
+  leg_swing: D("mobility", "beginner", ["hamstrings", "hip_flexors"], ["adductors", "glutes"]),
+  hip_circle: D("mobility", "beginner", ["hip_flexors", "glutes"], ["adductors"]),
+  hip_90_90: D("mobility", "beginner", ["glutes", "hip_flexors"], ["adductors"]),
+  worlds_greatest_stretch: D("mobility", "beginner", ["hip_flexors", "hamstrings", "upper_back"], ["glutes", "adductors"]),
+  cat_cow: D("mobility", "beginner", ["lower_back", "upper_back"], ["abs"]),
+  thoracic_rotation: D("mobility", "beginner", ["upper_back"], ["obliques", "chest"]),
+  arm_circle: D("mobility", "beginner", ["front_delts", "side_delts", "rear_delts"]),
+  band_pull_apart: D("mobility", "beginner", ["rear_delts", "upper_back"], ["traps"]),
+  inchworm: D("mobility", "beginner", ["hamstrings"], ["abs", "chest", "front_delts"]),
+  squat_to_stand: D("mobility", "beginner", ["hamstrings", "adductors"], ["quads", "glutes"]),
+  ankle_rock: D("mobility", "beginner", ["calves"]),
+  // mobility — held stretches (cool-down)
+  hamstring_stretch: D("stretch", "beginner", ["hamstrings"], ["calves"]),
+  quad_stretch: D("stretch", "beginner", ["quads"], ["hip_flexors"]),
+  hip_flexor_stretch: D("stretch", "beginner", ["hip_flexors"], ["quads"]),
+  pigeon_stretch: D("stretch", "beginner", ["glutes"], ["hip_flexors"]),
+  butterfly_stretch: D("stretch", "beginner", ["adductors"]),
+  calf_stretch: D("stretch", "beginner", ["calves"]),
+  childs_pose: D("stretch", "beginner", ["lower_back", "lats"]),
+  cobra_stretch: D("stretch", "beginner", ["abs", "hip_flexors"]),
+  chest_stretch: D("stretch", "beginner", ["chest"], ["front_delts"]),
+  shoulder_stretch: D("stretch", "beginner", ["rear_delts"], ["upper_back"]),
+  triceps_stretch: D("stretch", "beginner", ["triceps"], ["lats"]),
 };
 
 /**
