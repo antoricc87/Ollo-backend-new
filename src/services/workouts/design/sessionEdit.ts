@@ -54,6 +54,8 @@ export const keepUntouched = (previous: PlannedSessionInput, next: PlannedSessio
     exercises,
     warmup: touchesWarm ? next.warmup : previous.warmup ?? next.warmup,
     cooldown: touchesWarm ? next.cooldown : previous.cooldown ?? next.cooldown,
+    warmupItems: touchesWarm ? next.warmupItems : previous.warmupItems?.length || previous.warmup?.length ? previous.warmupItems ?? [] : next.warmupItems,
+    cooldownItems: touchesWarm ? next.cooldownItems : previous.cooldownItems?.length || previous.cooldown?.length ? previous.cooldownItems ?? [] : next.cooldownItems,
     title: next.focus === previous.focus ? previous.title ?? next.title : next.title,
   };
 };

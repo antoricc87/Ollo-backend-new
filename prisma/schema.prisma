@@ -1387,6 +1387,9 @@ model WorkoutSession {
   why           String? // one line: how it fits the plan / recovery
   warmup        String[]
   cooldown      String[]
+  /// Warm-up / cool-down as exercises (PartItem[]: key, name, reps|durationSec, perSide, note); the lines above are written from them.
+  warmupItems   Json?
+  cooldownItems Json?
   completedAt   DateTime?
   deletedAt     DateTime? // soft delete (removed from Health, or by the user)
   createdAt     DateTime          @default(now())

@@ -9,7 +9,7 @@ import WorkoutPlanService, { fmtTargets, lastSavedWeek, type WorkoutPlanView } f
 import TrainingProfileService from "../../workouts/model/training_profile.model";
 import { activityByKey } from "../../workouts/domain/activity.catalog";
 import { fmtDuration, fmtSets } from "../../workouts/domain/workout.metrics";
-import { EQUIPMENT, EXPERIENCE, FOCUS, PLACE, PlannedSessionInput, WEEKDAYS, WorkoutPlanInput, timeString } from "../../workouts/domain/workout.schema";
+import { EQUIPMENT, EXPERIENCE, FOCUS, PLACE, PlannedSessionInput, type PartItem, WEEKDAYS, WorkoutPlanInput, timeString } from "../../workouts/domain/workout.schema";
 import { asPrevious, buildBrief, DEFAULT_SESSION_MIN, designSession, designWeek, reviewWeek, weekShapeIssues, type WeekCheck } from "../../workouts/design/workoutDesign.service";
 import { applyWeekEdits, dateOfDay, dayOfWeekday, firstNamedDay, neighbourClashes, WeekEditError, type SessionSpec, type WeekEdit, type WeekSession } from "../../workouts/design/weekEdit";
 import { changesLine, keepUntouched, lengthAsked, sessionChanges } from "../../workouts/design/sessionEdit";
@@ -176,6 +176,8 @@ export const savedWeekCard = (v: WorkoutPlanView, tz: string): Card => ({
           why: s.why,
           warmup: s.warmup,
           cooldown: s.cooldown,
+          warmupItems: (s.warmupItems as PartItem[] | null) ?? [],
+          cooldownItems: (s.cooldownItems as PartItem[] | null) ?? [],
           notes: s.notes,
           distanceKm: s.distanceKm,
           exercises: s.exercises.map((e) => ({ exerciseKey: e.exerciseKey, name: e.name, muscleGroup: e.muscleGroup, equipment: e.equipment, notes: e.notes, loadNote: e.loadNote, alternatives: e.alternatives, sets: e.sets.map((x) => ({ reps: x.reps, weightKg: x.weightKg, durationSec: x.durationSec, distanceM: x.distanceM, rpe: x.rpe, toFailure: x.toFailure, isWarmup: x.isWarmup, targetReps: x.targetReps, targetRepsMax: x.targetRepsMax, targetKg: x.targetKg, restSec: x.restSec })) })),

@@ -68,6 +68,22 @@ export const ExerciseInput = z.object({
 });
 export type ExerciseInput = z.infer<typeof ExerciseInput>;
 
+/**
+ * One exercise of the warm-up or the cool-down (Nov 16 2026, user ruling: three parts — warm-up → main
+ * workout → cool-down; warm-up and cool-down are real exercises). A catalog key (or custom:) and a dose, no
+ * sets to log: the main workout stays in `exercises`, so counts, the live workout and exercise history are
+ * the main work only. The `warmup` / `cooldown` lines are written from these.
+ */
+export const PartItem = z.object({
+  exerciseKey: z.string().min(1).max(80),
+  name: z.string().min(1).max(80),
+  reps: z.number().int().min(1).max(100).nullable().optional(),
+  durationSec: z.number().int().min(5).max(3600).nullable().optional(),
+  perSide: z.boolean().optional(),
+  note: z.string().max(80).nullable().optional(),
+});
+export type PartItem = z.infer<typeof PartItem>;
+
 /** A fully-resolved session ready to persist. */
 export const SessionInput = z.object({
   activityKey: z.enum(ACTIVITY_KEYS),
@@ -131,6 +147,8 @@ export const PlannedSessionInput = z.object({
   why: z.string().max(300).nullable().optional(),
   warmup: z.array(z.string().max(160)).max(8).default([]),
   cooldown: z.array(z.string().max(160)).max(8).default([]),
+  warmupItems: z.array(PartItem).max(8).default([]),
+  cooldownItems: z.array(PartItem).max(8).default([]),
   notes: z.string().max(1000).nullable().optional(),
   /** Stated distance for planned endurance sessions. */
   distanceKm: z.number().min(0).max(1000).nullable().optional(),

@@ -155,6 +155,8 @@ class WorkoutServiceImpl {
       why: input.why ?? null,
       warmup: input.warmup ?? [],
       cooldown: input.cooldown ?? [],
+      warmupItems: input.warmupItems ?? [],
+      cooldownItems: input.cooldownItems ?? [],
       notes: input.notes ?? null,
       distanceKm: input.distanceKm ?? null,
     };

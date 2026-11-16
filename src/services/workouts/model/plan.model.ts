@@ -16,7 +16,7 @@ import prisma from "../../../utility/prismaClient";
 import WorkoutService, { type SessionRecord } from "./workouts.model";
 import { activityByKey } from "../domain/activity.catalog";
 import { fmtDuration, fmtSets } from "../domain/workout.metrics";
-import type { PlannedSessionInput, WorkoutPlanInput } from "../domain/workout.schema";
+import type { PartItem, PlannedSessionInput, WorkoutPlanInput } from "../domain/workout.schema";
 
 const DAY = "YYYY-MM-DD";
 export const shiftDay = (day: string, delta: number) => moment.utc(day, DAY).add(delta, "days").format(DAY);
@@ -253,6 +253,8 @@ class WorkoutPlanService {
         why: r.why,
         warmup: r.warmup,
         cooldown: r.cooldown,
+        warmupItems: (r.warmupItems as PartItem[] | null) ?? [],
+        cooldownItems: (r.cooldownItems as PartItem[] | null) ?? [],
         notes: r.notes,
         distanceKm: r.distanceKm,
         // The prescription; a set completed without one keeps what was done as the target.

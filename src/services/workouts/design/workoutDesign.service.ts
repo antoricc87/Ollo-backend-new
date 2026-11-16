@@ -17,7 +17,7 @@ import { ACTIVITY_KEYS, activityByKey } from "../domain/activity.catalog";
 import { canonicalExercise, catalogForPlanner, exerciseByKey, muscleGroupsFor, musclesFor, stepDown, type ExerciseDef } from "../domain/exercise.catalog";
 import { SUPPORTING_ONLY, type Muscle, type Pattern } from "../domain/exercise.details";
 import { fmtSets } from "../domain/workout.metrics";
-import { FOCUS, PLACE, PlannedSessionInput, ROLES, type ExerciseInput } from "../domain/workout.schema";
+import { FOCUS, PLACE, PlannedSessionInput, ROLES, type ExerciseInput, type PartItem } from "../domain/workout.schema";
 import TrainingProfileService from "../model/training_profile.model";
 import WorkoutService from "../model/workouts.model";
 import { generalSessionLine, stopLine, treatmentWording, type TrainingGate } from "../../encounter/domain/trainingGate";
@@ -161,6 +161,22 @@ const EXERCISE_OUT = {
   additionalProperties: false,
 } as const;
 
+/** One warm-up or cool-down exercise: a catalog drill/stretch (or easy cardio) and its dose — one round, no sets. */
+const PART_OUT = {
+  type: "object",
+  properties: {
+    exerciseKey: { type: ["string", "null"], description: "Catalog key (warm-up drills, cool-down stretches, or cardio for easy minutes); null for a custom one" },
+    name: { type: "string" },
+    reps: { type: ["integer", "null"], description: "Reps (each side when perSide); null when timed" },
+    durationSec: { type: ["integer", "null"], description: "Seconds (each side when perSide): a hold, or easy cardio minutes × 60; null for reps" },
+    perSide: { type: "boolean" },
+    note: { type: ["string", "null"], description: "A few words when useful ('easy pace', 'slow and controlled'), else null" },
+  },
+  required: ["exerciseKey", "name", "reps", "durationSec", "perSide", "note"],
+  additionalProperties: false,
+} as const;
+type PartOut = { exerciseKey: string | null; name: string; reps: number | null; durationSec: number | null; perSide: boolean; note: string | null };
+
 const SESSION_OUT = {
   type: "object",
   properties: {
@@ -172,8 +188,8 @@ const SESSION_OUT = {
     durationMin: { type: "integer" },
     muscleGroups: { type: "array", items: { type: "string" }, description: "Catalog groups this session trains" },
     why: { type: "string", description: "One line, in second person: how it fits their plan, recovery and what they did recently" },
-    warmup: { type: "array", items: { type: "string" }, description: "2–4 short lines" },
-    cooldown: { type: "array", items: { type: "string" }, description: "1–3 short lines" },
+    warmup: { type: "array", items: PART_OUT, description: "The warm-up, in order: 2–5 exercises" },
+    cooldown: { type: "array", items: PART_OUT, description: "The cool-down, in order: 2–4 exercises" },
     distanceKm: { type: ["number", "null"], description: "Endurance sessions only" },
     exercises: { type: "array", items: EXERCISE_OUT },
     notes: { type: ["string", "null"], description: "Anything the user should know (pace, intensity cue, what to skip if short on time)" },
@@ -191,8 +207,8 @@ type SessionOut = {
   durationMin: number;
   muscleGroups: string[];
   why: string;
-  warmup: string[];
-  cooldown: string[];
+  warmup: PartOut[];
+  cooldown: PartOut[];
   distanceKm: number | null;
   exercises: { role: (typeof ROLES)[number]; exerciseKey: string | null; name: string; sets: number; reps: number | null; repsMax: number | null; durationSec: number | null; targetKg: number | null; restSec: number; loadNote: string | null; alternatives: string[] }[];
   notes: string | null;
@@ -208,19 +224,18 @@ const SYSTEM = `You are this person's personal trainer, designing ONE session fo
 
 First write \`approach\` (3–5 short sentences, plain words): what today is for; how it fits around what comes before and after it (weekContext, alreadyPlanned, recentSessions, missed) and their recovery; what their record, goals, limits and what you remember about them change; then the structure you chose and why. If their words say how they want the session built, that structure wins — say so.
 
-Then build it the way a good trainer would. The structure is your call; a usual shape is:
-- warm-up for TODAY's work: a few minutes of easy cardio, then moving drills for the joints and muscles of the day (save long held stretches for the end); for a heavy first lift, say in the warm-up to ramp up with 2–3 lighter sets.
-- main work first, while they are fresh (the day's key lifts or efforts), then supporting work, then core where it fits or is asked for, an optional short finisher if time and the goal allow.
-- cool-down: easy movement and stretches for what was trained.
-- In warm-up and cool-down lines, name drills and stretches from the catalog's "warm-up drills" and "cool-down stretches" lists (e.g. "Leg swings, 10 each side", "Hamstring stretch, 30 s each side"); they stay lines, not exercises.
-Conditioning, endurance and mobility days follow the same idea with their own parts (e.g. warm-up → intervals → core → cool-down).
+Every session has three parts: warm-up → main workout → cool-down. What goes inside each, and in what order, is your call:
+- warm-up (\`warmup\`) for TODAY's work: often a few minutes of easy cardio (a cardio exercise with durationSec, note "easy"), then 2–4 moving drills from the catalog's "warm-up drills" for the joints and muscles of the day, one round each (e.g. leg swings 10 per side). No long held stretches here.
+- main workout (\`exercises\`): the day's key lifts or efforts first, while they are fresh, then supporting work, then core where it fits or is asked for (core goes after the heavy lifts unless they say otherwise or it is a core day), an optional short finisher if time and the goal allow. For a heavy first lift, say in its loadNote to ramp up with 2–3 lighter sets.
+- cool-down (\`cooldown\`): 2–4 stretches from the catalog's "cool-down stretches" for what was trained, 30–45 s holds (per side when one-sided), optionally a few easy cardio minutes first.
+Conditioning, endurance and mobility days have the same three parts with their own main workout (intervals, a run, a mobility flow).
 A class or a named workout ("GTX", "bootcamp", "HIIT") is the NAME of the session: design it as exercises of that kind, from what they said it is ("a mix of conditioning and strength"), never as one exercise called the class.
 
 Each exercise has a role, and its dose follows its role and the day's focus — never one rep range for the whole session:
 - main: strength 3–6 reps, 2–4 min rest; hypertrophy 6–12 reps, 90–120 s; mixed in between.
 - accessory (supporting, incl. every one-joint move, flyes, face pulls, curls, calf raises, leg curls): 8–15 reps, 60–90 s.
 - core: 8–15 controlled reps or 20–45 s holds; pick what the day and their needs call for (anti-extension, anti-rotation, side work, flexion), not always the same move.
-- conditioning: intervals or timed work, short rests; mobility: slow, timed holds.
+- conditioning: intervals or timed work, short rests; mobility (a mobility day's main workout): slow, timed holds.
 - at least 2 working sets per exercise; an exercise worth doing once is worth 2 sets, otherwise drop it.
 Continuity: keep the main lifts consistent with what they have been doing (lastLoads, recentSessions) so progress shows; vary supporting work.
 
@@ -231,7 +246,7 @@ Rules:
 - Recovery: avoid heavy work on muscle groups trained hard in the last 48 h (or planned hard the next day) unless the ask names them; a short night or low HRV → keep it moderate and say so in why.
 - Conditions/medications on record shape intensity conservatively and are stated as the reason in why (e.g. "your record lists hypertension, so no breath-holding maximal lifts") — never advice about the condition itself. If limitations are given, respect them literally and name what you avoided.
 - Experience: new → simple machine/bodyweight patterns, more coaching cues; experienced → compound barbell work first.
-- Keep it doable: 4–7 exercises for 45 min strength, fewer for shorter; supersets are fine, say so in notes. Warm-up 2–4 lines, cool-down 1–3 lines.
+- Keep it doable: 4–7 exercises for 45 min strength, fewer for shorter; supersets are fine, say so in notes. Warm-up and cool-down about 5 minutes each unless the session is long or they ask.
 - Plain language, no medical claims, no supplements. Output ONLY the schema.`;
 
 /**
@@ -265,7 +280,9 @@ export const asPrevious = (s: PlannedSessionInput): NonNullable<DesignAsk["previ
  * were not counted. Now: 60 s set-up per exercise, and 2 lighter ramp-up sets before each main lift.
  */
 export const estimateMinutes = (s: PlannedSessionInput) => {
-  let sec = (WARMUP_MIN + COOLDOWN_MIN) * 60;
+  // Warm-up / cool-down: what their exercises take (10 s to move between them), never less than the old allowance.
+  const partSec = (items: PartItem[] | undefined) => (items ?? []).reduce((a, x) => a + (x.durationSec ?? (x.reps ?? 10) * REPS_SECONDS) * (x.perSide ? 2 : 1) + 10, 0);
+  let sec = Math.max(WARMUP_MIN * 60, partSec(s.warmupItems)) + Math.max(COOLDOWN_MIN * 60, partSec(s.cooldownItems));
   for (const e of s.exercises ?? []) {
     for (const set of e.sets ?? []) sec += set.durationSec ?? (set.targetReps ?? 10) * REPS_SECONDS;
     sec += Math.max(0, (e.sets?.length ?? 1) - 1) * (e.sets?.[0]?.restSec ?? 60) + SETUP_SEC;
@@ -295,8 +312,8 @@ export const checkSession = (s: PlannedSessionInput, ask: DesignAsk, brief: Desi
 
   // What no trainer would do, whatever structure was chosen (Nov 15 2026). Everything else is the designer's call.
   if ((s.exercises?.length ?? 0) > 0) {
-    if (!(s.warmup ?? []).some((w) => w.trim())) issues.push("no warm-up — add one for today's work");
-    if (!(s.cooldown ?? []).some((w) => w.trim())) issues.push("no cool-down — add easy movement and stretches for what was trained");
+    if (!s.warmupItems?.length && !(s.warmup ?? []).some((w) => w.trim())) issues.push("no warm-up — add one for today's work");
+    if (!s.cooldownItems?.length && !(s.cooldown ?? []).some((w) => w.trim())) issues.push("no cool-down — add easy movement and stretches for what was trained");
   }
   for (const e of s.exercises ?? []) {
     const def = exerciseByKey(e.exerciseKey);
@@ -335,8 +352,8 @@ export const checkSession = (s: PlannedSessionInput, ask: DesignAsk, brief: Desi
   const place = s.place ?? ask.place ?? brief.training?.place ?? null;
   if (place && place !== "gym" && kit.size > 0) {
     const haveLine = ["bodyweight", ...[...kit].filter((x) => x !== "bodyweight")].join(", ");
-    for (const e of s.exercises ?? []) {
-      const needs = exerciseByKey(e.exerciseKey)?.needs ?? (e.equipment && e.equipment !== "bodyweight" ? [e.equipment] : []);
+    for (const e of [...(s.warmupItems ?? []), ...(s.exercises ?? []), ...(s.cooldownItems ?? [])]) {
+      const needs = exerciseByKey(e.exerciseKey)?.needs ?? ("equipment" in e && e.equipment && e.equipment !== "bodyweight" ? [e.equipment] : []);
       const missing = needs.filter((k) => !kit.has(k));
       if (missing.length) issues.push(`${e.name} needs ${missing.join(" and ")}, not available (${place}: ${haveLine})`);
     }
@@ -424,7 +441,28 @@ const fit = (text: string | null | undefined, max: number) => {
   return `${cut.slice(0, cut.lastIndexOf(" ") > max * 0.6 ? cut.lastIndexOf(" ") : cut.length).trimEnd()}…`;
 };
 
+/** "Leg swings, 10 each side" · "Hamstring stretch, 30 s each side" · "Bike, 5 min easy" — the line the app shows. */
+export const partLine = (x: PartItem) => {
+  const t = x.durationSec ?? null;
+  const dose = t != null ? (t >= 60 && t % 60 === 0 ? `${t / 60} min` : `${t} s`) : x.reps != null ? `${x.reps}${x.perSide ? "" : " reps"}` : "";
+  return [x.name, [dose && `${dose}${x.perSide ? " each side" : ""}`, x.note].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+};
+
+const toPart = (x: PartOut): PartItem => {
+  const c = canonicalExercise(x.name, x.exerciseKey);
+  return {
+    exerciseKey: c.key,
+    name: c.def ? c.name : fit(x.name, 80)!,
+    reps: x.durationSec ? null : x.reps != null ? Math.max(1, Math.min(100, x.reps)) : null,
+    durationSec: x.durationSec ? Math.max(5, Math.min(3600, x.durationSec)) : null,
+    perSide: !!x.perSide,
+    note: fit(x.note, 80),
+  };
+};
+
 const toPlanned = (out: SessionOut, ask: DesignAsk): PlannedSessionInput => {
+  const warmupItems = (out.warmup ?? []).slice(0, 8).map(toPart);
+  const cooldownItems = (out.cooldown ?? []).slice(0, 8).map(toPart);
   const exercises: ExerciseInput[] = out.exercises.map((e) => {
     const c = canonicalExercise(e.name, e.exerciseKey);
     const n = Math.max(1, Math.min(10, e.sets || 1));
@@ -448,8 +486,10 @@ const toPlanned = (out: SessionOut, ask: DesignAsk): PlannedSessionInput => {
     place: out.place ?? ask.place ?? null,
     muscleGroups: Array.from(new Set(out.muscleGroups.flatMap(muscleGroupsFor).concat(exercises.map((e) => e.muscleGroup!).filter((g) => g && g !== "mobility")))).slice(0, 8),
     why: out.why?.slice(0, 300) ?? null,
-    warmup: out.warmup.slice(0, 8).map((w) => fit(w, 160)!),
-    cooldown: out.cooldown.slice(0, 8).map((w) => fit(w, 160)!),
+    warmup: warmupItems.map((x) => fit(partLine(x), 160)!),
+    cooldown: cooldownItems.map((x) => fit(partLine(x), 160)!),
+    warmupItems,
+    cooldownItems,
     notes: fit(out.notes, 1000),
     distanceKm: out.distanceKm,
     exercises,
