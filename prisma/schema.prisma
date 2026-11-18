@@ -163,6 +163,7 @@ model Patient {
   workoutSessions      WorkoutSession[]      @relation("PatientWorkouts")
   workoutPlans         WorkoutPlan[]         @relation("PatientWorkoutPlans")
   trainingProfile      TrainingProfile?
+  healthId             HealthId?
   agentPreference      AgentPreference?
   labJourneys          LabJourney[]          @relation("PatientLabJourneys")
   encounters           Encounter[]           @relation("PatientEncounters")
@@ -1755,4 +1756,59 @@ enum WaitlistStatus {
   INVITED
   JOINED
   UNSUBSCRIBED
+}
+
+/**
+ * ------------------------------- Health ID ----------------------------------
+ * Who the person is and what they want from Ollo (Nov 2026, plan
+ * docs/onboarding-health-id-plan.md). Facts (age, body, record, last
+ * physical, family history) are NOT stored here — they are rendered from the
+ * record every time. This row holds only the STORY: short sections written
+ * from their own words, by the person or by Ollie. `sources` keeps their
+ * words verbatim; `changes` is the version history (who, what, why).
+ */
+model HealthId {
+  id        String           @id @default(uuid())
+  patientId String           @unique
+  patient   Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  story     Json             @default("{}")
+  version   Int              @default(0)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  sources   HealthIdSource[]
+  changes   HealthIdChange[]
+}
+
+model HealthIdSource {
+  id         String   @id @default(uuid())
+  healthIdId String
+  healthId   HealthId @relation(fields: [healthIdId], references: [id], onDelete: Cascade)
+  /**
+   * onboarding | record_again | typed
+   */
+  kind       String
+  text       String
+  createdAt  DateTime @default(now())
+
+  @@index([healthIdId, createdAt])
+}
+
+model HealthIdChange {
+  id         String    @id @default(uuid())
+  healthIdId String
+  healthId   HealthId  @relation(fields: [healthIdId], references: [id], onDelete: Cascade)
+  version    Int
+  /**
+   * person | ollie | onboarding
+   */
+  by         String
+  section    String
+  before     String?
+  after      String?
+  reason     String?
+  sourceId   String?
+  undoneAt   DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([healthIdId, createdAt])
 }

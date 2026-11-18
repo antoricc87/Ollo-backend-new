@@ -86,7 +86,8 @@ export class SeamPatientService {
     const s = await buildPatientSnapshot(patientId);
     if (!s) return null;
     // Signals and nights stay patient-side until the physician app is real (ruling Sep 24 2026, #7).
-    const { memories: _m, subAccounts: _s, client: _c, mealPlan: _mp, savedMeals: _sm, signals: _sg, nights: _n, ...rest } = s;
+    // The Health ID story is the patient's own words about themselves: patient-side too.
+    const { healthId: _h, memories: _m, subAccounts: _s, client: _c, mealPlan: _mp, savedMeals: _sm, signals: _sg, nights: _n, ...rest } = s;
     return rest;
   }
 

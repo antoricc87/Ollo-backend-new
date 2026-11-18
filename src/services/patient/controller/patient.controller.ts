@@ -1,4 +1,5 @@
 import { onLabReport } from "../../signals/labs.service";
+import { requiredMissing } from "../../health_id/model/understand.service";
 import LabsJourneyService from "../../labs_journey/model/labsJourney.model";
 import { ObjectId } from "../../../utils/idValidation";
 import { Request, Response } from "express";
@@ -238,6 +239,13 @@ export class PatientHandler {
         .json(
           Util.error({}, "Patient id is required and must be a valid ObjectId")
         );
+    }
+    // Onboarding completes only with the required facts on record (Nov 11 2026,
+    // Health ID plan). Production only: dev builds keep their "DEV: skip".
+    if (patientData?.onBoardingComplete === true && process.env.NODE_ENV === "production") {
+      const missing = await requiredMissing(patientId);
+      if (missing.length)
+        return res.status(422).json(Util.error({ code: "missing_facts", missing }, "Some details are still missing"));
     }
     const updatedPatient = await updatePatient(patientId, patientData);
     if (updatedPatient) {
