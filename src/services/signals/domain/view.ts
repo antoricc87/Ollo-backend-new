@@ -38,7 +38,13 @@ export type ConcernLevel = "act" | "watch" | "low";
 export type Concern = { level: ConcernLevel; label: string; line: string | null } | null;
 
 export type TrendKey = "settling" | "worse" | "flat" | "no_data" | "back" | "easing" | "same";
-export type TrendView = { key: TrendKey; label: string; progress?: { done: number; of: number } } | null;
+/**
+ * `label` is SHORT on purpose — it must fit one line in a half-width column
+ * (the list's TREND column, the page's Trend tile, at most ~14 characters).
+ * The detail goes in `line`, under it on the page (Nov 18 2026: "Back to your
+ * usual" wrapped to two rows and the tick sat alone on the first).
+ */
+export type TrendView = { key: TrendKey; label: string; line: string | null; progress?: { done: number; of: number } } | null;
 
 export type ActionKind = "tell_ollie" | "view_note" | "explain_report" | "answer_followup" | "continue_checkin" | "view_chat" | "view_summary";
 /**
@@ -204,6 +210,8 @@ const GAP_SHOWN = 3;
 const nightsToClose = (key: string) => (detectorBy(key)?.resolveAfterDays ?? 3) + 1;
 /** "Getting worse": this far past the severity it had when Ollie mentioned it, in bars. */
 export const WORSE_BY = 0.5;
+/** episodes.ts NO_DATA_CLOSE_DAYS, restated for the words. */
+const NO_DATA_DAYS = 21;
 
 /** First night of the run that opened it: the dip fires on the 3rd off night in a row. */
 export const runStartOf = (f: FindingRow, runNights: number) => (f.detectorKey === "recovery.dip" ? addDays(f.firstDetectedAt, -(runNights - 1)) : f.firstDetectedAt);
@@ -327,7 +335,8 @@ export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
     const start = runStartOf(f, ctx.runNights);
     const end = f.lastDataAt ?? f.lastSeenAt;
     const withData = ctx.nights.filter((n) => n.date >= start && n.date <= (f.resolvedAt ?? ctx.today) && (n.hrvMs != null || n.sleepingHr != null || n.restingHr != null)).length;
-    meta = findingClosed ? `${dayLabel(start)} – ${dayLabel(f.resolvedAt!)} · ${plural(withData, "night")}` : `Since ${dayLabel(start)} · ${plural(withData || daysBetween(start, end) + 1, "night")}`;
+    // Short dates: with "· 2 check-ins" added the line must still fit one row of a card.
+    meta = findingClosed ? `${range(start, f.resolvedAt!)} · ${plural(withData, "night")}` : `Since ${shortDay(start)} · ${plural(withData || daysBetween(start, end) + 1, "night")}`;
   } else if (f.detectorKey === "weight.change") {
     evidence = weightEvidence(f);
     const e = f.evidence ?? {};
@@ -343,31 +352,37 @@ export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
   if (linked) meta += ` · ${plural(linked.checkIns, "check-in")}`;
 
   /* concern */
-  const own: Concern = isLab && findingClosed ? null : findingClosed || positive ? concernOf("low") : concernOf("watch");
+  // A line under the word on every tile, as on a check-in's ("No warning signs so far"): what the status means here, nothing more.
+  const own: Concern = isLab && findingClosed ? null : positive ? concernOf("low", "Good news, nothing to follow") : findingClosed ? concernOf("low", "Closed") : concernOf("watch", isLab ? "Outside the lab's range on this report" : "Open while the data is off");
   const concern = linked ? higher(own, linked.card.concern) : own;
 
   /* trend — the data's, even when a check-in is linked */
   let trend: TrendView = null;
+  const weight = f.detectorKey === "weight.change";
   if (!isLab) {
     if (findingClosed) {
       trend =
         f.closeReason === "no_data"
-          ? { key: "no_data", label: "No new data" }
+          ? { key: "no_data", label: "No new data", line: `Closed after ${NO_DATA_DAYS} days without data` }
           : f.closeReason === "quiet"
-          ? { key: "back", label: f.detectorKey === "weight.change" ? "Back under a 5% change" : "Back to your usual" }
+          ? weight
+            ? { key: "back", label: "Back under 5%", line: `${plural(nightsToClose(f.detectorKey), "weigh-in")} in a row under a 5% change` }
+            : { key: "back", label: "Back to usual", line: `${nightsToClose(f.detectorKey)} nights in a row inside your usual` }
           : null;
     } else {
       const stale = f.detectorKey === "recovery.dip" && f.lastDataAt && daysBetween(f.lastDataAt, ctx.today) > 1;
       const of = nightsToClose(f.detectorKey);
-      if (stale) trend = { key: "no_data", label: `No new data since ${dayLabel(f.lastDataAt!)}` };
+      if (stale) trend = { key: "no_data", label: "No new data", line: `Last night on record ${dayLabel(f.lastDataAt!)}` };
       else if (f.quietDays > 0)
         trend = {
           key: "settling",
-          label: f.detectorKey === "weight.change" ? `${f.quietDays} of ${plural(of, "weigh-in")} back under 5%` : `${f.quietDays} of ${of} nights back`,
+          label: "Settling",
+          line: weight ? `${f.quietDays} of ${plural(of, "weigh-in")} back under 5%` : `${f.quietDays} of ${of} nights back in your usual`,
           progress: { done: f.quietDays, of },
         };
-      else if (f.notifiedSeverity != null && f.severity >= f.notifiedSeverity + WORSE_BY) trend = { key: "worse", label: "Getting worse" };
-      else trend = { key: "flat", label: "Flat" };
+      else if (f.notifiedSeverity != null && f.severity >= f.notifiedSeverity + WORSE_BY)
+        trend = { key: "worse", label: "Getting worse", line: "Further from your usual than when Ollie told you" };
+      else trend = { key: "flat", label: "Flat", line: weight ? "No weigh-in back under 5% yet" : "No night back in your usual yet" };
     }
   }
 
@@ -391,7 +406,7 @@ export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
         : isLab
         ? `Report of ${shortDay(labDate(f))}${labCounts(f) ? ` · ${labCounts(f)}` : ""}`
         : f.detectorKey === "weight.change"
-        ? `Back under a 5% change · ${range(f.firstDetectedAt, end)}`
+        ? `Back under 5% · ${range(f.firstDetectedAt, end)}`
         : `Back to your usual · ${range(runStartOf(f, ctx.runNights), end)}`;
   }
 
@@ -450,10 +465,10 @@ export const followUpPrompt = (complaintText: string) => `Follow up on my check-
 /** What "Pick it up" in the chat header sends. */
 export const RESUME_PROMPT = "Let's pick the check-in back up.";
 
-const TREND_OF: Record<"BETTER" | "SAME" | "WORSE", { key: TrendKey; label: string; felt: string; step: number }> = {
-  BETTER: { key: "easing", label: "Easing", felt: "Better", step: -1 },
-  SAME: { key: "same", label: "No different", felt: "No different", step: 0 },
-  WORSE: { key: "worse", label: "Getting worse", felt: "Worse", step: 1 },
+const TREND_OF: Record<"BETTER" | "SAME" | "WORSE", { key: TrendKey; label: string; felt: string; said: string; step: number }> = {
+  BETTER: { key: "easing", label: "Easing", felt: "Better", said: "better", step: -1 },
+  SAME: { key: "same", label: "No change", felt: "No different", said: "no different", step: 0 },
+  WORSE: { key: "worse", label: "Getting worse", felt: "Worse", said: "worse", step: 1 },
 };
 
 const checkinTitle = (c: CheckinRow) => (c.unnamed ? c.complaintText.trim().replace(/\s+/g, " ").slice(0, 60) : c.title);
@@ -469,7 +484,7 @@ const checkinTrend = (c: CheckinRow): TrendView => {
   const latest = c.checkIns[0];
   if (!latest) return null;
   const t = TREND_OF[latest.trend];
-  return { key: t.key, label: t.label };
+  return { key: t.key, label: t.label, line: `You said ${t.said} on day ${latest.day}` };
 };
 
 const OUTCOME_LINE: Record<string, string> = {

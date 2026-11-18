@@ -64,7 +64,7 @@ const checkin = (over: Partial<CheckinRow> = {}): CheckinRow => ({
 describe("C1 · overnight, open, settling", () => {
   const card = dataCard(finding(), ctx());
   it("starts on the first off night and counts nights with data", () => {
-    expect(card.meta).toBe("Since Mon 5 Oct · 7 nights");
+    expect(card.meta).toBe("Since 5 Oct · 7 nights");
     // The episode's nights, not the 3-night window the detector last judged.
     expect(card.line).toBe("HRV and sleeping heart rate away from your usual on 5 of 7 nights");
   });
@@ -74,7 +74,7 @@ describe("C1 · overnight, open, settling", () => {
     expect(e.nights.map((n: any) => n.off)).toEqual([true, true, true, true, true, false, false]);
   });
   it("trend counts nights back, concern is Watch, actions tell + note", () => {
-    expect(card.trend).toEqual({ key: "settling", label: "2 of 4 nights back", progress: { done: 2, of: 4 } });
+    expect(card.trend).toEqual({ key: "settling", label: "Settling", line: "2 of 4 nights back in your usual", progress: { done: 2, of: 4 } });
     expect(card.concern?.label).toBe("Watch");
     expect(card.actions.map((a) => a.kind)).toEqual(["tell_ollie", "view_note"]);
   });
@@ -162,7 +162,7 @@ describe("C6 · linked to a check-in, getting worse", () => {
     const followed = checkin();
     const c = dataCard(finding({ status: "RESOLVED", resolvedAt: "2026-10-11", closeReason: "quiet", encounterId: "e1" }), ctx({ linked: { card: checkinCard(followed), due: false, threadId: "t9", complaintText: "x", checkIns: 2 } }));
     expect(c.status).toBe("open");
-    expect(c.trend?.label).toBe("Back to your usual");
+    expect(c.trend?.label).toBe("Back to usual");
     expect(c.concern?.label).toBe("Watch");
     const closed = dataCard(finding({ status: "RESOLVED", resolvedAt: "2026-10-11", closeReason: "quiet", encounterId: "e1" }), ctx({ linked: { card: checkinCard(checkin({ state: "closed", outcome: "resolved", closedOn: "2026-10-12" })), due: false, threadId: "t9", complaintText: "x", checkIns: 2 } }));
     expect(closed.status).toBe("resolved");
@@ -201,6 +201,26 @@ describe("check-in card and page", () => {
     expect(card.status).toBe("resolved");
     expect(card.concern?.label).toBe("Low");
     expect(card.closeLabel).toBe("Closed after you said it was better · 4–9 Oct");
+  });
+});
+
+describe("trend words fit one line", () => {
+  it("every label is 14 characters or fewer; the detail is in the line", () => {
+    const cards = [
+      dataCard(finding(), ctx()),
+      dataCard(finding({ quietDays: 0 }), ctx()),
+      dataCard(finding({ quietDays: 0, severity: 3 }), ctx()),
+      dataCard(finding({ lastDataAt: "2026-10-05" }), ctx()),
+      dataCard(finding({ status: "RESOLVED", resolvedAt: "2026-10-11", closeReason: "quiet" }), ctx()),
+      dataCard(finding({ detectorKey: "weight.change", status: "RESOLVED", resolvedAt: "2026-10-11", closeReason: "quiet" }), ctx()),
+      dataCard(finding({ status: "RESOLVED", resolvedAt: "2026-10-29", closeReason: "no_data" }), ctx()),
+      ...(["BETTER", "SAME", "WORSE"] as const).map((t) => checkinCard(checkin({ checkIns: [{ day: 3, trend: t, note: null, on: "2026-10-07" }] }))),
+    ];
+    for (const c of cards) {
+      expect(c.trend).not.toBeNull();
+      expect(c.trend!.label.length).toBeLessThanOrEqual(14);
+      expect(c.trend!.line).toBeTruthy();
+    }
   });
 });
 
