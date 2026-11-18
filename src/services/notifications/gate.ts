@@ -18,7 +18,7 @@ import moment from "moment-timezone";
  */
 
 /** Ollie's own notification kinds. Anything else is sent as before. */
-export const AGENT_KINDS = new Set(["weekly_review", "signal", "watch_out", "plan_week", "missed_session", "lighter_today", "digest"]);
+export const AGENT_KINDS = new Set(["weekly_review", "signal", "watch_out", "plan_week", "missed_session", "lighter_today", "checkin_followup", "digest"]);
 
 export const isAgentKind = (kind: string) => AGENT_KINDS.has(kind);
 
@@ -90,6 +90,7 @@ export const DIGEST_LINES: Record<string, string> = {
   lighter_today: "a lighter option for today's session",
   signal: "a note on something that changed",
   watch_out: "your new labs read",
+  checkin_followup: "a check-in follow-up",
 };
 
 /** On its own, each kind's push says this. */
@@ -100,6 +101,7 @@ export const SINGLE_LINES: Record<string, string> = {
   lighter_today: "A lighter option for today's session is ready",
   signal: "A note on something that changed",
   watch_out: "Your new labs are read",
+  checkin_followup: "A check-in follow-up is due",
 };
 
 /** "a", "a and b", "a, b and c". */

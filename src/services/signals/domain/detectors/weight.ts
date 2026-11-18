@@ -29,10 +29,12 @@ export const weightChange: Detector = {
   key: "weight.change",
   version: 1,
   weight: 1.2,
-  resolveAfterDays: 7,
+  /** Quiet WEIGH-INS (not days) beyond this close it: two in a row back inside the bar. */
+  resolveAfterDays: 1,
   cooldownDays: 30,
   against: "usual",
   domain: "health",
+  dataAsOf: ({ weights }) => (weights.length ? [...weights].sort((a, b) => a.date.localeCompare(b.date))[weights.length - 1].date : null),
   run: ({ weights, plan, today, weightUnit }: SignalInput): Candidate | null => {
     const sorted = [...weights].sort((a, b) => a.date.localeCompare(b.date));
     const latest = sorted[sorted.length - 1];

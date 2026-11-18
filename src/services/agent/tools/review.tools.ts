@@ -2,7 +2,7 @@ import moment from "moment-timezone";
 import { z } from "zod";
 import { dayString, defineTool } from "./registry";
 import { isoWeekRange } from "../memory/dates";
-import { weekReviewFor, weekStatFor } from "../../review/model/weekReview.model";
+import { habitFindingsFor, weekReviewFor, weekStatFor } from "../../review/model/weekReview.model";
 import { statLine } from "../../review/domain/weekStats";
 
 /**
@@ -24,7 +24,11 @@ export const getWeekReview = defineTool({
     const asked = input.weekOf ? isoWeekRange(ctx.timeZone, moment.tz(input.weekOf, ctx.timeZone)) : lastWeek;
     // A week still running has nothing to average yet — review the last finished one.
     const week = asked.start >= thisWeek.start ? lastWeek : asked;
-    const [review, stat] = await Promise.all([weekReviewFor(ctx.patientId, week.start, ctx.timeZone), weekStatFor(ctx.patientId, week.start, ctx.timeZone).catch(() => null)]);
+    const [review, stat, habits] = await Promise.all([
+      weekReviewFor(ctx.patientId, week.start, ctx.timeZone),
+      weekStatFor(ctx.patientId, week.start, ctx.timeZone).catch(() => null),
+      habitFindingsFor(ctx.patientId, week.start, ctx.timeZone).catch(() => []),
+    ]);
     return {
       result: {
         ...(week.start !== asked.start ? { note: `That week is not over yet — this is the last finished one (${week.start} → ${week.end}).` } : {}),
@@ -34,6 +38,14 @@ export const getWeekReview = defineTool({
               worthKnowing: {
                 fact: statLine(stat),
                 note: "A pattern code found in their own last four weeks, not on the card. Say it once, in one sentence, with both numbers and how many days each covers. It is a difference between two averages — never say one thing causes the other, never give advice from it.",
+              },
+            }
+          : {}),
+        ...(habits.length
+          ? {
+              habits: {
+                found: habits,
+                note: "What code noticed about their habits that week, against their plan or the app (not on the card). Mention at most the first two, one clause each, as plain fact in their own numbers — never a scolding, never a cause. Skip any the card already makes obvious.",
               },
             }
           : {}),

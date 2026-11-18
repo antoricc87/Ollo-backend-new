@@ -2,6 +2,7 @@ import moment from "moment-timezone";
 import { decide, ESCALATION_STEP, WEEKLY_BUDGET } from "../domain/budget";
 import { loggingStopped } from "../domain/detectors/habits";
 import { applyDay } from "../domain/episodes";
+import { suppressedBy } from "../domain/registry";
 import { Candidate, SignalInput } from "../domain/types";
 import { foodDays } from "../model/foodDays";
 import { replay } from "../replay/replay";
@@ -21,11 +22,17 @@ const noState = { sentThisWeek: [], lastNotifiedAt: {}, lastNotifiedSeverity: {}
 
 describe("budget", () => {
   it("sends the top-ranked candidate and holds the rest to the weekly cap", () => {
-    const decisions = decide([candidate("sleep.debt", 1.2), candidate("recovery.dip", 3), candidate("logging.stopped", 2)], noState);
+    const decisions = decide([candidate("weight.change", 1.2), candidate("recovery.dip", 3), candidate("labs.report", 2)], noState);
     const sent = decisions.filter((d) => d.notify);
     expect(sent).toHaveLength(WEEKLY_BUDGET);
     expect(sent[0].candidate.detectorKey).toBe("recovery.dip");
     expect(decisions.find((d) => !d.notify)?.reason).toBe("weekly budget spent");
+  });
+
+  /** Ruling Nov 16 2026: habits are lines in the weekly review, never notes. */
+  it("never notifies a habit finding, however severe", () => {
+    const decisions = decide([candidate("logging.stopped", 4), candidate("training.stopped", 3), candidate("sleep.debt", 2)], noState);
+    expect(decisions.every((d) => !d.notify && d.reason === "habit — goes to the weekly review")).toBe(true);
   });
 
   it("stays silent when a week's budget is already spent", () => {
@@ -39,8 +46,8 @@ describe("budget", () => {
   });
 
   it("silences a detector its higher-order partner makes meaningless", () => {
-    const decisions = decide([candidate("logging.stopped", 2), candidate("nutrition.protein_short", 3)], noState);
-    expect(decisions.find((d) => d.candidate.detectorKey === "nutrition.protein_short")?.reason).toBe("suppressed by a higher-order signal");
+    expect(suppressedBy(["logging.stopped"]).has("nutrition.protein_short")).toBe(true);
+    expect(suppressedBy(["training.stopped"]).has("training.drifting")).toBe(true);
   });
 
   it("repeats nothing within the cooldown", () => {
@@ -51,6 +58,16 @@ describe("budget", () => {
 
   /** The bug the replay harness found on its first run: a marginal episode
    *  must not be able to hide a far worse one inside its cooldown. */
+  it("a new episode is fresh news after the cooldown, even if milder than the last one", () => {
+    const decisions = decide([candidate("recovery.dip", 1.2)], { ...noState, lastNotifiedAt: { "recovery.dip": "2026-08-01" }, lastNotifiedSeverity: { "recovery.dip": 3 }, openNotifiedSeverity: {} });
+    expect(decisions[0].notify).toBe(true);
+  });
+
+  it("the same episode, told and no worse, is not told again", () => {
+    const decisions = decide([candidate("recovery.dip", 2)], { ...noState, lastNotifiedAt: { "recovery.dip": "2026-08-01" }, lastNotifiedSeverity: { "recovery.dip": 2 }, openNotifiedSeverity: { "recovery.dip": 2 } });
+    expect(decisions[0].reason).toBe("already mentioned, not materially worse");
+  });
+
   it("lets a materially worse episode through its own cooldown", () => {
     const decisions = decide([candidate("recovery.dip", 1.3 + ESCALATION_STEP)], { ...noState, lastNotifiedAt: { "recovery.dip": "2026-09-20" }, lastNotifiedSeverity: { "recovery.dip": 1.3 } });
     expect(decisions[0].notify).toBe(true);
@@ -147,11 +164,12 @@ describe("episodes", () => {
   });
 
   it("resolves after the detector's quiet window and opens a fresh episode if it returns", () => {
-    let state = applyDay([], [candidate("recovery.dip", 2)], "2026-09-01");
-    state = applyDay(state.episodes, [], "2026-09-05"); // quiet longer than resolveAfterDays
+    let state = applyDay([], [candidate("logging.stopped", 2)], "2026-09-01");
+    state = applyDay(state.episodes, [], "2026-09-03"); // judges absence: calendar days count, past resolveAfterDays (1)
+    expect(state.episodes[0].closeReason).toBe("quiet");
     expect(state.resolved).toHaveLength(1);
-    expect(state.episodes[0].resolvedAt).toBe("2026-09-05");
-    const again = applyDay(state.episodes.filter((e) => e.status !== "RESOLVED"), [candidate("recovery.dip", 2)], "2026-09-20");
+    expect(state.episodes[0].resolvedAt).toBe("2026-09-03");
+    const again = applyDay(state.episodes.filter((e) => e.status !== "RESOLVED"), [candidate("logging.stopped", 2)], "2026-09-20");
     expect(again.opened).toHaveLength(1);
     expect(again.opened[0].firstDetectedAt).toBe("2026-09-20");
   });

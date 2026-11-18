@@ -272,6 +272,7 @@ async function* runLoop(p: {
       askedHere: !!e.awaiting && e.awaiting.threadId === threadId,
       answeredToday: e.answeredToday,
       raise: e.raise,
+      route: e.route,
     })),
   });
   const messages: ChatMessage[] = [{ role: "system", content: system }, ...toChatMessages(window.messages)];

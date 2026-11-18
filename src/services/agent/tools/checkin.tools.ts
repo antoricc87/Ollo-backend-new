@@ -1,4 +1,5 @@
 import { MAX_OWN_QUESTIONS, OwnQuestion, ownQuestionsLeft, questionAsked } from "../../encounter/domain/ownQuestions";
+import { linkEncounter } from "../../signals/model/findings.store";
 import threadStore from "../memory/thread.store";
 import { bodyFor } from "../../encounter/domain/bodyRegions";
 import { z } from "zod";
@@ -9,6 +10,7 @@ import { AssessmentRejected, buildAssessment, NEXT_STEP_KINDS } from "../../enco
 import { resolveProtocol } from "../../encounter/domain/protocols";
 import { historyComplete, isSafetySlot, questionFor, shouldHalt } from "../../encounter/domain/stateMachine";
 import { escalationFor } from "../../encounter/domain/escalation";
+import { RouteChoice } from "../../encounter/domain/rescreen";
 import { Protocol, SlotValue, TrippedFlag } from "../../encounter/domain/types";
 
 /**
@@ -122,6 +124,9 @@ export const startCheckin = defineTool({
         },
       };
     }
+    // Opened in a signal's note thread (the "still going — want to check in?"
+    // offer): the signal led here, so the two are linked on the record.
+    if (ctx.threadId) await linkEncounter(ctx.patientId, ctx.threadId, started.id).catch((e) => console.error("link check-in to signal failed", e));
     const active = await encounterService.stateFor(ctx.patientId, started.id);
     const protocol = resolveProtocol(started.complaintKey);
     const plan = active ? protocolPlan(protocol, active.state) : null;
@@ -418,14 +423,107 @@ export const recordFollowup = defineTool({
     if (!done) return { result: { error: NOT_FOLLOWED } };
     const { ack } = done;
     const say = [ack.recorded, ack.trajectory, ack.persistence ? `${ack.persistence.line} ${ack.persistence.action}` : null, ack.next].filter(Boolean);
+    // Once they have answered the clinician offer (any route), it is not made again (ruling Nov 16 2026).
+    const offer = ack.offerRoute && !encounterService.routeDecided(done.route);
     return {
       result: {
         checkinId: done.id,
         about: done.about,
         say,
-        offer: ack.offerRoute ? "Offer ONCE, as a choice not a verdict: a booking with a clinician, a message to the care team, or the written summary to take along." : null,
+        offer: offer
+          ? "Offer ONCE, as a choice not a verdict: a booking with a clinician, a message to the care team, or the written summary to take along. When they answer — yes to a booking or the care team, their own doctor, or no thanks — call record_checkin_route with their choice, so the offer is not repeated."
+          : null,
+        ...(ack.offerRoute && !offer ? { routeAlready: "They already answered the clinician offer for this check-in — do not offer it again." } : {}),
+        ...(done.rescreen
+          ? {
+              rescreen: {
+                question: done.rescreen.question,
+                options: done.rescreen.options.map((o) => o.label),
+                note: `It is worse, so the warning signs are asked again — this comes BEFORE any offer. If their words already describe one of these, call recheck_checkin (checkinId ${done.id}) right away with it. Otherwise ask exactly this question, listing the options in plain words, and when they answer call recheck_checkin with what they picked (an empty list for none of these) and their words.`,
+              },
+            }
+          : {}),
         note:
           "Your reply is the `say` lines, in your own voice but with nothing added: it was written down, what they have reported so far, when you will ask next. Day numbers count from the check-in, not from when the symptom began — never say 'since it started'. What is NOT yours to say: what the change means, that it is healing / settling / on track / nothing to worry about, how long it should take, or anything to do for the symptom. 'Better' gets a plain acknowledgement, not congratulations on recovering. If they described something NEW (a new symptom, it spread, a warning sign), say that it is new and offer to go through it — record_checkin reopens the check-in.",
+      },
+    };
+  },
+});
+
+/**
+ * The warning signs asked again after a worse follow-up (Nov 16 2026). Same
+ * rules, same escalation copy and card as in the interview — a sign matched on
+ * day 6 escalates exactly as on day 1.
+ */
+export const recheckCheckin = defineTool({
+  name: "recheck_checkin",
+  description:
+    "After a WORSE follow-up: record their answer to the warning-sign question record_followup returned (rescreen). Pass the options they said are new, by label, and their own words. The warning-sign rules run on it; a match comes back as an escalation to give THIS turn.",
+  schema: z.object({
+    checkinId: z.string().optional().describe("The checkinId record_followup returned."),
+    signs: z.array(z.string().max(200)).max(8).describe("The rescreen options (labels) they said are new. Empty list = none of these."),
+    words: z.string().max(1000).optional().describe("What they said, verbatim."),
+  }),
+  risk: "read",
+  cardRole: "result",
+  async run(ctx, input) {
+    const picked = await pickFollowed(ctx, input.checkinId);
+    if (!picked) return { result: { error: NOT_FOLLOWED } };
+    const row = await encounterService.stateFor(ctx.patientId, picked.id);
+    const options = row?.protocol.slots.find((sl) => sl.key === "associated")?.options ?? [];
+    const norm = (t: string) => t.trim().toLowerCase();
+    const values = (input.signs as string[]).map((label) => options.find((o) => norm(o.label) === norm(label) || o.value === label)?.value).filter((v): v is string => !!v);
+    const unmatched = (input.signs as string[]).filter((label) => !options.some((o) => norm(o.label) === norm(label) || o.value === label));
+    const done = await encounterService.rescreen(ctx.patientId, picked.id, values, input.words);
+    if (!done) return { result: { error: NOT_FOLLOWED } };
+    if ("nothingToAsk" in done) return { result: { recorded: false, note: "This check-in has no warning-sign question to ask again. Carry on with the follow-up reply." } };
+    const newFlags = done.state.redFlags.slice(done.flagsBefore);
+    const escalation = newFlags.length ? escalationFor(done.state.redFlags, done.region) : null;
+    if (escalation && shouldHalt(done.state.redFlags)) {
+      return {
+        result: { halted: true, note: "Your reply for this turn is fixed — the crisis script was sent as written. Do not add to it." },
+        cards: [{ type: "checkin_escalation", title: escalation.title, data: escalation }],
+        pinnedAnswer: [escalation.body, escalation.action].filter(Boolean).join("\n\n"),
+      };
+    }
+    return {
+      result: {
+        recorded: true,
+        matchedNow: flagView(newFlags),
+        escalation,
+        ...(unmatched.length ? { notAnOption: unmatched } : {}),
+        note: escalation
+          ? "They matched a published criterion. Say so plainly THIS TURN, with the criterion and who publishes it, and give the action from the escalation. Do not soften it. Follow-ups on this check-in stop here — its route is the next step."
+          : unmatched.length
+          ? "Nothing on the warning-sign list matched. Something they said is not on the list (notAnOption): say that it is new and offer to go through it as a fresh check-in (start_checkin with newEpisode). Then finish the follow-up reply."
+          : "None of the warning signs is new. Finish the follow-up reply (the `say` lines and, if there is one, the offer) — say nothing about what this means.",
+      },
+      cards: escalation ? [{ type: "checkin_escalation", title: escalation.title, data: escalation }] : [],
+    };
+  },
+});
+
+/** What they chose when offered a clinician — kept, so a "no thanks" is not met with the same offer at every worse answer. */
+export const recordCheckinRoute = defineTool({
+  name: "record_checkin_route",
+  description:
+    "Record their answer to the clinician offer on a followed check-in: ollo_doctor (a booking or a message to the care team), own_doctor (they will see their own), keep_watching (no thanks for now). Once recorded, the offer is not made again for that check-in.",
+  schema: z.object({
+    checkinId: z.string().optional().describe("Id from record_followup or 'Check-ins being followed'."),
+    choice: z.enum(["ollo_doctor", "own_doctor", "keep_watching"]),
+  }),
+  risk: "read",
+  async run(ctx, input) {
+    const picked = await pickFollowed(ctx, input.checkinId);
+    if (!picked) return { result: { error: NOT_FOLLOWED } };
+    await encounterService.setRoute(ctx.patientId, picked.id, input.choice as RouteChoice);
+    return {
+      result: {
+        recorded: input.choice,
+        note:
+          input.choice === "keep_watching"
+            ? "Written down. Acknowledge it plainly — no persuading, no warning. The follow-ups carry on; a warning sign still escalates."
+            : "Written down. If they want the booking or the care-team message now, use those tools.",
       },
     };
   },

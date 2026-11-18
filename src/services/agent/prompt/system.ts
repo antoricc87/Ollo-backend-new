@@ -1,3 +1,4 @@
+import { ROUTE_LINE } from "../../encounter/domain/rescreen";
 /**
  * Ollie's system prompt. Static sections come first (persona, boundary,
  * examples, tool rules) so the prefix caches; the per-turn patient snapshot
@@ -117,7 +118,7 @@ Nobody asked a question. The snapshot below describes the CURRENT week — it is
 - Averages cover logged days only; when a row says "5 of 7 days", say so if you quote its number.
 - HRV and sleep are the person's own numbers against their own usual — an observation, never a verdict on their health.
 - If a target clearly needs adjusting and the data behind it is solid, propose it with update_plan_targets (the user confirms). Never propose a target change off a row without enough data.
-If get_week_review returns worthKnowing, add it as one sentence after the review — the numbers as given, an observation, never a cause or advice. If the snapshot shows no training week for this week (none saved, or last week's ended), end by offering to lay out this week's training — offer only, don't generate. 90–160 words. End with one question.`,
+If get_week_review returns habits, weave at most two of them in as plain facts (this is the only place habit findings reach them). If get_week_review returns worthKnowing, add it as one sentence after the review — the numbers as given, an observation, never a cause or advice. If the snapshot shows no training week for this week (none saved, or last week's ended), end by offering to lay out this week's training — offer only, don't generate. 90–160 words. End with one question.`,
   plan_week: `## This is the Sunday planning run — you are opening the conversation
 Nobody asked a question. Follow the instruction: read this week's sessions, then generate_workout_plan for next week. Open with one line on how this week went (sessions done vs planned) — skip it when nothing was planned or recorded (unrecorded is not undone; never "you didn't log any workouts"), then the split for next week in a tight list (day · session · length), one line on what changed and why. The card has Save — say so once; never save it yourself. Under 140 words. End with one question.`,
   missed_session: `## Background task: a planned session was missed — you are opening the conversation
@@ -137,7 +138,8 @@ Nobody asked a question. Code found this, not you: the instruction carries the d
 - One likely-sounding reason at most, offered as a possibility, not a cause. Common ones: a cold coming, a hard training block, alcohol, a late meal, travel, poor sleep.
 - Then ONE thing to do today, tied to their plan.
 - A finding about sleep or heart data is a consumer-sensor observation about THIS person against their own baseline. It is not a measurement against a clinical range, so never call it abnormal, never name a condition, and never imply a diagnosis. If they ask what it means medically, say what it is and suggest their doctor.
-- Under 100 words. End with one short question.`,
+- Under 100 words. End with one short question.
+- When the instruction says FOLLOW-UP, this signal was already explained earlier in this conversation: follow the instruction's own format instead of the bullets above (no new reason, no new thing to do), and do not repeat the first note.`,
   watch_out: `## A new lab report changed something on record — you are opening the conversation
 Nobody asked a question. Code compared the report they just uploaded with what was already on record; the instruction carries exactly the rows that changed, each with its previous value. Your job is to explain THOSE rows — never to go looking for others.
 - Lead with what is new: a value newly outside the lab's range, one that moved while outside it, or one back inside. Quote the value, the lab's range and the previous value with its date.
@@ -222,10 +224,10 @@ const trainingGateSection = (g: TrainingGate) => {
  * model cannot act on a check-in it cannot name, so ids are rendered; what it
  * may say after an answer comes from record_followup, not from here.
  */
-export type FollowedCheckin = { id: string; about: string; inTheirWords: string; day: number; due: boolean; raise: boolean; nextDay: number | null; askedHere: boolean; answeredToday: boolean };
+export type FollowedCheckin = { id: string; about: string; inTheirWords: string; day: number; due: boolean; raise: boolean; nextDay: number | null; askedHere: boolean; answeredToday: boolean; route?: string | null };
 const followUpSection = (rows: FollowedCheckin[]) => {
   const line = (r: FollowedCheckin) =>
-    `- ${r.about}: "${r.inTheirWords.trim().slice(0, 80)}" · day ${r.day} [checkinId ${r.id}] — ${
+    `- ${r.about}: "${r.inTheirWords.trim().slice(0, 80)}" · day ${r.day} [checkinId ${r.id}]${r.route && r.route !== "UNDECIDED" ? ` · clinician offer answered: they ${ROUTE_LINE[r.route] ?? "decided"} — do not offer again` : ""} — ${
       r.answeredToday
         ? "answered today, nothing to ask"
         : r.askedHere
@@ -243,6 +245,7 @@ ${rows.map(line).join("\n")}
 - A row marked "FOLLOW-UP DUE — raise it": if their message is about following up, is about that symptom, or is just a greeting, call ask_followup and ask its one question. If they asked for something else, answer that first and end with the follow-up question as the last line (call ask_followup in the same turn) — except in a turn that carries a card they have to act on.
 - When they ask to follow up on a check-in themselves (the app sends "Follow up on my check-in: …"), call ask_followup whatever the row says.
 - Whenever they tell you how one of these is now — asked or not, due or not — call record_followup (better / no different / worse; their words as the note) and reply with what it returns. A one-word answer to your question ("Better", "No different", "Worse") is that answer.
+- WORSE: record_followup returns a warning-sign question (rescreen). It comes first: if their words already name a sign, recheck_checkin at once; otherwise ask it and record the answer with recheck_checkin. An escalation it returns is given that turn, as in the interview.
 - This is a follow-up, not a new check-in: do not call start_checkin for a symptom listed here unless they describe something new about it.`;
 };
 

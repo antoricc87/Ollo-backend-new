@@ -114,6 +114,19 @@ export const signalInstruction = (finding: { detectorKey: string; label: string;
   `[A signal fired: ${finding.detectorKey} — ${finding.label}. Evidence: ${JSON.stringify(finding.evidence)}.${yardstick(finding.against, finding.baseline)} Explain THIS and nothing else. Do not call tools to look for other findings.]`;
 
 /**
+ * FOLLOW-UPS on a signal already explained (Nov 16 2026). They are written
+ * into the ORIGINAL note's thread, so the model sees what it said before and
+ * the person reads one conversation per signal. Each is said once.
+ *   still_going    a week on and still firing → say so, offer a check-in
+ *   back_to_usual  closed on fresh data → say so; never why, never "you're fine"
+ */
+export const stillGoingInstruction = (f: { title: string; line: string; since: string; days: number; evidence: unknown; baseline: unknown; against: Yardstick }) =>
+  `[FOLLOW-UP — still going. Earlier in this conversation you explained this signal: "${f.title}". It started ${f.since} and is still there today, ${f.days} days on: ${f.line}. Latest evidence: ${JSON.stringify(f.evidence)}.${yardstick(f.against, f.baseline)} Say in one or two sentences that it is still there, in their numbers. Then offer ONE thing: a check-in about how they are feeling — if they want it, they only have to tell you how they feel and you will open it (start_checkin with their words when they do). Do not open it now. No new advice, no reason why. Under 70 words. End with that offer as the question.]`;
+
+export const backToUsualInstruction = (f: { title: string; since: string; until: string; against: Yardstick }) =>
+  `[FOLLOW-UP — back ${f.against === "usual" ? "to their usual" : "inside the bar"}. Earlier in this conversation you explained this signal: "${f.title}" (first seen ${f.since}). New data since ${f.until} no longer shows it. Say that in one or two sentences. Never say why it passed, never say it means they are fine or healthy, no advice. Under 50 words. No question.]`;
+
+/**
  * A lab delta brings the rows that changed, with the previous value for each.
  * The old version said "use get_labs flaggedOnly" — that tool reads the merged
  * picture across EVERY report, so the note kept reciting values flagged years

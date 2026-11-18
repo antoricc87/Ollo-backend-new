@@ -1107,6 +1107,98 @@ earliest one 14–30 days before it, loss or gain, worded in the unit last used;
 it fires under a weight-loss plan too and says the plan aims for loss. The 5%
 bar is drafted — clinical review. Tests `signals/tests/weight.test.ts`.
 
+## Signals lifecycle: opened → told → followed → closed (Nov 16 2026)
+
+Rulings (all as recommended): habit findings stop being notes → weekly review
+only; a health finding still going after 7 days → one note offering a
+check-in; a told health finding that closes → one "back to your usual" note;
+check-ins close by themselves. Both kinds now share one lifecycle.
+- **Quiet days count only on new data.** `Detector.dataAsOf(input)` = newest
+  day it has data for; `episodes.applyDay(…, dataAsOf)` adds a quiet day only
+  when that moves past `Finding.lastDataAt` (one per new data day; a detector
+  without `dataAsOf` judges absence and counts calendar days). Resolve when
+  `quietDays > resolveAfterDays`; no data for `NO_DATA_CLOSE_DAYS` (21) →
+  `closeReason: "no_data"`, never back to normal. `weight.change` counts
+  weigh-ins (resolveAfterDays 1 = two quiet weigh-ins).
+- **Overnight runs are consecutive and recent** (`vitals.recentRun`): nights
+  are only stored when uploaded, so `lastN` read "3 nights running" across
+  gaps and, with no uploads, re-judged the same old nights every morning (the
+  dip never closed). The run must end on a night ≤1 day old.
+- **Budget:** habits never notify (`"habit — goes to the weekly review"`);
+  still recorded. Escalation compares against `notifiedSeverity` (snapshotted
+  by `markNotified`; `severity` is overwritten daily, so it used to compare
+  against yesterday). Two maps: `lastNotifiedSeverity` (any episode — lets a
+  much worse one through the cooldown) and `openNotifiedSeverity` (the open
+  episode — "already mentioned"); a new, milder episode after the cooldown is
+  news again. The replay demo shows both dips now.
+- **Follow-ups** `signals/domain/followups.ts` (pure): told + health + CONCERN
+  + not an event detector. `still_going` ≥ `STILL_GOING_DAYS` (7) since first
+  seen, fired within a day, no linked check-in; `back_to_usual` on a `quiet`
+  close. Outside the budget, said once (`Finding.followUps` stamps), written
+  into the ORIGINAL note's thread (`stillGoingInstruction` /
+  `backToUsualInstruction`; prompt: "FOLLOW-UP → the instruction's format").
+  `threadStore.listForApp` announces a resolved signal's thread again when it
+  carries a back-to-usual note.
+- **One door:** `signals.service.tellFinding` — daily candidates and lab
+  reports (`labs.service`, kind `watch_out`, push now, outside the budget;
+  replaced lab rows get `closeReason: "replaced"`). `recovery.restored` is
+  RETIRED (`registry.RETIRED_DETECTORS`: not run, still described/domained).
+- **Bridge:** `start_checkin` in a thread that is a finding's note thread sets
+  `Finding.encounterId` (`findings.store.linkEncounter`).
+- **Check-ins close** (`encounter/domain/followUp.ts closeVerdict /
+  closeUnfollowed`): better twice in a row → `resolved` (at once, inside
+  `recordFollowUp`; the ack says so); past day 14: no answers `lapsed`, last
+  better `resolved`, else `persisted`; unfinished/paused 14 days untouched
+  `lapsed`; red flag at day 14 `escalated`. `Encounter.outcome`, status
+  CLOSED, `phase` untouched, event `close {outcome, auto}`. The training gate
+  reads OPEN/ABANDONED only, so a check-in closed early as resolved stops
+  shaping training.
+- **Morning check-in sweep** `encounter/followups.service.ts runCheckinsDue`
+  in the agent tick after the signal scan, before the digest (scan hour,
+  every patient with an open check-in): close, then for a due follow-up write
+  the code-built question into the check-in's thread (`askFollowUp` logs
+  `followup_asked`, so Ollie does not raise it again; chips show) and queue a
+  `checkin_followup` digest row ("A check-in follow-up is due", dedupe per
+  slot). No model call anywhere in the sweep.
+- **Habit findings → weekly review:** `weekReview.model.habitFindingsFor`
+  (episodes overlapping the week, top 3) → `get_week_review` `habits`. NB the
+  weekly review needs an ACTIVE HealthPlan — without one, habits reach no one.
+- Schema (additive): Finding `notifiedSeverity`, `quietDays`, `lastDataAt`,
+  `closeReason`, `followUps`, `encounterId`; Encounter `outcome`. Local dev DB:
+  apply ADD COLUMN only — `db push` from a branch drops other branches' tables.
+- Tests `signals/tests/lifecycle.test.ts`, `tests/encounter/close.test.ts`.
+  Not evaluated yet: the wording of the two follow-up notes (paid evals).
+
+## Worsening check-ins (Nov 16 2026)
+
+Gap: a WORSE follow-up never reached the warning-sign rules (they read the
+interview's slots and only ran in `record_checkin`, in the check-in's own
+thread) — "worse, and now my leg is weak" was written down as "worse". His
+picks: ask again the next day; remember the answer to the clinician offer.
+Not chosen: "did you get seen?" after an escalation; linking a comeback.
+- **Re-check** `encounter/domain/rescreen.ts`: WORSE → `record_followup`
+  returns `rescreen` (the protocol's own `associated` options, code-built
+  question); `recheck_checkin {signs, words}` → `EncounterService.rescreen` →
+  `answer()` (same path as the interview: sanitize → applyAnswer → evaluate,
+  text prescan on their words). Signs only accumulate (`mergeSigns`). A
+  finished check-in KEEPS its phase (applyAnswer would move ROUTE → RECAP and
+  the mode would read it as an interview running). A match → same escalation
+  copy + `checkin_escalation` card (self-harm pinned); the check-in then has a
+  red flag, so follow-ups stop and it closes at day 14 as `escalated`.
+  Only the `associated` question is re-asked (onset/trigger rules are not).
+- **Next day** `followUp.slotFor`: after WORSE on day d, d+1 is a follow-up
+  day (daily while worse, inside the 14-day window); `FollowUp.slot`;
+  `followUpAck` says "I'll check in again tomorrow."; `followed().nextDay`
+  likewise. `answeredToday` is now by check-in day, not rolling 24 h (a 20:00
+  worse hid the next morning's question from the 09:00 sweep).
+- **Clinician offer answered once:** `record_checkin_route {choice:
+  ollo_doctor | own_doctor | keep_watching}` → `Encounter.route` (OLLO_DOCTOR /
+  OWN_DOCTOR / TRACKING) + event `route_choice`. `record_followup` offers only
+  while route is UNDECIDED (else `routeAlready`); the follow-up section shows
+  the answered route. A warning sign still escalates — that is not an offer.
+- Both new tools are in `CORE_TOOLS`. Tests `tests/encounter/worse.test.ts`.
+  Not evaluated with the model yet (paid evals).
+
 ## Background tasks + the morning digest (Oct 16 2026)
 
 Ruling: Ollie does work unasked, leaves it READY in the app, and the push names
@@ -2107,3 +2199,41 @@ link to `Patient` — keep it that way. Same 200 for new and duplicate emails
 to Redis if scaled out). New signups email `WAITLIST_NOTIFY_TO` (default
 info@ollo-health.com) via `utils/emailService` (non-fatal). Browser origins
 come from the CORS allow-list in `config/app-config.ts`.
+
+## The Signals page, built on the server (Nov 17 2026)
+
+His mockups (check-in list + detail, data-signal cards C1–C7) were checked
+against the lifecycle; the rule he set is that the DESIGN ADAPTS TO THE
+FUNCTIONALITY unless it exposes a gap in the evaluation. Every word, date and
+state on the page now comes from `signals/domain/view.ts` (pure; tests
+`signals/tests/view.test.ts`, one case per mockup card), loaded by
+`signals/model/overview.ts`:
+- `GET /api/signals/overview` → `{open, resolved, meta: "1 open · 2 resolved"}`
+  of `SignalCard`s (tags, title, shortTitle, meta, line, you, evidence,
+  concern, trend, closeLabel, actions). HEALTH findings + every check-in; a
+  check-in a finding led to (`Finding.encounterId`) is INSIDE that card, not
+  listed again.
+- `GET /api/signals/item/:key` (`data:<findingId>` | `checkin:<encounterId>`)
+  → `{card, checkin}`; `checkin` = summary, concern, trend, direction-only
+  chart, timeline (YOU / FELT / OLLIE / LEFT rows), next follow-up date,
+  disclaimer. Check-in rows come from `EncounterService.signalRows`.
+- `POST /api/signals/findings/:id/thread` → the thread "Tell Ollie how you
+  feel" opens: the note's thread, or a new CHAT thread recorded on the finding,
+  so a check-in started there links (an on-record-only finding had no thread
+  and could never be linked).
+Rulings: Concern = STATUS (Act = warning sign matched, check-ins only · Watch =
+open · Low = closed; linked = the higher; lab rows under Resolved carry no
+meter). Check-in chart = direction only (−1 better, +1 worse). A linked data
+signal's trend follows the DATA. Lab report = one-day event for now (later a
+follow-up the clinician closes), no trend, action "Explain my report" (the
+Labs page's prompt). OLLIE line = "Most consistent with <first possibility>"
+from the stored assessment, never "looks like". Data trend: settling "2 of 4
+nights back" (quietDays / resolveAfterDays+1) · "Getting worse" (≥ 0.5 bar
+past the severity when told) · "No new data since …" · Flat.
+GAP FIXED from the design (ruling Nov 17): the overnight dip counted a quiet
+day whenever its 3-nights-running rule did not fire, so one good night made the
+next two off nights count as "back". `Detector.insideUsual` (dip:
+`nightInside`, every watched vital, the dip's own 1σ cut-off) now decides:
+only a night inside counts, an off night resets the count. The chart's dot
+colour is the same judgement, so dots and "2 of 4" cannot disagree.
+App side not built yet — waiting for his final design.

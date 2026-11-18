@@ -1,11 +1,13 @@
 import moment from "moment-timezone";
 import prisma from "../../utility/prismaClient";
 import { safeTz } from "../agent/memory/dates";
-import { getPreference, runProactiveFor, signalInstruction, SIGNAL_SCAN_HOUR } from "../agent/proactive/proactive.service";
+import { backToUsualInstruction, getPreference, runProactiveFor, signalInstruction, stillGoingInstruction, SIGNAL_SCAN_HOUR } from "../agent/proactive/proactive.service";
+import { describeFinding } from "./domain/describe";
+import { FollowUpEvent, FollowUpKind } from "./domain/followups";
 import { detectorBy } from "./domain/registry";
 import { runDay } from "./domain/run";
 import { collect } from "./model/collect";
-import { markNotified, notifyState, openEpisodes, persistDay } from "./model/findings.store";
+import { markFollowUp, markNotified, notifyState, openEpisodes, persistDay } from "./model/findings.store";
 
 /**
  * THE DAILY SCAN — run the detectors for one patient, write the episodes down,
@@ -27,7 +29,46 @@ export type ScanResult = {
   episodesOpened: number;
   notified: { detectorKey: string; threadId: string | null }[];
   withheld: { detectorKey: string; reason: string }[];
+  followUps: { detectorKey: string; kind: FollowUpKind; threadId: string | null; skipped?: string }[];
 };
+
+/**
+ * THE ONE WAY A FINDING IS TOLD — daily candidates, follow-ups and lab reports
+ * all come through here, so "told" means the same thing everywhere: the note
+ * exists, then the row is stamped (a failed run is retried, never silently
+ * counted as said).
+ */
+export const tellFinding = async (
+  patientId: string,
+  findingId: string,
+  opts: { kind: "signal" | "watch_out"; instruction: string; title?: string; severity: number; threadId?: string | null }
+): Promise<{ threadId: string | null; notified: boolean; skipped?: string }> => {
+  const proactive = await runProactiveFor(patientId, opts.kind, { instruction: opts.instruction, title: opts.title, threadId: opts.threadId ?? null });
+  const threadId = "threadId" in proactive ? proactive.threadId ?? null : null;
+  if ("skipped" in proactive) return { threadId, notified: false, skipped: proactive.skipped };
+  await markNotified(findingId, threadId, opts.severity);
+  return { threadId, notified: proactive.notified };
+};
+
+/** A follow-up note, written into the signal's own thread and stamped once it exists. */
+const tellFollowUp = async (patientId: string, findingId: string, event: FollowUpEvent, today: string) => {
+  const row = await prisma.finding.findUnique({ where: { id: findingId } });
+  if (!row) return { threadId: null, skipped: "no row" };
+  const detector = detectorBy(row.detectorKey);
+  const words = describeFinding(row);
+  const since = event.episode.firstDetectedAt;
+  const instruction =
+    event.kind === "still_going"
+      ? stillGoingInstruction({ ...words, since, days: daysBetween(since, today), evidence: row.evidence, baseline: row.baseline, against: detector?.against ?? "rule" })
+      : backToUsualInstruction({ title: words.title, since, until: event.episode.lastSeenAt, against: detector?.against ?? "rule" });
+  const proactive = await runProactiveFor(patientId, "signal", { instruction, threadId: row.threadId, title: words.title });
+  const threadId = "threadId" in proactive ? proactive.threadId ?? null : null;
+  if ("skipped" in proactive) return { threadId, skipped: proactive.skipped };
+  await markFollowUp(findingId, event.kind);
+  return { threadId };
+};
+
+const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
 
 export const runScanFor = async (patientId: string, opts: { notify?: boolean } = {}): Promise<ScanResult | { skipped: string }> => {
   const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { timeZone: true } });
@@ -37,7 +78,7 @@ export const runScanFor = async (patientId: string, opts: { notify?: boolean } =
 
   const [input, open, notify] = await Promise.all([collect(patientId, today, tz), openEpisodes(patientId, tz), notifyState(patientId, today, tz)]);
   const run = runDay(input, open.episodes, notify);
-  const ids = await persistDay(patientId, run, today, tz, open);
+  const { ids, resolvedIds } = await persistDay(patientId, run, today, tz, open);
 
   const result: ScanResult = {
     patientId,
@@ -46,24 +87,39 @@ export const runScanFor = async (patientId: string, opts: { notify?: boolean } =
     episodesOpened: run.opened.length,
     notified: [],
     withheld: run.decisions.filter((d) => !d.notify).map((d) => ({ detectorKey: d.candidate.detectorKey, reason: d.reason })),
+    followUps: [],
   };
-  if (opts.notify === false) return result;
+  if (opts.notify === false) {
+    result.followUps = run.followUps.map((f) => ({ detectorKey: f.detectorKey, kind: f.kind, threadId: null, skipped: "notify=false" }));
+    return result;
+  }
 
   for (const decision of run.decisions.filter((d) => d.notify)) {
     const candidate = decision.candidate;
     const findingId = ids[candidate.detectorKey];
+    if (!findingId) continue;
     try {
-      const proactive = await runProactiveFor(patientId, "signal", {
+      const told = await tellFinding(patientId, findingId, {
+        kind: "signal",
         instruction: signalInstruction({ detectorKey: candidate.detectorKey, label: candidate.label, severity: candidate.severity, evidence: candidate.evidence, baseline: candidate.baseline ?? null, against: detectorBy(candidate.detectorKey)?.against ?? "rule" }),
         title: candidate.direction === "POSITIVE" ? "Worth knowing" : "Something changed",
+        severity: candidate.severity,
       });
-      const threadId = "threadId" in proactive ? proactive.threadId ?? null : null;
-      // Stamped only once the note actually exists: a failed run must be
-      // retried tomorrow, not silently counted as said.
-      if (!("skipped" in proactive) && findingId) await markNotified(findingId, threadId);
-      if (!("skipped" in proactive)) result.notified.push({ detectorKey: candidate.detectorKey, threadId });
+      if (!told.skipped) result.notified.push({ detectorKey: candidate.detectorKey, threadId: told.threadId });
     } catch (e) {
       console.error(`signal notify failed for ${patientId} (${candidate.detectorKey})`, e);
+    }
+  }
+
+  // Outside the budget: these continue a conversation already started (ruling Nov 16 2026).
+  for (const event of run.followUps) {
+    const findingId = event.kind === "back_to_usual" ? resolvedIds[event.detectorKey] : ids[event.detectorKey];
+    if (!findingId) continue;
+    try {
+      const told = await tellFollowUp(patientId, findingId, event, today);
+      result.followUps.push({ detectorKey: event.detectorKey, kind: event.kind, threadId: told.threadId, ...(told.skipped ? { skipped: told.skipped } : {}) });
+    } catch (e) {
+      console.error(`signal follow-up failed for ${patientId} (${event.detectorKey} ${event.kind})`, e);
     }
   }
   return result;

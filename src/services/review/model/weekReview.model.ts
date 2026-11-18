@@ -4,6 +4,8 @@ import { BASELINE_NIGHTS, baselineOf, STD_FLOOR } from "../../signals/domain/bas
 import { buildWeekReview, Range, WeekData, WeekReview } from "../domain/weekReview";
 import { pickStat, WINDOW_DAYS, weekStats, type WeekStat } from "../domain/weekStats";
 import { collect } from "../../signals/model/collect";
+import { describeFinding } from "../../signals/domain/describe";
+import { domainOf } from "../../signals/domain/registry";
 
 /**
  * Reads one ISO week and the one before it, and hands them to the pure
@@ -122,4 +124,28 @@ export async function weekStatFor(patientId: string, weekStart: string, timeZone
     await prisma.agentPreference.upsert({ where: { patientId }, create: { patientId, taskRuns: next }, update: { taskRuns: next } });
   }
   return picked;
+}
+
+/**
+ * HABIT FINDINGS FOR THE WEEK (ruling Nov 16 2026): what they did or didn't
+ * do — training against the plan, food logging, protein, sleep against its
+ * target, weight against the plan's pace — is no longer a note of its own. The
+ * detectors still record it; it reaches the person here, as a line in the
+ * weekly review. An episode counts for a week it overlapped.
+ */
+export async function habitFindingsFor(patientId: string, weekStart: string, timeZone: string): Promise<{ title: string; line: string; ongoing: boolean }[]> {
+  const start = moment.tz(weekStart, timeZone).startOf("day");
+  const end = start.clone().add(7, "days");
+  const rows = await prisma.finding.findMany({
+    where: {
+      patientId,
+      firstDetectedAt: { lt: end.toDate() },
+      OR: [{ resolvedAt: null }, { resolvedAt: { gte: start.toDate() } }],
+    },
+    orderBy: { peakSeverity: "desc" },
+  });
+  return rows
+    .filter((r) => domainOf(r.detectorKey) === "habit")
+    .slice(0, 3)
+    .map((r) => ({ ...describeFinding(r), ongoing: r.status !== "RESOLVED" }));
 }

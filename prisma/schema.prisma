@@ -898,9 +898,9 @@ model Booking {
 }
 
 model PatientInsurance {
-  id                String   @id @default(uuid())
-  patientId         String   @unique
-  patient           Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  id                String    @id @default(uuid())
+  patientId         String    @unique
+  patient           Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
   insuranceProvider String
   planType          String
   fullPlanName      String?
@@ -921,8 +921,8 @@ model PatientInsurance {
   deductiblePaidAt  DateTime?
   // When the member agreed to their card / summary being read by the AI provider (asked before every upload).
   aiReadConsentAt   DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 }
 
 // Chat and Messages
@@ -1574,6 +1574,12 @@ model Encounter {
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
   closedAt        DateTime?
+  /// How it ended when it closed by itself (Nov 16 2026): "resolved" (better
+  /// twice in a row, or better at the end), "persisted" (not better by day 14),
+  /// "lapsed" (no follow-up answered, or an interview left unfinished),
+  /// "escalated" (a warning sign matched — its route was the next step).
+  /// Null when closed by hand through the old route endpoint.
+  outcome         String?
   events          EncounterEvent[]
   checkIns        EncounterCheckIn[]
 
@@ -1667,39 +1673,59 @@ enum FindingDirection {
 /// the yardstick as it stood THAT DAY (a rolling "usual" drifts, so a finding
 /// from March is not comparable to one from September without it).
 model Finding {
-  id              String           @id @default(uuid())
-  patientId       String
-  patient         Patient          @relation("PatientFindings", fields: [patientId], references: [id], onDelete: Cascade)
+  id               String           @id @default(uuid())
+  patientId        String
+  patient          Patient          @relation("PatientFindings", fields: [patientId], references: [id], onDelete: Cascade)
   /// Detector identity, e.g. "recovery.dip" | "training.stopped" — the key the
   /// cooldown and the dedup are keyed on. Never a diagnosis label.
-  detectorKey     String
+  detectorKey      String
   /// Bumped when a detector's rule changes, so old rows stay interpretable.
-  detectorVersion Int
-  status          FindingStatus    @default(OPEN)
-  direction       FindingDirection @default(CONCERN)
+  detectorVersion  Int
+  status           FindingStatus    @default(OPEN)
+  direction        FindingDirection @default(CONCERN)
   /// Current severity on the shared scale (roughly sigma from the patient's
   /// own baseline, or fraction off a plan target) — comparable ACROSS
   /// detectors, which is what lets one weekly budget rank them against
   /// each other instead of tuning ten thresholds.
-  severity        Float
+  severity         Float
   /// Worst severity reached during the episode.
-  peakSeverity    Float
+  peakSeverity     Float
   /// The numbers that tripped it: shape owned by the detector.
-  evidence        Json
+  evidence         Json
   /// The baseline/target judged against, as it stood when the episode opened.
-  baseline        Json?
-  firstDetectedAt DateTime
-  lastSeenAt      DateTime
+  baseline         Json?
+  firstDetectedAt  DateTime
+  lastSeenAt       DateTime
   /// Set when the detector has been quiet for its resolve window. Resolution is
   /// derived from the data only — Ollie never asks (ruling 2026-09-24).
-  resolvedAt      DateTime?
+  resolvedAt       DateTime?
   /// When this episode was pushed, if it ever won the budget. Null = detected
   /// and on the record, but never worth interrupting anyone for.
-  notifiedAt      DateTime?
+  notifiedAt       DateTime?
   /// The PROACTIVE thread the note was written into, when it was notified.
-  threadId        String?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  /// Its follow-up notes ("still going", "back to your usual") go into the
+  /// same thread, so one signal is one conversation.
+  threadId         String?
+  /// Severity at the moment it was notified — what "materially worse" is
+  /// measured against. `severity` is overwritten every day.
+  notifiedSeverity Float?
+  /// Quiet days ON WHICH THE DETECTOR HAD DATA since it last fired. Resolution
+  /// counts these, never calendar days: a night with no upload is not a night
+  /// back to normal (Nov 16 2026).
+  quietDays        Int              @default(0)
+  /// Last day the detector had data to judge (local noon). Lets a reader see
+  /// "open, but no data since …".
+  lastDataAt       DateTime?
+  /// Why it resolved: "quiet" (data back inside the bar), "no_data" (no data
+  /// for too long to say), "replaced" (a newer lab report took its place).
+  closeReason      String?
+  /// Follow-up notes already written, keyed by kind with the ISO time:
+  /// { stillGoing?: string, backToUsual?: string }. Each is said once.
+  followUps        Json?
+  /// The check-in it led to, when the person accepted the offer in its thread.
+  encounterId      String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   /// The open episode per detector — the uniqueness the dedup relies on — is
   /// enforced in code (`findings.store.ts`), not here: Postgres cannot express

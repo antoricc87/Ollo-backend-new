@@ -1,5 +1,5 @@
 import { baselinesBefore, isUsable, NightRow, zOf } from "../baseline";
-import { baselineJson, Candidate, Detector, lastN, round, SignalInput } from "../types";
+import { baselineJson, Candidate, dayBefore, Detector, lastN, round, SignalInput } from "../types";
 
 /**
  * Overnight detectors. Both judge a night against the patient's OWN usual —
@@ -15,7 +15,7 @@ import { baselineJson, Candidate, Detector, lastN, round, SignalInput } from "..
  */
 
 /** Nights in a row a vital must be off before it counts. */
-const RUN_NIGHTS = 3;
+export const RUN_NIGHTS = 3;
 /** Sigma from the usual that counts as "off" — the same cut-off the card
  *  uses for its "below usual" label, so the two can never disagree. */
 const BAR_SIGMA = 1;
@@ -31,10 +31,43 @@ const WATCHED: Watched[] = [
   { key: "restingHr", sign: 1, label: "resting heart rate" },
 ];
 
+/** A night counts as recent when it ended today or yesterday: the scan runs at
+ *  09:00 and last night may not have reached the server yet. */
+const FRESH_NIGHT_DAYS = 1;
+
+/** The newest night carrying any watched vital, if it is recent. */
+export const latestVitalNight = (nights: NightRow[], today: string): string | null => {
+  for (let i = nights.length - 1; i >= 0; i--) {
+    const n = nights[i];
+    if (n.hrvMs == null && n.sleepingHr == null && n.restingHr == null) continue;
+    return n.date >= dayBefore(today, FRESH_NIGHT_DAYS) && n.date <= today ? n.date : null;
+  }
+  return null;
+};
+
+/**
+ * The last `count` nights as CONSECUTIVE calendar nights ending on the newest
+ * recent night, or null when one is missing. Rows are only stored for nights
+ * that were uploaded, so `lastN` alone read "three nights running" across gaps
+ * and, with no new uploads, kept judging the same old nights every morning.
+ */
+export const recentRun = (nights: NightRow[], today: string, count = RUN_NIGHTS): NightRow[] | null => {
+  const end = latestVitalNight(nights, today);
+  if (!end) return null;
+  const byDate = new Map(nights.map((n) => [n.date, n]));
+  const run: NightRow[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const night = byDate.get(dayBefore(end, i));
+    if (!night) return null;
+    run.push(night);
+  }
+  return run;
+};
+
 /** Mean |z| across the run when the vital is off on EVERY night of it, else null. */
-const runSeverity = (nights: NightRow[], w: Watched): number | null => {
-  const run = lastN(nights, RUN_NIGHTS);
-  if (run.length < RUN_NIGHTS) return null;
+const runSeverity = (nights: NightRow[], today: string, w: Watched): number | null => {
+  const run = recentRun(nights, today);
+  if (!run) return null;
   let total = 0;
   for (const night of run) {
     const value = night[w.key];
@@ -46,6 +79,27 @@ const runSeverity = (nights: NightRow[], w: Watched): number | null => {
     total += z;
   }
   return total / run.length;
+};
+
+/**
+ * Is one night inside the usual on every watched vital that can be judged?
+ * "Off" is the same cut-off the dip itself uses (BAR_SIGMA, bad direction
+ * only), so a night drawn amber on the Signals chart is exactly a night that
+ * does not count toward "back to your usual". null when nothing could be
+ * judged (no vitals, or no usable baseline yet).
+ */
+export const nightInside = (nights: NightRow[], date: string): boolean | null => {
+  const night = nights.find((n) => n.date === date);
+  if (!night) return null;
+  const usual = baselinesBefore(nights, date);
+  let judged = false;
+  for (const w of WATCHED) {
+    const value = night[w.key];
+    if (value == null || !isUsable(usual[w.key])) continue;
+    judged = true;
+    if (zOf(value, usual[w.key]) * w.sign >= BAR_SIGMA) return false;
+  }
+  return judged ? true : null;
 };
 
 /**
@@ -62,13 +116,18 @@ export const recoveryDip: Detector = {
   cooldownDays: 14,
   against: "usual",
   domain: "health",
-  run: ({ nights }: SignalInput): Candidate | null => {
-    const hits = WATCHED.map((w) => ({ w, severity: runSeverity(nights, w) })).filter((h): h is { w: Watched; severity: number } => h.severity != null);
+  dataAsOf: ({ nights, today }) => latestVitalNight(nights, today),
+  insideUsual: ({ nights, today }) => {
+    const latest = latestVitalNight(nights, today);
+    return latest ? nightInside(nights, latest) : null;
+  },
+  run: ({ nights, today }: SignalInput): Candidate | null => {
+    const hits = WATCHED.map((w) => ({ w, severity: runSeverity(nights, today, w) })).filter((h): h is { w: Watched; severity: number } => h.severity != null);
     if (!hits.length) return null;
     hits.sort((a, b) => b.severity - a.severity);
     const worst = hits[0];
     const agreement = hits.length > 1 ? 0.5 : 0;
-    const run = lastN(nights, RUN_NIGHTS);
+    const run = recentRun(nights, today) as NightRow[];
     const usual = baselinesBefore(nights, run[0].date)[worst.w.key];
     return {
       detectorKey: "recovery.dip",
@@ -86,6 +145,11 @@ export const recoveryDip: Detector = {
 };
 
 /**
+ * RETIRED Nov 16 2026 — no longer run. "Back to your usual" is now the
+ * follow-up of the dip's own episode closing (signals/domain/followups.ts),
+ * so the same news cannot arrive twice. Kept registered as retired so the
+ * rows it wrote still describe and still count as health findings.
+ *
  * RECOVERY RESTORED — the positive counterpart: every watched vital back
  * inside the usual band for three nights while a dip is still open. Held to a
  * higher bar than a concern by the budget, not here (ruling 2026-09-24).
@@ -139,11 +203,17 @@ export const sleepDebt: Detector = {
   cooldownDays: 10,
   against: "plan",
   domain: "habit",
-  run: ({ nights, plan }: SignalInput): Candidate | null => {
+  dataAsOf: ({ nights, today }) => {
+    const last = [...nights].reverse().find((n) => n.asleepMinutes != null);
+    return last && last.date >= dayBefore(today, FRESH_NIGHT_DAYS) ? last.date : null;
+  },
+  run: ({ nights, plan, today }: SignalInput): Candidate | null => {
     const target = plan?.sleepMinutes ?? null;
     if (!target) return null;
     const window = lastN(nights, 4).filter((n) => n.asleepMinutes != null);
     if (window.length < 4) return null;
+    // Old nights are not this week's sleep: the newest must be recent.
+    if (window[window.length - 1].date < dayBefore(today, FRESH_NIGHT_DAYS)) return null;
     const short = window.filter((n) => (n.asleepMinutes as number) < target - SHORT_BY_MINUTES);
     if (short.length < 3) return null;
     const meanShortfall = short.reduce((acc, n) => acc + (target - (n.asleepMinutes as number)), 0) / short.length;

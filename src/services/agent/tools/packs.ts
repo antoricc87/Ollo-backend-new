@@ -17,7 +17,7 @@
 export const PACK_KEYS = ["food", "training", "labs", "symptoms", "body", "care"] as const;
 export type PackKey = (typeof PACK_KEYS)[number];
 
-export const CORE_TOOLS = ["get_plan", "remember", "recall_memory", "forget_memory", "list_subaccounts", "undo_last_log", "start_checkin", "ask_followup", "record_followup", "load_tools"];
+export const CORE_TOOLS = ["get_plan", "remember", "recall_memory", "forget_memory", "list_subaccounts", "undo_last_log", "start_checkin", "ask_followup", "record_followup", "recheck_checkin", "record_checkin_route", "load_tools"];
 
 export const PACKS: Record<PackKey, { title: string; covers: string; tools: string[] }> = {
   food: {

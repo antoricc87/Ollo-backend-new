@@ -1,4 +1,4 @@
-import { detectorBy, suppressedBy } from "./registry";
+import { detectorBy, domainOf, suppressedBy } from "./registry";
 import { Candidate } from "./types";
 
 /**
@@ -16,7 +16,7 @@ import { Candidate } from "./types";
  * argument.
  */
 
-/** Notifications a week, all detectors together. */
+/** Notifications a week, all health detectors together (habits never notify). */
 export const WEEKLY_BUDGET = 2;
 /** Nothing below its own bar ever interrupts anyone. */
 export const NOTIFY_FLOOR = 1;
@@ -34,8 +34,11 @@ export type NotifyState = {
   sentThisWeek: { detectorKey: string; direction: Candidate["direction"] }[];
   /** Last notification per detector key, whenever it was. */
   lastNotifiedAt: Record<string, string | undefined>;
-  /** Severity at which each key was last notified, for the escalation rule. */
+  /** Severity at which each key was last notified (any episode) — the escalation rule. */
   lastNotifiedSeverity: Record<string, number | undefined>;
+  /** Severity at which each key's STILL-OPEN episode was told — "already
+   *  mentioned" belongs to the episode; a new one is fresh news. */
+  openNotifiedSeverity?: Record<string, number | undefined>;
   /** Today, YYYY-MM-DD local. */
   today: string;
 };
@@ -65,6 +68,7 @@ export const decide = (candidates: Candidate[], state: NotifyState): Decision[] 
     const last = state.lastNotifiedAt[candidate.detectorKey];
     const since = daysSince(last, state.today);
     const previous = state.lastNotifiedSeverity[candidate.detectorKey];
+    const sameEpisode = (state.openNotifiedSeverity ?? state.lastNotifiedSeverity)[candidate.detectorKey];
 
     /**
      * A cooldown exists to stop the same news being repeated — NOT to hide
@@ -76,7 +80,11 @@ export const decide = (candidates: Candidate[], state: NotifyState): Decision[] 
      */
     const escalated = previous != null && candidate.severity >= previous + ESCALATION_STEP;
 
-    const reason = silenced.has(candidate.detectorKey)
+    const reason = domainOf(candidate.detectorKey) === "habit"
+      ? // Ruling Nov 16 2026: what they did or didn't do is a line in the
+        // weekly review, never a note of its own. Still recorded.
+        "habit — goes to the weekly review"
+      : silenced.has(candidate.detectorKey)
       ? "suppressed by a higher-order signal"
       : candidate.severity < (positive ? POSITIVE_FLOOR : NOTIFY_FLOOR)
       ? "below the floor"
@@ -89,7 +97,7 @@ export const decide = (candidates: Candidate[], state: NotifyState): Decision[] 
       : since < (detector?.cooldownDays ?? 14)
       ? `cooldown (${since}d of ${detector?.cooldownDays}d)`
       : // Same episode, already mentioned and no worse: nothing new to say.
-      previous != null
+      sameEpisode != null
       ? "already mentioned, not materially worse"
       : "";
 

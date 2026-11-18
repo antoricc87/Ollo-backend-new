@@ -79,9 +79,10 @@ class ThreadStore {
     const threads = await this.list(patientId, opts);
     const fresh = threads.filter((t) => isUnseenNote(t)).map((t) => t.id);
     const resolved = fresh.length
-      ? await prisma.finding.findMany({ where: { patientId, threadId: { in: fresh }, status: "RESOLVED" }, select: { threadId: true } })
+      ? await prisma.finding.findMany({ where: { patientId, threadId: { in: fresh }, status: "RESOLVED" }, select: { threadId: true, followUps: true } })
       : [];
-    const over = new Set(resolved.map((f) => f.threadId));
+    // A "back to your usual" note is news about a resolved signal (Nov 16 2026): it is announced.
+    const over = new Set(resolved.filter((f) => !(f.followUps as { backToUsual?: string } | null)?.backToUsual).map((f) => f.threadId));
     return threads.map((t) => ({ ...t, announce: isUnseenNote(t) && !over.has(t.id) }));
   }
 

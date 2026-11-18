@@ -22,6 +22,8 @@ export type ReplayDay = {
   date: string;
   candidates: { key: string; severity: number; label: string }[];
   notified: { key: string; severity: number; label: string }[];
+  /** Follow-up notes on signals already told (still going, back to usual) — outside the budget. */
+  followUps?: { key: string; kind: string }[];
   /** Why each candidate was held back, for reading the tuning back. */
   withheld: { key: string; reason: string }[];
 };
@@ -31,7 +33,7 @@ export type ReplayResult = {
   from: string;
   to: string;
   weeks: number;
-  totals: { candidates: number; episodes: number; notifications: number; positives: number };
+  totals: { candidates: number; episodes: number; notifications: number; positives: number; followUps: number };
   perWeek: number;
   byDetector: Record<string, { episodes: number; notifications: number }>;
 };
@@ -59,6 +61,7 @@ export const replay = (full: SignalInput, opts: { from?: string; to?: string } =
   let open: Episode[] = [];
   const lastNotifiedAt: Record<string, string | undefined> = {};
   const lastNotifiedSeverity: Record<string, number | undefined> = {};
+  const openNotifiedSeverity: Record<string, number | undefined> = {};
   let week = "";
   let sentThisWeek: NotifyState["sentThisWeek"] = [];
 
@@ -67,6 +70,7 @@ export const replay = (full: SignalInput, opts: { from?: string; to?: string } =
   let episodes = 0;
   let notifications = 0;
   let positives = 0;
+  let followUpCount = 0;
 
   for (let cursor = moment.tz(from, full.timeZone); cursor.format("YYYY-MM-DD") <= to; cursor.add(1, "day")) {
     const today = cursor.format("YYYY-MM-DD");
@@ -76,7 +80,7 @@ export const replay = (full: SignalInput, opts: { from?: string; to?: string } =
       sentThisWeek = [];
     }
 
-    const run = runDay(truncate(full, today, open), open, { sentThisWeek, lastNotifiedAt, lastNotifiedSeverity });
+    const run = runDay(truncate(full, today, open), open, { sentThisWeek, lastNotifiedAt, lastNotifiedSeverity, openNotifiedSeverity });
 
     for (const episode of run.opened) {
       episodes += 1;
@@ -89,18 +93,27 @@ export const replay = (full: SignalInput, opts: { from?: string; to?: string } =
       const { detectorKey, severity, direction, label } = decision.candidate;
       lastNotifiedAt[detectorKey] = today;
       lastNotifiedSeverity[detectorKey] = severity;
+      openNotifiedSeverity[detectorKey] = severity;
       sentThisWeek = [...sentThisWeek, { detectorKey, direction }];
       notifications += 1;
       if (direction === "POSITIVE") positives += 1;
       byDetector[detectorKey] ??= { episodes: 0, notifications: 0 };
       byDetector[detectorKey].notifications += 1;
       notified.push({ key: detectorKey, severity, label });
+      // Same bookkeeping as markNotified, so tomorrow's follow-ups see it.
+      for (const e of run.episodes) if (e.detectorKey === detectorKey && e.status !== "RESOLVED") Object.assign(e, { notifiedAt: today, notifiedSeverity: severity });
     }
+    // A closed episode's "already mentioned" goes with it (notifyState does the same).
+    for (const e of run.resolved) delete openNotifiedSeverity[e.detectorKey];
+    const followUps = run.followUps.map((f) => ({ key: f.detectorKey, kind: f.kind }));
+    for (const f of run.followUps) f.episode.followUps = { ...f.episode.followUps, [f.kind === "still_going" ? "stillGoing" : "backToUsual"]: today };
+    followUpCount += followUps.length;
 
     out.push({
       date: today,
       candidates: run.candidates.map((c) => ({ key: c.detectorKey, severity: c.severity, label: c.label })),
       notified,
+      followUps,
       withheld: run.decisions.filter((d) => !d.notify).map((d) => ({ key: d.candidate.detectorKey, reason: d.reason })),
     });
     open = carryOpen(run);
@@ -113,7 +126,7 @@ export const replay = (full: SignalInput, opts: { from?: string; to?: string } =
     from,
     to,
     weeks: Math.round(weeks * 10) / 10,
-    totals: { candidates: out.reduce((acc, d) => acc + d.candidates.length, 0), episodes, notifications, positives },
+    totals: { candidates: out.reduce((acc, d) => acc + d.candidates.length, 0), episodes, notifications, positives, followUps: followUpCount },
     perWeek: Math.round((notifications / weeks) * 100) / 100,
     byDetector,
   };
@@ -123,7 +136,7 @@ export const replay = (full: SignalInput, opts: { from?: string; to?: string } =
 export const formatReplay = (r: ReplayResult): string => {
   const lines: string[] = [];
   lines.push(`replay ${r.from} → ${r.to}  (${r.weeks} weeks)`);
-  lines.push(`  episodes ${r.totals.episodes}   notifications ${r.totals.notifications} (${r.totals.positives} positive)   →  ${r.perWeek} per week`);
+  lines.push(`  episodes ${r.totals.episodes}   notifications ${r.totals.notifications} (${r.totals.positives} positive)   →  ${r.perWeek} per week   + ${r.totals.followUps} follow-up notes`);
   lines.push("");
   lines.push("  detector                   episodes  notified");
   for (const [key, v] of Object.entries(r.byDetector).sort((a, b) => b[1].notifications - a[1].notifications)) {
@@ -134,6 +147,12 @@ export const formatReplay = (r: ReplayResult): string => {
     lines.push("");
     lines.push("  what would have been sent");
     for (const day of fired) for (const n of day.notified) lines.push(`  ${day.date}  ${n.key.padEnd(24)} ${String(n.severity).padStart(5)}  ${n.label}`);
+  }
+  const followed = r.days.filter((d) => d.followUps?.length);
+  if (followed.length) {
+    lines.push("");
+    lines.push("  follow-up notes");
+    for (const day of followed) for (const f of day.followUps ?? []) lines.push(`  ${day.date}  ${f.key.padEnd(24)} ${f.kind}`);
   }
   return lines.join("\n");
 };

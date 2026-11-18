@@ -5,12 +5,14 @@ import { runDue } from "./proactive.service";
 import { runSignalScanDue } from "../../signals/signals.service";
 import { runMorningTasksDue } from "./tasks";
 import { runDigestDue } from "../../notifications/digest";
+import { runCheckinsDue } from "../../encounter/followups.service";
 require("dotenv").config();
 
 /**
  * Processes the hourly tick: weekly reviews (Monday 08:00 local), the Sunday
  * planning run, then for whoever's local clock is at 09:00 the morning tasks
- * (missed session → moved), the signal scan, and LAST the digest, so
+ * (missed session → moved), the signal scan, the check-in sweep (close what
+ * is over, ask the follow-ups due — Nov 16 2026), and LAST the digest, so
  * everything the morning prepared goes out as one push (Oct 16 2026).
  * The scan is what replaced the daily check-in on 2026-09-25 — it looks at the
  * data and usually says nothing. Owns the `agent-tick` queue: sharing one
@@ -25,13 +27,15 @@ if (process.env.NODE_ENV !== "development") {
       const planWeek = await runDue("plan_week");
       const tasks = await runMorningTasksDue();
       const signals = await runSignalScanDue();
+      const checkins = await runCheckinsDue();
       const digest = await runDigestDue();
       console.log(
         `agent tick: weekly ${weekly.filter((r) => r.ok).length}/${weekly.length}, plan_week ${planWeek.filter((r) => r.ok).length}/${planWeek.length}, ` +
           `tasks ${tasks.filter((t) => t.missed.ran).length}/${tasks.length} · signals scanned ${signals.scanned} · ${signals.episodesOpened} opened · ${signals.notified} notified · ` +
+          `check-ins closed ${checkins.closed} asked ${checkins.asked} · ` +
           `digests ${digest.filter((d) => d.pushed).length}/${digest.length}`
       );
-      return { weekly: weekly.length, planWeek: planWeek.length, tasks: tasks.length, signals, digests: digest.length };
+      return { weekly: weekly.length, planWeek: planWeek.length, tasks: tasks.length, signals, checkins, digests: digest.length };
     },
     {
       connection: redisConnection,

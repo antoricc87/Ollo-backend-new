@@ -1,6 +1,6 @@
 import { weightChange } from "../domain/detectors/weight";
 import { describeFinding } from "../domain/describe";
-import { DETECTORS, domainOf, EVENT_DETECTORS } from "../domain/registry";
+import { DETECTORS, domainOf, EVENT_DETECTORS, RETIRED_DETECTORS } from "../domain/registry";
 import { SignalInput } from "../domain/types";
 
 const input = (weights: { date: string; kg: number }[], over: Partial<SignalInput> = {}): SignalInput =>
@@ -36,8 +36,10 @@ describe("weight changed substantially", () => {
 describe("what a finding is about", () => {
   /** Ruling Oct 12 2026: Signals lists check-ins and HEALTH findings; habits stay notes from Ollie. */
   it("health = recovery, labs and substantial weight change — and nothing else", () => {
-    const health = [...DETECTORS, ...EVENT_DETECTORS].filter((d) => d.domain === "health").map((d) => d.key).sort();
+    const health = [...DETECTORS, ...EVENT_DETECTORS, ...RETIRED_DETECTORS].filter((d) => d.domain === "health").map((d) => d.key).sort();
     expect(health).toEqual(["labs.report", "recovery.dip", "recovery.restored", "weight.change"]);
+    // Retired Nov 16 2026: "back to your usual" is now the dip's own follow-up.
+    expect(DETECTORS.map((d) => d.key)).not.toContain("recovery.restored");
   });
 
   it("training, logging, protein, sleep against target and weight against the plan are habits", () => {

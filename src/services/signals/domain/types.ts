@@ -123,6 +123,25 @@ export type Detector = {
    */
   domain: SignalDomain;
   run: (input: SignalInput) => Candidate | null;
+  /**
+   * The newest day this detector has data for (YYYY-MM-DD), or null with none.
+   * A detector returns null both when things are fine and when it has nothing
+   * to look at; only the first is a quiet day. An episode therefore counts a
+   * quiet day only when this moves past the last day it judged — a morning
+   * with no new night is not a night back to normal (Nov 16 2026). Omitted =
+   * today (rules about absence, such as no meals logged, judge absence itself).
+   */
+  dataAsOf?: (input: SignalInput) => string | null;
+  /**
+   * Is the newest day of data (the one `dataAsOf` names) itself back inside
+   * the usual? null = cannot say. When a detector has this, an episode counts
+   * only such days toward its close, and a fresh day that is still off sets
+   * the count back to zero — "back to your usual" means N days IN A ROW
+   * inside it, not N days on which the firing rule happened not to fire
+   * (ruling Nov 17 2026: a single good night stopped a 3-nights-running rule
+   * from firing, so the next two off nights counted as "back").
+   */
+  insideUsual?: (input: SignalInput) => boolean | null;
 };
 
 /* ----------------------------- small helpers ---------------------------- */
@@ -134,6 +153,9 @@ export const round = (v: number, dp = 2) => Math.round(v * 10 ** dp) / 10 ** dp;
 
 /** The last `count` rows, oldest first. */
 export const lastN = <T>(rows: T[], count: number) => rows.slice(Math.max(0, rows.length - count));
+
+/** The day before a YYYY-MM-DD key, as a key. */
+export const dayBefore = (date: string, n = 1) => new Date(Date.parse(date) - n * 86_400_000).toISOString().slice(0, 10);
 
 /** Days from `from` to `to` inclusive as YYYY-MM-DD, both already local keys. */
 export const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);

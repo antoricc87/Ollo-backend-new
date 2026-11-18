@@ -37,6 +37,21 @@ export const FOLLOW_UP_WINDOW_DAYS = 14;
 /** The scheduled day a follow-up on `day` belongs to (the latest one that has arrived), or null before the first. */
 export const followUpSlot = (day: number): number | null => [...FOLLOW_UP_DAYS].reverse().find((d) => day >= d) ?? null;
 
+/**
+ * WORSE IS ASKED AGAIN THE NEXT DAY (ruling Nov 16 2026), not at the next
+ * scheduled day: after a "worse" on day d, day d+1 is a follow-up day of its
+ * own. Still worse then → the day after, and so on, inside the 14-day window.
+ * The latest of the scheduled day and that day is the one due.
+ */
+export const slotFor = (day: number, checkIns: CheckInRecord[]): number | null => {
+  const scheduled = followUpSlot(day);
+  const latest = newestFirst(checkIns)[0];
+  const afterWorse = latest?.trend === "WORSE" && day >= latest.day + 1 ? latest.day + 1 : null;
+  if (scheduled === null) return afterWorse;
+  if (afterWorse === null) return scheduled;
+  return Math.max(scheduled, afterWorse);
+};
+
 /** Consecutive non-improving reports before the episode is surfaced for a visit. */
 export const PERSISTENCE_REPORTS = 2;
 /** …and the day from which that nudge can appear at all. */
@@ -54,6 +69,8 @@ export type FollowUp = {
   day: number;
   /** True when a scheduled follow-up day has passed with nothing recorded since. */
   due: boolean;
+  /** The day this due follow-up belongs to (a scheduled day, or the day after a "worse"); null when none has arrived. */
+  slot: number | null;
   /** REFLECT only — what they have reported, never what it means. */
   trajectory: string | null;
   /** Set when the episode has persisted: a REFLECT plus a ROUTE, no verdict. */
@@ -69,13 +86,17 @@ export const followUpFor = (
   const sorted = newestFirst(checkIns);
   const lastDay = sorted.length ? sorted[0].day : 0;
 
-  // Due when a scheduled day has arrived and nothing has been recorded on or after it.
-  const passed = FOLLOW_UP_DAYS.filter((d) => day >= d);
-  const due = passed.length > 0 && lastDay < passed[passed.length - 1] - FOLLOW_UP_GRACE_DAYS && day <= FOLLOW_UP_WINDOW_DAYS;
+  const slot = slotFor(day, sorted);
+  // Due when its day has arrived and nothing has been recorded since. A
+  // scheduled day takes an answer up to the grace day early; the day after a
+  // "worse" is due as soon as that day comes.
+  const afterWorse = slot !== null && sorted[0]?.trend === "WORSE" && slot === sorted[0].day + 1;
+  const due = slot !== null && day <= FOLLOW_UP_WINDOW_DAYS && (afterWorse ? lastDay < slot : lastDay < slot - FOLLOW_UP_GRACE_DAYS);
 
   return {
     day,
     due,
+    slot,
     trajectory: trajectoryLine(sorted),
     persistence: persistenceNudge(day, sorted),
   };
@@ -108,6 +129,58 @@ export const persistenceNudge = (day: number, checkIns: CheckInRecord[]): Follow
     line: `It's day ${day}, and the last ${PERSISTENCE_REPORTS} times you've told me this is no better.`,
     action: "That's worth putting in front of a clinician. Everything you've told me is already written up.",
   };
+};
+
+/* --------------------- how a check-in ends (Nov 16 2026) --------------------- */
+
+/**
+ * A check-in closes by itself (ruling Nov 16 2026) — it used to stay OPEN for
+ * ever once the schedule ran out. The outcome is what THEY reported, counted:
+ *   resolved   better twice in a row (any day), or better at the end
+ *   persisted  past the window and the last answer was not better
+ *   lapsed     past the window with no answer at all, or an interview left
+ *              unfinished/paused for the whole window
+ *   escalated  a warning sign matched — its route was the next step, and
+ *              it is never followed up, so it closes at the window
+ * No outcome is a verdict on the symptom; "resolved" means "they said better".
+ */
+export type CheckinOutcome = "resolved" | "persisted" | "lapsed" | "escalated";
+
+/** Consecutive "better" answers that end the follow-up early. */
+export const BETTER_TO_CLOSE = 2;
+
+export const closeVerdict = (startedAt: string | Date, checkIns: CheckInRecord[], now: Date = new Date()): CheckinOutcome | null => {
+  const sorted = newestFirst(checkIns);
+  if (sorted.length >= BETTER_TO_CLOSE && sorted.slice(0, BETTER_TO_CLOSE).every((c) => c.trend === "BETTER")) return "resolved";
+  if (dayOf(startedAt, now) <= FOLLOW_UP_WINDOW_DAYS) return null;
+  if (!sorted.length) return "lapsed";
+  return sorted[0].trend === "BETTER" ? "resolved" : "persisted";
+};
+
+/** A check-in that is not being followed (unfinished, paused, or a warning sign matched): when does it close? */
+export const closeUnfollowed = (kind: "unfinished" | "red_flag", startedAt: string | Date, lastActivity: string | Date, now: Date = new Date()): CheckinOutcome | null =>
+  kind === "red_flag"
+    ? dayOf(startedAt, now) > FOLLOW_UP_WINDOW_DAYS
+      ? "escalated"
+      : null
+    : dayOf(lastActivity, now) > FOLLOW_UP_WINDOW_DAYS
+    ? "lapsed"
+    : null;
+
+/**
+ * The day of the check-in on which Ollie will next ask, or null when nothing
+ * more is scheduled: today when one is due, tomorrow after a "worse", else
+ * the next scheduled day an earlier answer does not already cover. Day N
+ * falls N days after the first report (the same arithmetic as `followUpAck`).
+ */
+export const nextAskDay = (startedAt: string | Date, checkIns: CheckInRecord[], now: Date = new Date()): number | null => {
+  const fu = followUpFor(startedAt, checkIns, now);
+  if (fu.day > FOLLOW_UP_WINDOW_DAYS) return null;
+  if (fu.due) return fu.day;
+  const latest = newestFirst(checkIns)[0];
+  const lastDay = latest?.day ?? 0;
+  if (latest?.trend === "WORSE" && latest.day + 1 > fu.day) return latest.day + 1 <= FOLLOW_UP_WINDOW_DAYS ? latest.day + 1 : null;
+  return FOLLOW_UP_DAYS.find((d) => d > fu.day && lastDay < d - FOLLOW_UP_GRACE_DAYS) ?? null;
 };
 
 /** The one-line prompt for a due follow-up. Neutral: it asks, it does not suggest an answer. */
@@ -155,6 +228,8 @@ export type FollowUpAck = {
   /** When the next question comes, or that the schedule is over. */
   next: string;
   nextDay: number | null;
+  /** Set when this answer closed the check-in. */
+  closed: CheckinOutcome | null;
   /** A route to offer — only when they said worse or it has persisted. Escalation is one-way. */
   offerRoute: boolean;
 };
@@ -168,15 +243,23 @@ export const followUpAck = (startedAt: string | Date, checkIns: CheckInRecord[],
   const latest = sorted[0];
   const day = dayOf(startedAt, now);
   const persistence = persistenceNudge(day, sorted);
-  const nextDay = nextFollowUpDay(day);
+  const closed = closeVerdict(startedAt, sorted, now);
+  const tomorrow = latest.trend === "WORSE" && day + 1 <= FOLLOW_UP_WINDOW_DAYS ? day + 1 : null;
+  const nextDay = closed ? null : tomorrow ?? nextFollowUpDay(day);
   return {
     recorded: `Written down for day ${latest.day}: ${TREND_WORD[latest.trend]}.`,
     trajectory: sorted.length > 1 ? trajectoryLine(sorted) : null,
     persistence,
-    next: nextDay
-      ? `I'll ask again on day ${nextDay} (${shortDate(dateOfDay(startedAt, nextDay), timeZone)}).`
-      : "That was the last scheduled follow-up. It stays on your record — tell me any time it changes.",
+    next:
+      closed === "resolved"
+        ? "That's better twice in a row, so I've closed this check-in. It stays on your record — tell me if it comes back."
+        : nextDay && nextDay === tomorrow
+        ? "I'll check in again tomorrow."
+        : nextDay
+        ? `I'll ask again on day ${nextDay} (${shortDate(dateOfDay(startedAt, nextDay), timeZone)}).`
+        : "That was the last scheduled follow-up. It stays on your record — tell me any time it changes.",
     nextDay,
+    closed,
     offerRoute: latest.trend === "WORSE" || !!persistence,
   };
 };

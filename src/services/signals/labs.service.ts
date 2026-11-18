@@ -1,9 +1,9 @@
 import moment from "moment-timezone";
 import prisma from "../../utility/prismaClient";
 import { safeTz } from "../agent/memory/dates";
-import { getPreference, labsInstruction, runProactiveFor } from "../agent/proactive/proactive.service";
+import { getPreference, labsInstruction } from "../agent/proactive/proactive.service";
 import { LABS_KEY, labsDelta } from "./domain/detectors/labs";
-import { markNotified } from "./model/findings.store";
+import { tellFinding } from "./signals.service";
 
 /**
  * THE LAB SCAN — event-driven: a report was uploaded, what did it change?
@@ -68,7 +68,7 @@ export const runLabScanFor = async (patientId: string, opts: { notify?: boolean;
   // One open row per key (findings.store invariant): a lab finding is a point
   // event, so an earlier one still open today closes before this one opens.
   const at = moment.tz(today, tz).hour(12).toDate();
-  await prisma.finding.updateMany({ where: { patientId, detectorKey: LABS_KEY, status: { in: ["OPEN", "ONGOING"] } }, data: { status: "RESOLVED", resolvedAt: at } });
+  await prisma.finding.updateMany({ where: { patientId, detectorKey: LABS_KEY, status: { in: ["OPEN", "ONGOING"] } }, data: { status: "RESOLVED", resolvedAt: at, closeReason: "replaced" } });
   const finding = await prisma.finding.create({
     data: {
       patientId,
@@ -90,8 +90,8 @@ export const runLabScanFor = async (patientId: string, opts: { notify?: boolean;
   const pref = await getPreference(patientId);
   if (!pref.proactiveEnabled || !pref.watchOutsEnabled) return { ...base, threadId: null, notified: false, withheld: "disabled by preference" };
 
-  const proactive = await runProactiveFor(patientId, "watch_out", { instruction: labsInstruction({ ...candidate, baseline: candidate.baseline ?? null }) });
-  if ("skipped" in proactive) return { ...base, threadId: proactive.threadId ?? null, notified: false, withheld: proactive.skipped };
-  await markNotified(finding.id, proactive.threadId ?? null);
-  return { ...base, threadId: proactive.threadId ?? null, notified: proactive.notified };
+  // Told through the same door as every finding; a lab report is pushed now and sits outside the weekly budget.
+  const told = await tellFinding(patientId, finding.id, { kind: "watch_out", instruction: labsInstruction({ ...candidate, baseline: candidate.baseline ?? null }), severity: candidate.severity });
+  if (told.skipped) return { ...base, threadId: told.threadId, notified: false, withheld: told.skipped };
+  return { ...base, threadId: told.threadId, notified: told.notified };
 };

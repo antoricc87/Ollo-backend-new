@@ -1,5 +1,6 @@
 import { decide, Decision, NotifyState } from "./budget";
-import { applyDay, Episode, stillOpen } from "./episodes";
+import { applyDay, DataAsOf, Episode, InsideToday, stillOpen } from "./episodes";
+import { followUpsFor, FollowUpEvent } from "./followups";
 import { DETECTORS } from "./registry";
 import { Candidate, SignalInput } from "./types";
 
@@ -18,11 +19,29 @@ export type DayRun = {
   opened: Episode[];
   resolved: Episode[];
   decisions: Decision[];
+  /** Notes owed on signals already told: still going, back to usual. */
+  followUps: FollowUpEvent[];
 };
 
 export const runDay = (input: SignalInput, open: Episode[], notify: Omit<NotifyState, "today">): DayRun => {
   const candidates: Candidate[] = [];
+  const dataAsOf: DataAsOf = {};
+  const inside: InsideToday = {};
   for (const detector of DETECTORS) {
+    if (detector.insideUsual) {
+      try {
+        inside[detector.key] = detector.insideUsual(input);
+      } catch {
+        inside[detector.key] = null;
+      }
+    }
+    if (detector.dataAsOf) {
+      try {
+        dataAsOf[detector.key] = detector.dataAsOf(input);
+      } catch {
+        dataAsOf[detector.key] = null;
+      }
+    }
     let candidate: Candidate | null = null;
     try {
       candidate = detector.run(input);
@@ -34,14 +53,15 @@ export const runDay = (input: SignalInput, open: Episode[], notify: Omit<NotifyS
     if (candidate && candidate.severity >= 1) candidates.push(candidate);
   }
 
-  const folded = applyDay(open, candidates, input.today);
+  const folded = applyDay(open, candidates, input.today, dataAsOf, inside);
   /**
    * Only candidates whose episode is OPEN or newly worse are put to the
    * budget — an episode already running quietly should not spend attention
    * again every morning just for still being true.
    */
   const decisions = decide(candidates, { ...notify, today: input.today });
-  return { candidates, episodes: folded.episodes, opened: folded.opened, resolved: folded.resolved, decisions };
+  const followUps = followUpsFor(folded.episodes, folded.resolved, input.today);
+  return { candidates, episodes: folded.episodes, opened: folded.opened, resolved: folded.resolved, decisions, followUps };
 };
 
 export const carryOpen = (run: DayRun) => stillOpen(run.episodes);

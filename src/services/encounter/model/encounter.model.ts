@@ -8,7 +8,10 @@ import { classify, DIAGNOSIS_DECLINE, PROMPT_VERSION as CLASSIFY_VERSION } from 
 import { fillSlot, sanitize, PROMPT_VERSION as SLOTFILL_VERSION } from "../llm/slotFill";
 import { escalationFor, NEUTRAL_CLOSE } from "../domain/escalation";
 import { ownDataBlocks } from "../domain/context";
-import { followUpAck, followUpAsk, followUpFor, followUpSlot, FollowUp, FOLLOW_UP_CHOICES, CheckInRecord, nextFollowUpDay } from "../domain/followUp";
+import { closeUnfollowed, closeVerdict, CheckinOutcome, followUpAck, followUpAsk, followUpFor, FollowUp, FOLLOW_UP_CHOICES, FOLLOW_UP_WINDOW_DAYS, CheckInRecord, nextFollowUpDay, nextAskDay } from "../domain/followUp";
+import type { CheckinRow } from "../../signals/domain/view";
+import moment from "moment-timezone";
+import { mergeSigns, NONE, rescreenFor, RouteChoice, ROUTE_OF, routeDecided } from "../domain/rescreen";
 import { buildPatientSnapshot } from "../../agent/context/snapshot";
 import { resolveProtocol } from "../domain/protocols";
 import { applyAnswer, historyComplete, isSafetySlot, markAsked, nextStep, open, questionFor, shouldHalt } from "../domain/stateMachine";
@@ -286,6 +289,64 @@ class EncounterService {
   }
 
   /**
+   * Every check-in as the Signals page reads it (signals/domain/view.ts builds
+   * the words). Dates are local days in `tz`. `ids` narrows it to some rows —
+   * the check-ins linked to data signals, or one detail page.
+   */
+  async signalRows(patientId: string, tz: string, opts: { ids?: string[] } = {}): Promise<CheckinRow[]> {
+    const rows = await prisma.encounter.findMany({
+      where: { patientId, ...(opts.ids ? { id: { in: opts.ids } } : {}) },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      include: { checkIns: { orderBy: { createdAt: "desc" } } },
+    });
+    if (!rows.length) return [];
+    const assessments = await prisma.encounterEvent.findMany({
+      where: { encounterId: { in: rows.map((r) => r.id) }, kind: "assessment" },
+      orderBy: { seq: "desc" },
+      select: { encounterId: true, payload: true },
+    });
+    const local = (d: Date) => moment(d).tz(tz).format("YYYY-MM-DD");
+    const now = new Date();
+    return rows.map((row): CheckinRow => {
+      const state = toState(row);
+      const protocol = resolveProtocol(state.complaintKey);
+      const last = assessments.find((a) => a.encounterId === row.id);
+      const recorded = recordState(row, !!last);
+      const answered = (key: string) => {
+        const v = state.slots[key];
+        if (v === undefined || v === null) return false;
+        if (Array.isArray(v)) return v.length > 0;
+        return typeof v !== "string" || v.trim().length > 0;
+      };
+      const required = protocol.slots.filter((x) => x.required);
+      const severity = typeof state.slots.severity === "number" ? (state.slots.severity as number) : null;
+      const checkIns = row.checkIns as any as CheckInRecord[];
+      const followed = recorded === "assessed" || recorded === "halted" ? !state.redFlags.length && row.status === "OPEN" : false;
+      const askDay = followed ? nextAskDay(row.createdAt, checkIns, now) : null;
+      const first = ((last?.payload as any)?.possibilities ?? [])[0];
+      return {
+        id: row.id,
+        title: protocol.title,
+        unnamed: protocol.key === "general_unwell",
+        complaintText: row.complaintText,
+        state: recorded === "followup" ? "assessed" : recorded,
+        outcome: row.outcome ?? null,
+        threadId: row.threadId,
+        startedOn: local(row.createdAt),
+        closedOn: row.closedAt ? local(row.closedAt) : null,
+        checkIns: row.checkIns.map((c) => ({ day: c.day, trend: c.trend as any, note: c.note ?? null, on: local(c.createdAt) })),
+        severity,
+        questionsLeft: required.filter((x) => !answered(x.key) && state.askedKeys.indexOf(x.key) < 0).length,
+        topPossibility: typeof first?.condition === "string" ? first.condition : null,
+        warningSigns: state.redFlags.map((f) => f.criterion),
+        followUp: followed ? (() => { const fu = followUpFor(row.createdAt, checkIns, now); return { due: fu.due, trajectory: fu.trajectory }; })() : null,
+        nextAskOn: askDay ? local(new Date(row.createdAt.getTime() + askDay * 86400000)) : null,
+      };
+    });
+  }
+
+  /**
    * Records one answer. `value` is a structured choice; `text` is the patient's
    * own words, which the model maps onto the slot's existing options.
    */
@@ -443,7 +504,7 @@ class EncounterService {
       const asks = asked.filter((x) => x.encounterId === row.id);
       const lastAsk = asks[0] && asks[0].createdAt >= since ? asks[0] : null;
       const lastAnswer = row.checkIns[0]?.createdAt ?? null;
-      const slot = followUpSlot(followUp.day);
+      const slot = followUp.slot;
       return {
         id: row.id,
         complaintTitle: resolveProtocol(row.complaintKey).title,
@@ -451,12 +512,18 @@ class EncounterService {
         unnamed: resolveProtocol(row.complaintKey).key === "general_unwell",
         complaintText: row.complaintText,
         startedAt: row.createdAt,
+        /** The conversation it ran in — where a pushed follow-up question is put. */
+        threadId: row.threadId,
+        /** What they chose when offered a clinician; UNDECIDED = not asked or not answered yet. */
+        route: row.route,
         followUp,
-        nextDay: nextFollowUpDay(followUp.day),
+        // After a worse answer the next ask is tomorrow (domain/followUp.ts slotFor).
+        nextDay: row.checkIns[0]?.trend === "WORSE" && row.checkIns[0].day >= followUp.day && followUp.day + 1 <= FOLLOW_UP_WINDOW_DAYS ? followUp.day + 1 : nextFollowUpDay(followUp.day),
         /** Ollie asked within the last day and no answer has come since — and in which thread. */
         awaiting: lastAsk && (!lastAnswer || lastAnswer < lastAsk.createdAt) ? { threadId: ((lastAsk.payload as any)?.threadId as string | null) ?? null } : null,
-        /** Answered within the last day: nothing to ask again today. */
-        answeredToday: !!lastAnswer && lastAnswer >= since,
+        /** Answered on this day of the check-in: nothing to ask again today. (Was "within 24 h", which
+         *  hid the day-after-worse question from a 09:00 sweep when "worse" came the evening before.) */
+        answeredToday: !!row.checkIns[0] && row.checkIns[0].day >= followUp.day,
         /**
          * Ollie brings it up by itself ONCE per scheduled day (2, 5, 10) — three
          * unprompted questions per check-in at most. After that it waits to be
@@ -481,7 +548,76 @@ class EncounterService {
     if (!episode) return null;
     await this.checkIn(patientId, id, trend, note);
     const checkIns = await prisma.encounterCheckIn.findMany({ where: { encounterId: id }, orderBy: { createdAt: "desc" } });
-    return { id, about: episode.complaintTitle, complaintText: episode.complaintText, ack: followUpAck(episode.startedAt, checkIns as any, new Date(), timeZone) };
+    const ack = followUpAck(episode.startedAt, checkIns as any, new Date(), timeZone);
+    // Better twice in a row ends it now, not at tomorrow's sweep — the reply already says so.
+    if (ack.closed) await this.closeWithOutcome(id, ack.closed);
+    // Worse → the warning-sign question again (domain/rescreen.ts).
+    const rescreen = trend === "WORSE" ? rescreenFor(resolveProtocol((await prisma.encounter.findUnique({ where: { id }, select: { complaintKey: true } }))!.complaintKey)) : null;
+    return { id, about: episode.complaintTitle, complaintText: episode.complaintText, ack, route: episode.route, rescreen };
+  }
+
+  /**
+   * The warning-sign question asked again after a worse follow-up. Recorded
+   * through `answer`, the interview's own path, so the same rules decide and
+   * a match escalates as it would have on day 1. Signs already reported stay.
+   */
+  async rescreen(patientId: string, id: string, picked: string[], words?: string) {
+    const row = await prisma.encounter.findFirst({ where: { id, patientId } });
+    if (!row || row.status !== "OPEN") return null;
+    const state = toState(row);
+    const screen = rescreenFor(resolveProtocol(state.complaintKey));
+    if (!screen) return { flagsBefore: state.redFlags.length, state, nothingToAsk: true as const };
+    const valid = picked.filter((v) => screen.options.some((o) => o.value === v));
+    const merged = mergeSigns(state.slots[screen.slotKey] ?? null, valid.length ? valid : [NONE]);
+    await logEvent(id, "rescreen", { picked: valid, words: words?.slice(0, 500) ?? null });
+    await this.answer(patientId, id, screen.slotKey, merged, words);
+    // A re-check is not a reopened interview: `applyAnswer` would move a
+    // finished check-in back to RECAP (which the mode reads as "interview
+    // running"), so a finished one keeps its phase.
+    if (row.phase === "ROUTE" || row.phase === "CLOSED") await prisma.encounter.update({ where: { id }, data: { phase: row.phase } });
+    const after = await this.stateFor(patientId, id);
+    return { flagsBefore: state.redFlags.length, state: after!.state, region: after!.region };
+  }
+
+  /** What they chose when offered a clinician. Any decided route ends the offers for this check-in. */
+  async setRoute(patientId: string, id: string, choice: RouteChoice) {
+    const r = await prisma.encounter.updateMany({ where: { id, patientId }, data: { route: ROUTE_OF[choice] } });
+    if (r.count) await logEvent(id, "route_choice", { choice, via: "followup" });
+    return r.count > 0;
+  }
+
+  routeDecided = routeDecided;
+
+  /**
+   * Closed by itself (Nov 16 2026), with what they reported as the outcome.
+   * `phase` is left alone: it describes the interview, which is unchanged.
+   */
+  async closeWithOutcome(id: string, outcome: CheckinOutcome) {
+    const r = await prisma.encounter.updateMany({ where: { id, status: { in: ["OPEN", "ABANDONED"] } }, data: { status: "CLOSED", closedAt: new Date(), outcome } });
+    if (r.count) await logEvent(id, "close", { outcome, auto: true });
+    return r.count > 0;
+  }
+
+  /**
+   * The daily sweep: every check-in still OPEN or paused is judged by the
+   * close rules (domain/followUp.ts) and closed when they say so.
+   */
+  async autoCloseFor(patientId: string, now: Date = new Date()) {
+    const rows = await prisma.encounter.findMany({
+      where: { patientId, status: { in: ["OPEN", "ABANDONED"] } },
+      include: { checkIns: { orderBy: { createdAt: "desc" } } },
+    });
+    const closed: { id: string; outcome: CheckinOutcome }[] = [];
+    for (const row of rows) {
+      const lastActivity = [row.updatedAt, row.checkIns[0]?.createdAt].filter(Boolean).sort((a, b) => +b! - +a!)[0] as Date;
+      const outcome = ((row.redFlags ?? []) as unknown[]).length
+        ? closeUnfollowed("red_flag", row.createdAt, lastActivity, now)
+        : row.status === "ABANDONED" || checkinModeFor(row).active
+        ? closeUnfollowed("unfinished", row.createdAt, lastActivity, now)
+        : closeVerdict(row.createdAt, row.checkIns as unknown as CheckInRecord[], now);
+      if (outcome && (await this.closeWithOutcome(row.id, outcome))) closed.push({ id: row.id, outcome });
+    }
+    return closed;
   }
 
   async history(patientId: string, id: string) {

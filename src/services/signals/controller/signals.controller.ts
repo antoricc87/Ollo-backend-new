@@ -6,6 +6,7 @@ import { describeFinding } from "../domain/describe";
 import { domainOf } from "../domain/registry";
 import { listFindings } from "../model/findings.store";
 import { runScanFor } from "../signals.service";
+import { signalDetail, signalsOverview, threadForFinding } from "../model/overview";
 import { runLighterTodayFor } from "../../agent/proactive/tasks";
 
 /**
@@ -74,6 +75,31 @@ class SignalsHandler {
     const findings = rows.map((f) => ({ ...f, domain: domainOf(f.detectorKey) })).filter((f) => !domain || f.domain === domain).slice(0, limit);
     // `title` / `line`: the finding in words, built in code (domain/describe.ts) — the app prints them as given.
     return response.json(Util.success({ findings: findings.map((f) => ({ ...f, ...describeFinding(f) })) }, "Findings"));
+  };
+
+  /** The Signals page: open and resolved cards, every word decided on the server. */
+  overview = async (request: any, response: Response) => {
+    const patientId = request.user?.id;
+    if (!patientId) return response.status(401).json(Util.error({}, "Unauthorized"));
+    return response.json(Util.success(await signalsOverview(patientId), "Signals"));
+  };
+
+  /** One signal's page: `data:<findingId>` or `checkin:<encounterId>`. */
+  item = async (request: any, response: Response) => {
+    const patientId = request.user?.id;
+    if (!patientId) return response.status(401).json(Util.error({}, "Unauthorized"));
+    const detail = await signalDetail(patientId, String(request.params?.key ?? ""));
+    if (!detail) return response.status(404).json(Util.error({}, "Not found"));
+    return response.json(Util.success(detail, "Signal"));
+  };
+
+  /** The thread "Tell Ollie how you feel" opens, so a check-in started there is linked to the finding. */
+  thread = async (request: any, response: Response) => {
+    const patientId = request.user?.id;
+    if (!patientId) return response.status(401).json(Util.error({}, "Unauthorized"));
+    const threadId = await threadForFinding(patientId, String(request.params?.id ?? ""));
+    if (!threadId) return response.status(404).json(Util.error({}, "Not found"));
+    return response.json(Util.success({ threadId }, "Thread"));
   };
 
   /**
