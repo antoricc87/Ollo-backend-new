@@ -265,7 +265,7 @@ const weightEvidence = (f: FindingRow): Evidence | null => {
 };
 
 const labValue = (row: any, status: LabValue["status"]): LabValue => ({
-  name: String(row?.key ?? row?.testType ?? "Value"),
+  name: String(row?.testType ?? row?.key ?? "Value"),
   result: String(row?.result ?? ""),
   unit: row?.units ?? null,
   range: row?.referenceRange ?? null,
@@ -283,6 +283,16 @@ const labsEvidence = (f: FindingRow): Evidence => {
     line: still ? `${plural(still, "other value")} still outside the range, about where ${still === 1 ? "it was" : "they were"}` : null,
   };
 };
+
+/** "2 newly outside, 1 back inside" — the close label's short form of the line. */
+const labCounts = (f: FindingRow) =>
+  [
+    arr(f.evidence?.newlyFlagged).length && `${arr(f.evidence.newlyFlagged).length} newly outside`,
+    arr(f.evidence?.changed).length && `${arr(f.evidence.changed).length} moved`,
+    arr(f.evidence?.backInRange).length && `${arr(f.evidence.backInRange).length} back inside`,
+  ]
+    .filter(Boolean)
+    .join(", ");
 
 const labDate = (f: FindingRow): string => arr(f.evidence?.collectedAt).slice(-1)[0] ?? f.firstDetectedAt;
 /** The Labs page's own prompt shape ("Explain my lab report from 6 Oct 2026."), which the eval scenario also sends. */
@@ -302,9 +312,12 @@ export type DataContext = {
 export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
   const { title, line } = describeFinding(f);
   const isLab = f.detectorKey === "labs.report";
-  const resolved = f.status === "RESOLVED";
-  const positive = f.direction === "POSITIVE";
   const linked = ctx.linked;
+  // The finding itself closed; the SIGNAL stays open while the check-in it led
+  // to is still being followed (that check-in is shown only inside this card).
+  const findingClosed = f.status === "RESOLVED";
+  const resolved = findingClosed && (!linked || linked.card.status === "resolved");
+  const positive = f.direction === "POSITIVE";
 
   /* evidence + meta */
   let evidence: Evidence | null = null;
@@ -314,7 +327,7 @@ export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
     const start = runStartOf(f, ctx.runNights);
     const end = f.lastDataAt ?? f.lastSeenAt;
     const withData = ctx.nights.filter((n) => n.date >= start && n.date <= (f.resolvedAt ?? ctx.today) && (n.hrvMs != null || n.sleepingHr != null || n.restingHr != null)).length;
-    meta = resolved ? `${dayLabel(start)} – ${dayLabel(f.resolvedAt!)} · ${plural(withData, "night")}` : `Since ${dayLabel(start)} · ${plural(withData || daysBetween(start, end) + 1, "night")}`;
+    meta = findingClosed ? `${dayLabel(start)} – ${dayLabel(f.resolvedAt!)} · ${plural(withData, "night")}` : `Since ${dayLabel(start)} · ${plural(withData || daysBetween(start, end) + 1, "night")}`;
   } else if (f.detectorKey === "weight.change") {
     evidence = weightEvidence(f);
     const e = f.evidence ?? {};
@@ -330,13 +343,13 @@ export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
   if (linked) meta += ` · ${plural(linked.checkIns, "check-in")}`;
 
   /* concern */
-  const own: Concern = isLab && resolved ? null : resolved || positive ? concernOf("low") : concernOf("watch");
+  const own: Concern = isLab && findingClosed ? null : findingClosed || positive ? concernOf("low") : concernOf("watch");
   const concern = linked ? higher(own, linked.card.concern) : own;
 
   /* trend — the data's, even when a check-in is linked */
   let trend: TrendView = null;
   if (!isLab) {
-    if (resolved) {
+    if (findingClosed) {
       trend =
         f.closeReason === "no_data"
           ? { key: "no_data", label: "No new data" }
@@ -361,10 +374,10 @@ export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
   /* tags */
   const tags: Tag[] = [{ key: "source_data", text: "Noticed in your data" }];
   if (linked) tags.push({ key: "source_reported", text: "You reported" });
-  if (isLab && !resolved) tags.push(positive ? { key: "good_news", text: "Good news" } : { key: "new_report", text: "New report" });
+  if (isLab && !findingClosed) tags.push(positive ? { key: "good_news", text: "Good news" } : { key: "new_report", text: "New report" });
   else if (positive) tags.push({ key: "good_news", text: "Good news" });
-  if (!resolved && !f.notifiedAt && !linked && !isLab) tags.push({ key: "on_record", text: "On record only" });
-  if (resolved && f.closeReason === "no_data") tags.push({ key: "cant_tell", text: "Closed · can't tell" });
+  if (!findingClosed && !f.notifiedAt && !linked && !isLab) tags.push({ key: "on_record", text: "On record only" });
+  if (findingClosed && f.closeReason === "no_data") tags.push({ key: "cant_tell", text: "Closed · can't tell" });
 
   /* close label */
   let closeLabel: string | null = null;
@@ -376,7 +389,7 @@ export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
         : f.closeReason === "replaced"
         ? `Replaced by a newer report · ${shortDay(labDate(f))}`
         : isLab
-        ? `Report of ${shortDay(labDate(f))}${line ? ` · ${line.split(",")[0]}` : ""}`
+        ? `Report of ${shortDay(labDate(f))}${labCounts(f) ? ` · ${labCounts(f)}` : ""}`
         : f.detectorKey === "weight.change"
         ? `Back under a 5% change · ${range(f.firstDetectedAt, end)}`
         : `Back to your usual · ${range(runStartOf(f, ctx.runNights), end)}`;
@@ -392,7 +405,7 @@ export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
     const names = line.split(" away from")[0];
     if (judged.length && names) ownLine = `${names} away from your usual on ${off} of ${plural(judged.length, "night")}`;
   }
-  const cardLine = resolved && f.closeReason === "no_data" ? `No data since ${dayLabel(f.lastDataAt ?? f.lastSeenAt)}, so there is no way to tell how it went.` : ownLine;
+  const cardLine = findingClosed && f.closeReason === "no_data" ? `No data since ${dayLabel(f.lastDataAt ?? f.lastSeenAt)}, so there is no way to tell how it went.` : ownLine;
 
   /* actions */
   const actions: Action[] = [];
@@ -405,7 +418,7 @@ export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
     else if (linked.threadId) actions.push({ kind: "view_chat", label: "View chat", threadId: linked.threadId, checkinId: linked.card.checkinId! });
     if (note && note.threadId !== linked.threadId) actions.push(note);
   } else {
-    if (!resolved && !positive) actions.push({ kind: "tell_ollie", label: "Tell Ollie how you feel", findingId: f.id, threadId: f.threadId, draft: "How I've been feeling: " });
+    if (!findingClosed && !positive) actions.push({ kind: "tell_ollie", label: "Tell Ollie how you feel", findingId: f.id, threadId: f.threadId, draft: "How I've been feeling: " });
     if (note) actions.push(note);
   }
 
@@ -426,7 +439,7 @@ export const dataCard = (f: FindingRow, ctx: DataContext): SignalCard => {
     actions,
     findingId: f.id,
     checkinId: linked?.card.checkinId ?? null,
-    sortAt: resolved ? f.resolvedAt! : [f.lastSeenAt, f.lastDataAt ?? ""].sort().slice(-1)[0],
+    sortAt: findingClosed ? f.resolvedAt! : [f.lastSeenAt, f.lastDataAt ?? ""].sort().slice(-1)[0],
   };
 };
 

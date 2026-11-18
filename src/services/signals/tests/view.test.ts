@@ -105,7 +105,7 @@ describe("C3/C4 · lab reports", () => {
   const ev = {
     collectedAt: ["2026-10-06"],
     valuesOnReport: 40,
-    newlyFlagged: [{ key: "LDL cholesterol", result: "162", units: "mg/dL", referenceRange: "<130", previous: { result: "128" } }],
+    newlyFlagged: [{ key: "ldl", testType: "LDL cholesterol", result: "162", units: "mg/dL", referenceRange: "<130", previous: { result: "128" } }],
     changed: [],
     backInRange: [{ key: "Ferritin", result: "88", units: "ng/mL", referenceRange: "30-400", previous: { result: "19" } }],
     stillFlagged: [{ key: "Vitamin D" }],
@@ -113,6 +113,7 @@ describe("C3/C4 · lab reports", () => {
   it("open: counts changed of the whole report, no trend, Explain my report", () => {
     const card = dataCard(finding({ detectorKey: "labs.report", evidence: ev, quietDays: 0, status: "OPEN" }), ctx());
     expect(card.meta).toBe("Report of Tue 6 Oct · 2 changed of 40");
+    expect((card.evidence as any).values[0].name).toBe("LDL cholesterol");
     expect(card.trend).toBeNull();
     expect(card.actions[0]).toMatchObject({ kind: "explain_report", prompt: "Explain my lab report from 6 Oct 2026." });
     expect((card.evidence as any).line).toBe("1 other value still outside the range, about where it was");
@@ -120,7 +121,7 @@ describe("C3/C4 · lab reports", () => {
   it("resolved next morning: no meter, never 'back to your usual'", () => {
     const card = dataCard(finding({ detectorKey: "labs.report", evidence: ev, status: "RESOLVED", resolvedAt: "2026-10-07", closeReason: "quiet" }), ctx());
     expect(card.concern).toBeNull();
-    expect(card.closeLabel).toMatch(/^Report of 6 Oct/);
+    expect(card.closeLabel).toBe("Report of 6 Oct · 1 newly outside, 1 back inside");
   });
   it("good news reads Low with a Good news tag", () => {
     const card = dataCard(finding({ detectorKey: "labs.report", direction: "POSITIVE", status: "OPEN", evidence: { ...ev, newlyFlagged: [] } }), ctx());
@@ -157,6 +158,17 @@ describe("C6 · linked to a check-in, getting worse", () => {
     const card2 = dataCard(finding({ encounterId: "e1" }), ctx({ linked: { card: checkinCard(flagged), due: false, threadId: "t9", complaintText: "x", checkIns: 1 } }));
     expect(card2.concern?.label).toBe("Act");
   });
+  it("a finding that closed stays an OPEN signal while its check-in is followed, and Watch", () => {
+    const followed = checkin();
+    const c = dataCard(finding({ status: "RESOLVED", resolvedAt: "2026-10-11", closeReason: "quiet", encounterId: "e1" }), ctx({ linked: { card: checkinCard(followed), due: false, threadId: "t9", complaintText: "x", checkIns: 2 } }));
+    expect(c.status).toBe("open");
+    expect(c.trend?.label).toBe("Back to your usual");
+    expect(c.concern?.label).toBe("Watch");
+    const closed = dataCard(finding({ status: "RESOLVED", resolvedAt: "2026-10-11", closeReason: "quiet", encounterId: "e1" }), ctx({ linked: { card: checkinCard(checkin({ state: "closed", outcome: "resolved", closedOn: "2026-10-12" })), due: false, threadId: "t9", complaintText: "x", checkIns: 2 } }));
+    expect(closed.status).toBe("resolved");
+    expect(closed.concern?.label).toBe("Low");
+  });
+
   it("the linked check-in is not listed again", () => {
     const o = overviewOf([card, checkinCard(c)], new Set(["e1"]));
     expect(o.open).toHaveLength(1);

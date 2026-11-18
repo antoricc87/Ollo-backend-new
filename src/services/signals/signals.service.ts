@@ -70,11 +70,16 @@ const tellFollowUp = async (patientId: string, findingId: string, event: FollowU
 
 const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
 
-export const runScanFor = async (patientId: string, opts: { notify?: boolean } = {}): Promise<ScanResult | { skipped: string }> => {
+/**
+ * `today` (YYYY-MM-DD, local) runs the scan as of that morning instead of this
+ * one — for test scenarios that step a patient through days. The live worker
+ * never passes it.
+ */
+export const runScanFor = async (patientId: string, opts: { notify?: boolean; today?: string } = {}): Promise<ScanResult | { skipped: string }> => {
   const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { timeZone: true } });
   if (!patient) return { skipped: "no patient" };
   const tz = safeTz(patient.timeZone);
-  const today = moment().tz(tz).format("YYYY-MM-DD");
+  const today = opts.today ?? moment().tz(tz).format("YYYY-MM-DD");
 
   const [input, open, notify] = await Promise.all([collect(patientId, today, tz), openEpisodes(patientId, tz), notifyState(patientId, today, tz)]);
   const run = runDay(input, open.episodes, notify);

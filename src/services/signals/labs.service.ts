@@ -49,11 +49,12 @@ const coveredReportIds = async (patientId: string): Promise<Set<string>> => {
   return out;
 };
 
-export const runLabScanFor = async (patientId: string, opts: { notify?: boolean; reportIds?: string[] } = {}): Promise<LabScanResult | { skipped: string }> => {
+/** `today` as in runScanFor: the day the report is read, for test scenarios. */
+export const runLabScanFor = async (patientId: string, opts: { notify?: boolean; reportIds?: string[]; today?: string } = {}): Promise<LabScanResult | { skipped: string }> => {
   const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { timeZone: true } });
   if (!patient) return { skipped: "no patient" };
   const tz = safeTz(patient.timeZone);
-  const today = moment().tz(tz).format("YYYY-MM-DD");
+  const today = opts.today ?? moment().tz(tz).format("YYYY-MM-DD");
 
   const summary = await prisma.patientSummary.findUnique({ where: { patientId }, include: { labResults: { include: { labResults: true } } } });
   const reports = summary?.labResults ?? [];
