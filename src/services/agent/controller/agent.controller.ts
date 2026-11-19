@@ -474,9 +474,17 @@ class AgentHandler {
       // the app only sends segments it heard speech in.
       const text = await speechToText(audio, { prompt: transcriptionPrompt(hints, previous), minBytes: 4000 });
       return response.status(200).json(Util.success({ text }, "Transcript"));
-    } catch (error) {
+    } catch (error: any) {
       console.error("agent transcribe", error);
-      return response.status(400).json(Util.error({}, "Could not understand the recording"));
+      // 400 = the clip itself held nothing usable (the app treats it as
+      // silence). Anything else — the provider down, a bad key, a timeout — is
+      // OUR failure: 502, so the app says it could not reach Ollie and keeps
+      // the recording for a retry instead of telling them it didn't hear them
+      // (seen Nov 18 2026: a 401 from the provider read as "Didn't catch that").
+      const silence = /Recording too short|Nothing intelligible|unsupported container/i.test(String(error?.message ?? ""));
+      return silence
+        ? response.status(400).json(Util.error({}, "Could not understand the recording"))
+        : response.status(502).json(Util.error({}, "Transcription is unavailable right now"));
     }
   }
 

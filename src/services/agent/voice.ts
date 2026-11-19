@@ -31,7 +31,7 @@ import { UNDO_WINDOW_HOURS } from "./tools/undo.tools";
  * DICTATION_HINTS; a client that sends none, like the watch, gets these).
  */
 export const DICTATION_HINTS = [
-  "Ollie", "HRV", "VO2 max", "Zone 2", "RPE", "A1C", "LDL", "HDL", "ApoB",
+  "Ollie", "Ollo", "HRV", "VO2 max", "Zone 2", "RPE", "A1C", "LDL", "HDL", "ApoB",
   "creatine", "whey protein", "magnesium glycinate", "omega-3", "electrolytes",
   "Greek yogurt", "cottage cheese", "overnight oats", "acai bowl", "poke bowl",
   "quinoa", "edamame", "hummus", "falafel", "tzatziki", "kombucha", "kefir",
