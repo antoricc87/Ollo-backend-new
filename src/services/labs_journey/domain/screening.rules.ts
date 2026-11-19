@@ -105,15 +105,20 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
   /* ------------------------------- Blood labs ------------------------------ */
 
   if (age === null || age >= 20) {
-    const risk = highCholesterol || diabetes || heartDisease || p.family.earlyHeartDisease || p.family.highCholesterol || onStatin;
+    const own = highCholesterol || diabetes || heartDisease;
+    const family = p.family.earlyHeartDisease || p.family.highCholesterol;
+    const risk = own || family || onStatin;
     items.push({
       key: "lipid_panel",
       kind: "LAB",
       title: "Lipid panel",
+      // Their own history and their family's are different facts: say which (Nov 19 2026).
       reason: onStatin
         ? "A statin is on your record; guidelines check cholesterol yearly while on treatment."
-        : risk
-        ? "Cholesterol, heart disease or diabetes is in your history; guidelines move this to yearly."
+        : own
+        ? "High cholesterol, heart disease or diabetes is on your record; guidelines move this to yearly."
+        : family
+        ? "High cholesterol or early heart disease runs in your family; guidelines move this to yearly."
         : between(age, 40, 75)
         ? `You're ${age}; from 40 to 75 guidelines use cholesterol to estimate 10-year heart risk, which informs statin decisions.`
         : "Guidelines list a baseline lipid profile for adults from 20, repeated every 4–6 years.",
@@ -238,7 +243,9 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
       kind: "LAB",
       title: "Lipoprotein(a) — once",
       reason: lpaRisk
-        ? "Lp(a) is inherited and not in a standard lipid panel; with the heart or cholesterol history on your record, the NLA recommends measuring it once."
+        ? (highCholesterol || heartDisease
+            ? "Lp(a) is inherited and not in a standard lipid panel; with heart disease or high cholesterol on your record, the NLA recommends measuring it once."
+            : "Lp(a) is inherited and not in a standard lipid panel; with heart disease or high cholesterol in your family, the NLA recommends measuring it once.")
         : "Lp(a) is inherited and stable for life; the 2024 NLA statement recommends measuring it once in every adult.",
       cadence: "Once",
       source: { org: "National Lipid Association", year: 2024, url: "https://www.sciencedirect.com/science/article/pii/S1933287424000333" },
