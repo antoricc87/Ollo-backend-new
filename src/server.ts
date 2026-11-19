@@ -27,6 +27,7 @@ import WorkoutRoutes from "./services/workouts/workouts.routes";
 import LabsJourneyRoutes from "./services/labs_journey/labsJourney.routes";
 import InsuranceRoutes from "./services/insurance/insurance.routes";
 import HealthIdRoutes from "./services/health_id/healthId.routes";
+import PreventiveRoutes from "./services/preventive/preventive.routes";
 import SeamRoutes from "./services/seam/seam.routes";
 import MessagingRoutes from "./services/messaging/messaging.routes";
 import EncounterRoutes from "./services/encounter/encounter.routes";
@@ -116,6 +117,7 @@ class Server {
     new LabsJourneyRoutes(this.app).routesConfig();
     new InsuranceRoutes(this.app).routesConfig();
     new HealthIdRoutes(this.app).routesConfig();
+    new PreventiveRoutes(this.app).routesConfig();
     new SeamRoutes(this.app).routesConfig();
     new MessagingRoutes(this.app).routesConfig();
     new EncounterRoutes(this.app).routesConfig();

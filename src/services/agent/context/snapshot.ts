@@ -10,6 +10,7 @@ import { buildCurrentLabs, labFreshness, LabFreshness } from "../../../utils/lab
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
 import memoryStore from "../memory/memory.store";
 import HealthIdService from "../../health_id/model/healthId.model";
+import { planForAgent } from "../../preventive/model/preventive.model";
 import { describeFinding } from "../../signals/domain/describe";
 import MealPlanService from "../../meal_plan/model/meal_plan.model";
 import { favoriteLine } from "../../meal_analysis/mealFavorite";
@@ -188,6 +189,8 @@ export type PatientSnapshot = {
   memories: { id: string; category: string; content: string }[];
   /** Health ID block (facts from the record + their story), rendered; null when nothing is known. */
   healthId: string | null;
+  /** The saved preventive plan in one line (services/preventive); null before they have one. */
+  preventivePlan: string | null;
   /** Signals found in their data in the last 30 days (services/signals), in code-built words. */
   signals: { since: string; title: string; line: string; ongoing: boolean }[];
   /** The last nights the phone synced (sleep, HRV, sleeping heart rate) — the only wearable data the server holds. */
@@ -315,7 +318,7 @@ export async function buildPatientSnapshot(
     select: { date: true },
   });
   // What the signal detectors found lately and the last synced nights: part of "everything about this person".
-  const [signals, nights, healthId] = await Promise.all([
+  const [signals, nights, healthId, preventivePlan] = await Promise.all([
     prisma.finding
       .findMany({
         where: { patientId, OR: [{ status: { in: ["OPEN", "ONGOING"] } }, { firstDetectedAt: { gte: moment(now).subtract(30, "days").toDate() } }] },
@@ -331,6 +334,7 @@ export async function buildPatientSnapshot(
       console.error("snapshot: health id", e);
       return null;
     }),
+    planForAgent(patientId).catch(() => null),
   ]);
   const savedMeals = (
     await prisma.favMeal
@@ -559,6 +563,7 @@ export async function buildPatientSnapshot(
     })),
     memories: memories.map((m) => ({ id: m.id, category: m.category, content: m.content })),
     healthId,
+    preventivePlan,
     signals,
     nights,
     client,
@@ -598,6 +603,7 @@ export function renderSnapshot(s: PatientSnapshot): string {
       `; activity ${p.activityLevel ?? "—"}; smoking ${p.smoking ?? "—"}; alcohol ${p.alcohol ?? "—"}; caffeine ${p.caffeine ?? "—"}`
   );
   if (s.healthId) L.push(s.healthId);
+  if (s.preventivePlan) L.push(s.preventivePlan);
 
   if (s.plan) {
     const pl = s.plan;

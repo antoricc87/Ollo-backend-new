@@ -171,6 +171,7 @@ model Patient {
   nightlyVitals        NightlyVitals[]       @relation("PatientNightlyVitals")
   devices              Device[]
   notifications        Notification[]
+  preventivePlan       PreventivePlan?       @relation("PatientPreventivePlan")
 }
 
 model DexcomToken {
@@ -1811,4 +1812,49 @@ model HealthIdChange {
   createdAt  DateTime  @default(now())
 
   @@index([healthIdId, createdAt])
+}
+
+/// THE PREVENTIVE PLAN (../docs/preventive-plan-plan.md, P1, Nov 19 2026):
+/// one per person — the services the guideline rules put in it, what the
+/// person added, and the words written around them. Rebuilt from the record
+/// when it is read (cheap, pure); the words are only rewritten when the items
+/// change. `approvedAt/By` are for the clinician consultation (P3).
+model PreventivePlan {
+  id         String               @id @default(uuid())
+  patientId  String               @unique
+  patient    Patient              @relation("PatientPreventivePlan", fields: [patientId], references: [id], onDelete: Cascade)
+  /// One sentence summing up the plan, written from the Health ID.
+  headline   String?
+  /// One or two sentences per group, keyed by type (lab, diagnostic, …).
+  groupLines Json?
+  /// The item keys + statuses the words were written for; new words when it changes.
+  wordsFor   String?
+  /// The last time the items were rebuilt from the record.
+  builtAt    DateTime             @default(now())
+  approvedAt DateTime?
+  approvedBy String?
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+  items      PreventivePlanItem[]
+}
+
+/// One service in a plan, as it was shown: the snapshot keeps what the person
+/// was told even after the rules change.
+model PreventivePlanItem {
+  id        String         @id @default(uuid())
+  planId    String
+  plan      PreventivePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  key       String
+  /// lab | diagnostic | procedure | vaccine | check
+  type      String
+  /// planned | coming | up_to_date | added (an optional test the person added)
+  status    String
+  /// rules | person | clinician
+  addedBy   String         @default("rules")
+  /// The item as shown (name, checks, why, how, every, source, coverage, tags, price).
+  snapshot  Json
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@unique([planId, key])
 }

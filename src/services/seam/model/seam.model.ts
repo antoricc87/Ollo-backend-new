@@ -87,7 +87,8 @@ export class SeamPatientService {
     if (!s) return null;
     // Signals and nights stay patient-side until the physician app is real (ruling Sep 24 2026, #7).
     // The Health ID story is the patient's own words about themselves: patient-side too.
-    const { healthId: _h, memories: _m, subAccounts: _s, client: _c, mealPlan: _mp, savedMeals: _sm, signals: _sg, nights: _n, ...rest } = s;
+    // The preventive plan joins the clinician view with the consultation (P3, docs/preventive-plan-plan.md).
+    const { healthId: _h, preventivePlan: _pp, memories: _m, subAccounts: _s, client: _c, mealPlan: _mp, savedMeals: _sm, signals: _sg, nights: _n, ...rest } = s;
     return rest;
   }
 
