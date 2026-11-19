@@ -1,6 +1,7 @@
 import prisma from "../../../utility/prismaClient";
 import { getLLM } from "../../agent/llm/openai.client";
 import HealthIdService from "../../health_id/model/healthId.model";
+import { upcomingByItem } from "../../booking/booking.service";
 import { getPatientById } from "../../patient/model/patient.model";
 import { applyCoverage, buildScreeningProfile } from "../../labs_journey/domain/profile";
 import { buildPanel } from "../../labs_journey/domain/screening.rules";
@@ -61,7 +62,7 @@ const writeWords = async (patientId: string, rows: Reconciled["rows"], write: bo
   }
 };
 
-const toView = (rows: Reconciled["rows"], words: PlanWords, optional: OptionalItem[], approvedAt: Date | null): PlanView => {
+const toView = (rows: Reconciled["rows"], words: PlanWords, optional: OptionalItem[], approvedAt: Date | null, booked: Record<string, { id: string; startsAt: string; place: string }> = {}): PlanView => {
   const live = rows.filter((r) => r.status !== "up_to_date");
   const order = { planned: 0, added: 1, coming: 2 } as Record<string, number>;
   const added = new Set(rows.filter((r) => r.status === "added").map((r) => r.key));
@@ -71,7 +72,7 @@ const toView = (rows: Reconciled["rows"], words: PlanWords, optional: OptionalIt
       type,
       label: TYPE_LABEL[type],
       line: words.groups[type] ?? "",
-      items: live.filter((r) => r.type === type).sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3)).map((r) => ({ ...r.snapshot, status: r.status, addedBy: r.addedBy })),
+      items: live.filter((r) => r.type === type).sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3)).map((r) => ({ ...r.snapshot, status: r.status, addedBy: r.addedBy, booking: booked[r.key] ?? null })),
     })).filter((g) => g.items.length),
     upToDate: rows.filter((r) => r.status === "up_to_date").map((r) => r.snapshot),
     optional: optional.filter((o) => !added.has(o.key)),
@@ -121,7 +122,9 @@ export const loadPlan = async (patientId: string, opts: { words?: boolean } = {}
     words = { headline: plan.headline!, groups: (plan.groupLines ?? {}) as PlanWords["groups"] };
     await prisma.preventivePlan.update({ where: { id: plan.id }, data: { builtAt: new Date() } });
   }
-  return toView(rows, words, computed.optional, plan.approvedAt);
+  // Each item's next confirmed appointment, so the plan says "Booked · Tue 25 Nov".
+  const booked = await upcomingByItem(patientId).catch(() => ({}));
+  return toView(rows, words, computed.optional, plan.approvedAt, booked);
 };
 
 /** Add an optional test to the plan (the person's choice), or take it out. */

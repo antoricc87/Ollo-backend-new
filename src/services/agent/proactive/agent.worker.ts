@@ -6,6 +6,7 @@ import { runSignalScanDue } from "../../signals/signals.service";
 import { runMorningTasksDue } from "./tasks";
 import { runDigestDue } from "../../notifications/digest";
 import { runCheckinsDue } from "../../encounter/followups.service";
+import { runBookingSweep } from "../../booking/booking.service";
 require("dotenv").config();
 
 /**
@@ -28,11 +29,14 @@ if (process.env.NODE_ENV !== "development") {
       const tasks = await runMorningTasksDue();
       const signals = await runSignalScanDue();
       const checkins = await runCheckinsDue();
+      // Holds lapse, reminders go out, results come back (P1b booking).
+      const booking = await runBookingSweep().catch((e) => (console.error("booking sweep", e), null));
       const digest = await runDigestDue();
       console.log(
         `agent tick: weekly ${weekly.filter((r) => r.ok).length}/${weekly.length}, plan_week ${planWeek.filter((r) => r.ok).length}/${planWeek.length}, ` +
           `tasks ${tasks.filter((t) => t.missed.ran).length}/${tasks.length} · signals scanned ${signals.scanned} · ${signals.episodesOpened} opened · ${signals.notified} notified · ` +
           `check-ins closed ${checkins.closed} asked ${checkins.asked} · ` +
+          `bookings ${booking ? `${booking.reminded} reminded, ${booking.results} results` : "sweep failed"} · ` +
           `digests ${digest.filter((d) => d.pushed).length}/${digest.length}`
       );
       return { weekly: weekly.length, planWeek: planWeek.length, tasks: tasks.length, signals, checkins, digests: digest.length };

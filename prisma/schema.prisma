@@ -172,6 +172,7 @@ model Patient {
   devices              Device[]
   notifications        Notification[]
   preventivePlan       PreventivePlan?       @relation("PatientPreventivePlan")
+  serviceBookings      ServiceBooking[]      @relation("PatientServiceBookings")
 }
 
 model DexcomToken {
@@ -1857,4 +1858,85 @@ model PreventivePlanItem {
   updatedAt DateTime       @updatedAt
 
   @@unique([planId, key])
+}
+
+/// BOOKING FOR PREVENTIVE SERVICES (P1b, ../docs/preventive-plan-plan.md):
+/// labs, imaging centers, procedure clinics and pharmacies, reached through
+/// an ADAPTER per provider network. Until real partners exist the only
+/// adapter is "simulated" — fictional places, generated times — and it is off
+/// unless BOOKING_ADAPTER=simulated. Separate from `Booking` (clinician visits).
+model CareProvider {
+  id         String         @id @default(uuid())
+  /// The adapter that reaches it: "simulated" today; a partner's key later.
+  adapter    String
+  /// The provider's own id in that adapter (unique per adapter).
+  externalId String
+  name       String
+  /// lab | imaging | procedure | pharmacy
+  kind       String
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  locations  CareLocation[]
+
+  @@unique([adapter, externalId])
+}
+
+model CareLocation {
+  id         String           @id @default(uuid())
+  providerId String
+  provider   CareProvider     @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  externalId String
+  name       String
+  address    String
+  city       String
+  state      String
+  zip        String
+  lat        Float?
+  lng        Float?
+  phone      String?
+  timeZone   String           @default("America/New_York")
+  /// What it offers: [{ key (plan item key), minutes, priceUsd: [lo, hi], prep }].
+  offerings  Json
+  /// Weekly hours: { mon: ["07:00","15:00"], … } (local time).
+  hours      Json
+  inNetwork  Boolean          @default(true)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  bookings   ServiceBooking[]
+
+  @@unique([providerId, externalId])
+}
+
+/// One appointment for one or more plan items at one place (a blood draw
+/// covers every lab in the plan at once).
+model ServiceBooking {
+  id               String       @id @default(uuid())
+  patientId        String
+  patient          Patient      @relation("PatientServiceBookings", fields: [patientId], references: [id], onDelete: Cascade)
+  locationId       String
+  location         CareLocation @relation(fields: [locationId], references: [id])
+  /// Plan item keys this booking covers.
+  itemKeys         String[]
+  /// lab | diagnostic | procedure | vaccine | check
+  type             String
+  startsAt         DateTime
+  endsAt           DateTime
+  /// held | confirmed | cancelled | completed | no_show | expired
+  status           String
+  /// A hold keeps the slot while they confirm; it lapses at this time.
+  holdExpiresAt    DateTime?
+  externalRef      String?
+  confirmationCode String?
+  /// What to do before (fasting, no deodorant…), from the offerings.
+  prep             String?
+  reminderSentAt   DateTime?
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+  /// The lab report its results became (LabResultSummary.id), when it has results.
+  resultReportId   String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([patientId, status])
+  @@index([locationId, startsAt])
 }

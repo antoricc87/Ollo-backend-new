@@ -14,7 +14,8 @@ import { buildVaccines } from "./vaccines";
  * as optional. Up-to-date items (a recent result covers them) are passed in.
  */
 
-const TYPE: Record<string, ServiceType> = {
+/** The type of every guideline rule item (also read by booking: which kind of place offers it). */
+export const RULE_TYPE: Record<string, ServiceType> = {
   lipid_panel: "lab",
   hba1c_glucose: "lab",
   metabolic_panel: "lab",
@@ -145,7 +146,7 @@ const tagsFor = (r: RuleItem, p: ScreeningProfile): Tag[] => {
 };
 
 const fromRule = (r: RuleItem & { about?: string; howDone?: string }, p: ScreeningProfile): PlanItem => {
-  const type = TYPE[r.key] ?? (r.kind === "LAB" ? "lab" : r.kind === "VISIT" ? "check" : "diagnostic");
+  const type = RULE_TYPE[r.key] ?? (r.kind === "LAB" ? "lab" : r.kind === "VISIT" ? "check" : "diagnostic");
   return {
     key: r.key,
     type,
