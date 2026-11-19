@@ -1,6 +1,7 @@
 import { buildPanel, PanelItem as RuleItem, ScreeningProfile } from "../../labs_journey/domain/screening.rules";
 import { withCatalog } from "../../labs_journey/domain/screening.catalog";
 import { coverageOf } from "./coverage";
+import { cadenceFor, LastDone, nextDue } from "./cadence";
 import { optionalFor } from "./optional";
 import { PlanItem, PreventivePlan, ServiceType, Tag, TYPE_LABEL, TYPE_ORDER } from "./types";
 import { buildVaccines } from "./vaccines";
@@ -195,15 +196,29 @@ const coming = (p: ScreeningProfile): PlanItem[] => {
   return out;
 };
 
-export const buildPlan = (p: ScreeningProfile, opts: { upToDate?: Set<string> } = {}): PreventivePlan => {
-  const done = opts.upToDate ?? new Set<string>();
+/**
+ * `last`: when each item was last done (domain/history.ts). `cadence`: the
+ * person's own intervals by key (months; 0 = once). An item whose next due
+ * date is still ahead is UP TO DATE; one never done, done at an unknown date,
+ * or whose date has come is in the plan (Nov 19 2026: last done → next due).
+ */
+/** An item with its last done, interval and next due; status from them (coming stays coming). */
+export const withDates = <T extends { key: string; type: ServiceType; every: string; status: string }>(i: T, age: number | null, last: LastDone | null, override: number | null | undefined, today: string): T & { last: LastDone | null; cadence: ReturnType<typeof cadenceFor>; nextDue: string | null } => {
+  const cadence = cadenceFor(i.key, i.type, age, last, override, i.every || "");
+  const due = nextDue(last, cadence, today);
+  const status = i.status === "coming" || i.status === "added" ? i.status : due.dueNow ? "planned" : "up_to_date";
+  return { ...i, last, cadence, nextDue: due.on, status };
+};
+
+export const buildPlan = (p: ScreeningProfile, opts: { last?: Record<string, LastDone>; cadence?: Record<string, number | null>; today?: string } = {}): PreventivePlan => {
+  const today = opts.today ?? new Date().toISOString().slice(0, 10);
   const rules = withCatalog(buildPanel(p)).map((r) => fromRule(r, p));
   const all = [...rules, ...buildVaccines(p)];
   const keys = new Set(all.map((i) => i.key));
-  const items = [...all, ...coming(p).filter((c) => !keys.has(c.key))];
+  const items = [...all, ...coming(p).filter((c) => !keys.has(c.key))].map((i) => withDates(i, p.age, opts.last?.[i.key] ?? null, opts.cadence?.[i.key], today));
 
-  const planned = items.filter((i) => !done.has(i.key));
-  const upToDate = items.filter((i) => done.has(i.key)).map((i) => ({ ...i, status: "up_to_date" as const }));
+  const planned = items.filter((i) => i.status !== "up_to_date");
+  const upToDate = items.filter((i) => i.status === "up_to_date");
 
   // Planned before coming; within each, the rules' weight (DUE, CONSIDER, DISCUSS).
   const weight = { DUE: 0, CONSIDER: 1, DISCUSS: 2 } as const;

@@ -210,12 +210,14 @@ const saveResults = async (patientId: string, values: LabValue[], collectedAt: D
  * Hourly (agent tick): lapse holds, send tomorrow's reminders, mark past
  * appointments done, bring lab results back.
  */
-export const runBookingSweep = async (now = new Date()) => {
+export const runBookingSweep = async (now = new Date(), opts: { patientIds?: string[] } = {}) => {
   const out = { expired: 0, reminded: 0, completed: 0, results: 0 };
-  out.expired = (await prisma.serviceBooking.updateMany({ where: { status: "held", holdExpiresAt: { lte: now } }, data: { status: "expired" } })).count;
+  // Tests pass a made-up `now` and their own accounts: never touch anyone else's bookings.
+  const who = opts.patientIds ? { patientId: { in: opts.patientIds } } : {};
+  out.expired = (await prisma.serviceBooking.updateMany({ where: { ...who, status: "held", holdExpiresAt: { lte: now } }, data: { status: "expired" } })).count;
 
   const soon = await prisma.serviceBooking.findMany({
-    where: { status: "confirmed", reminderSentAt: null, startsAt: { gt: now, lte: new Date(now.getTime() + REMINDER_HOURS * 3_600_000) } },
+    where: { ...who, status: "confirmed", reminderSentAt: null, startsAt: { gt: now, lte: new Date(now.getTime() + REMINDER_HOURS * 3_600_000) } },
     include: { location: { select: { name: true, timeZone: true } } },
   });
   for (const b of soon) {
@@ -232,10 +234,17 @@ export const runBookingSweep = async (now = new Date()) => {
     out.reminded++;
   }
 
-  out.completed = (await prisma.serviceBooking.updateMany({ where: { status: "confirmed", endsAt: { lte: now } }, data: { status: "completed", completedAt: now } })).count;
+  // Done: the appointment's end has passed. Each item it covered is recorded as done that day
+  // (the plan's "last done" → "next due"); a lab's results come back separately below.
+  const finished = await prisma.serviceBooking.findMany({ where: { ...who, status: "confirmed", endsAt: { lte: now } }, select: { id: true, patientId: true, itemKeys: true, startsAt: true } });
+  for (const b of finished) {
+    await prisma.serviceBooking.update({ where: { id: b.id }, data: { status: "completed", completedAt: now } });
+    await prisma.preventiveDone.createMany({ data: b.itemKeys.map((k) => ({ patientId: b.patientId, itemKey: k, doneOn: b.startsAt, source: "booking", bookingId: b.id })) });
+  }
+  out.completed = finished.length;
 
   const waiting = await prisma.serviceBooking.findMany({
-    where: { status: "completed", type: "lab", resultReportId: null, externalRef: { not: null } },
+    where: { ...who, status: "completed", type: "lab", resultReportId: null, externalRef: { not: null } },
     include: { location: { include: { provider: true } } },
   });
   for (const b of waiting) {

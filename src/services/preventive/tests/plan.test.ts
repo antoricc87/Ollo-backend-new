@@ -66,12 +66,43 @@ describe("woman, 45", () => {
   });
 });
 
-describe("up to date", () => {
-  it("an item a recent result covers leaves the groups and folds into upToDate", () => {
-    const plan = buildPlan(profile(), { upToDate: new Set(["lipid_panel"]) });
+describe("up to date: last done → next due (Nov 19 2026)", () => {
+  const today = "2026-11-19";
+  it("a lab done 5 months ago is up to date until a year after it", () => {
+    const plan = buildPlan(profile(), { today, last: { lipid_panel: { on: "2026-06-10", source: "lab", outcome: "normal", flagged: [] } } });
     expect(keysOf(plan)).not.toContain("lipid_panel");
-    expect(plan.upToDate.map((i) => i.key)).toEqual(["lipid_panel"]);
-    expect(plan.counts.upToDate).toBe(1);
+    const lipid = plan.upToDate.find((i) => i.key === "lipid_panel")!;
+    expect(lipid.nextDue).toBe("2027-06-10");
+    expect(lipid.cadence?.from).toBe("plan");
+  });
+  it("a lab done 14 months ago is due again (labs: once a year)", () => {
+    const plan = buildPlan(profile(), { today, last: { lipid_panel: { on: "2025-09-01", source: "lab", outcome: "normal", flagged: [] } } });
+    expect(keysOf(plan)).toContain("lipid_panel");
+  });
+  it("a result outside its range brings it back in 3 months, and says why", () => {
+    const plan = buildPlan(profile(), { today, last: { lipid_panel: { on: "2026-10-01", source: "lab", outcome: "findings", flagged: ["LDL cholesterol"] } } });
+    const lipid = plan.upToDate.find((i) => i.key === "lipid_panel")!;
+    expect(lipid.nextDue).toBe("2027-01-01");
+    expect(lipid.cadence).toMatchObject({ months: 3, from: "result", reason: "LDL cholesterol was outside the range last time" });
+  });
+  it("a once-only test done years ago never comes back", () => {
+    const plan = buildPlan(profile(), { today, last: { hiv: { on: "2019-03-01", source: "lab", outcome: "normal", flagged: [] } } });
+    expect(plan.upToDate.find((i) => i.key === "hiv")).toMatchObject({ nextDue: null, cadence: { months: null } });
+  });
+  it("a normal colonoscopy: 10 years; one with findings: 3", () => {
+    const at50 = profile({ age: 50 });
+    const normal = buildPlan(at50, { today, last: { colorectal: { on: "2022-03-01", source: "person", outcome: "normal" } } });
+    expect(normal.upToDate.find((i) => i.key === "colorectal")?.nextDue).toBe("2032-03-01");
+    const findings = buildPlan(at50, { today, last: { colorectal: { on: "2022-03-01", source: "person", outcome: "findings" } } });
+    expect(keysOf(findings)).toContain("colorectal"); // 2025-03 has passed: due again
+  });
+  it("their own interval wins over the plan's and a result's", () => {
+    const plan = buildPlan(profile({ sex: "female", age: 45 }), { today, last: { mammography: { on: "2026-01-15", source: "booking", outcome: "normal" } }, cadence: { mammography: 12 } });
+    expect(plan.upToDate.find((i) => i.key === "mammography")).toMatchObject({ nextDue: "2027-01-15", cadence: { months: 12, from: "you" } });
+  });
+  it("done at an unknown date: still in the plan, so they can say when", () => {
+    const plan = buildPlan(profile({ age: 50 }), { today, last: { colorectal: { on: null, source: "record", outcome: "unknown" } } });
+    expect(plan.groups.flatMap((g) => g.items).find((i) => i.key === "colorectal")?.last).toMatchObject({ on: null, source: "record" });
   });
 });
 

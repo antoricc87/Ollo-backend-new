@@ -65,6 +65,12 @@ export type PlanItem = {
   priority: "DUE" | "CONSIDER" | "DISCUSS";
   /** Lab items: canonical biomarker keys that satisfy it (up-to-date check). */
   biomarkers?: string[];
+  /** When it was last done, from every source (domain/history.ts); null = nothing on record. */
+  last?: import("./cadence").LastDone | null;
+  /** How often it comes back and why (domain/cadence.ts). */
+  cadence?: import("./cadence").Cadence;
+  /** YYYY-MM-DD it is next due; null = due now (never done or date unknown) or never again (once, done). */
+  nextDue?: string | null;
 };
 
 export type OptionalItem = {

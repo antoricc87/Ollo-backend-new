@@ -131,20 +131,20 @@ describe("booking end to end (local database, simulated network)", () => {
   it("the sweep reminds the day before, marks it done after, and brings results back only when allowed", async () => {
     const b = await prisma.serviceBooking.findUniqueOrThrow({ where: { id: bookingId } });
     const dayBefore = new Date(b.startsAt.getTime() - 20 * 3_600_000);
-    expect((await runBookingSweep(dayBefore)).reminded).toBeGreaterThanOrEqual(1);
+    expect((await runBookingSweep(dayBefore, { patientIds: [patientId, other] })).reminded).toBeGreaterThanOrEqual(1);
     expect(queueNotification).toHaveBeenCalledWith(expect.objectContaining({ userId: patientId, kind: "booking_reminder", dedupeKey: `booking_reminder:${bookingId}` }));
 
     const after = new Date(b.endsAt.getTime() + 60_000);
-    await runBookingSweep(after);
+    await runBookingSweep(after, { patientIds: [patientId, other] });
     expect((await prisma.serviceBooking.findUniqueOrThrow({ where: { id: bookingId } })).status).toBe("completed");
 
     const threeDays = new Date(b.endsAt.getTime() + 3 * 86_400_000);
     delete process.env.BOOKING_SIMULATED_RESULTS;
-    await runBookingSweep(threeDays);
+    await runBookingSweep(threeDays, { patientIds: [patientId, other] });
     expect((await prisma.serviceBooking.findUniqueOrThrow({ where: { id: bookingId } })).resultReportId).toBeNull();
 
     process.env.BOOKING_SIMULATED_RESULTS = "1";
-    await runBookingSweep(threeDays);
+    await runBookingSweep(threeDays, { patientIds: [patientId, other] });
     const done = await prisma.serviceBooking.findUniqueOrThrow({ where: { id: bookingId } });
     expect(done.resultReportId).toBeTruthy();
     expect(onLabReport).toHaveBeenCalledWith(patientId, done.resultReportId);

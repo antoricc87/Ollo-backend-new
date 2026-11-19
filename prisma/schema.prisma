@@ -173,6 +173,7 @@ model Patient {
   notifications        Notification[]
   preventivePlan       PreventivePlan?       @relation("PatientPreventivePlan")
   serviceBookings      ServiceBooking[]      @relation("PatientServiceBookings")
+  preventiveDone       PreventiveDone[]      @relation("PatientPreventiveDone")
 }
 
 model DexcomToken {
@@ -1842,20 +1843,23 @@ model PreventivePlan {
 /// One service in a plan, as it was shown: the snapshot keeps what the person
 /// was told even after the rules change.
 model PreventivePlanItem {
-  id        String         @id @default(uuid())
-  planId    String
-  plan      PreventivePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
-  key       String
+  id            String         @id @default(uuid())
+  planId        String
+  plan          PreventivePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  key           String
   /// lab | diagnostic | procedure | vaccine | check
-  type      String
+  type          String
   /// planned | coming | up_to_date | added (an optional test the person added)
-  status    String
+  status        String
   /// rules | person | clinician
-  addedBy   String         @default("rules")
+  addedBy       String         @default("rules")
+  /// The person's own interval in months, when they changed it (0 = once,
+  /// no repeat); null = the plan's default (Nov 19 2026: cadence is theirs to set).
+  cadenceMonths Int?
   /// The item as shown (name, checks, why, how, every, source, coverage, tags, price).
-  snapshot  Json
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  snapshot      Json
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 
   @@unique([planId, key])
 }
@@ -1939,4 +1943,28 @@ model ServiceBooking {
 
   @@index([patientId, status])
   @@index([locationId, startsAt])
+}
+
+/// WHEN A PLAN ITEM WAS LAST DONE (Nov 19 2026) — the dated facts that are not
+/// already a lab result: a completed booking, something the person says ("a
+/// colonoscopy in March 2022"), a clinician's entry. Lab results are read from
+/// the lab reports themselves. With the item's interval this gives "next due".
+model PreventiveDone {
+  id        String   @id @default(uuid())
+  patientId String
+  patient   Patient  @relation("PatientPreventiveDone", fields: [patientId], references: [id], onDelete: Cascade)
+  /// The plan item key (colorectal, mammography, flu…).
+  itemKey   String
+  /// The day it was done (the 1st when only the month is known).
+  doneOn    DateTime
+  /// booking | person | clinician
+  source    String
+  /// normal | findings | unknown — what came of it, when known; it sets the next interval.
+  outcome   String   @default("unknown")
+  /// The booking it came from, when it did.
+  bookingId String?
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([patientId, itemKey])
 }
