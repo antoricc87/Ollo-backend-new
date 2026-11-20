@@ -5,7 +5,9 @@ import { ServiceType } from "./types";
  * (his rulings Nov 19 2026):
  *  - every item in the plan HAS a cadence, and the person can change it;
  *  - LABS: once a year, except tests done once in a lifetime, and except
- *    when a result was outside its range — then sooner;
+ *    when a result was outside its range — then every six months (his ruling
+ *    Nov 20 2026; it was 3 months, which no guideline backs for an untreated
+ *    out-of-range value);
  *  - everything else: the guideline's interval, and a RESULT can change it
  *    (a colonoscopy with findings comes back sooner than a normal one).
  * Order: the person's own choice > what a result calls for > the default.
@@ -88,7 +90,7 @@ export const resultMonths = (key: string, type: ServiceType, last: LastDone | nu
   if (!last) return null;
   if (type === "lab" && last.flagged?.length) {
     const names = last.flagged.slice(0, 2).join(" and ");
-    return { months: 3, reason: `${names} ${last.flagged.length === 1 ? "was" : "were"} outside the range last time` };
+    return { months: 6, reason: `${names} ${last.flagged.length === 1 ? "was" : "were"} outside the range last time` };
   }
   if (last.outcome !== "findings") return null;
   if (key === "colorectal" || key === "colon_early") return { months: 36, reason: "Findings last time: often 3 years; your gastroenterologist sets it" };

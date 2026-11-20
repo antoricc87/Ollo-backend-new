@@ -79,11 +79,11 @@ describe("up to date: last done → next due (Nov 19 2026)", () => {
     const plan = buildPlan(profile(), { today, last: { lipid_panel: { on: "2025-09-01", source: "lab", outcome: "normal", flagged: [] } } });
     expect(keysOf(plan)).toContain("lipid_panel");
   });
-  it("a result outside its range brings it back in 3 months, and says why", () => {
+  it("a result outside its range brings it back in 6 months, and says why", () => {
     const plan = buildPlan(profile(), { today, last: { lipid_panel: { on: "2026-10-01", source: "lab", outcome: "findings", flagged: ["LDL cholesterol"] } } });
     const lipid = plan.upToDate.find((i) => i.key === "lipid_panel")!;
-    expect(lipid.nextDue).toBe("2027-01-01");
-    expect(lipid.cadence).toMatchObject({ months: 3, from: "result", reason: "LDL cholesterol was outside the range last time" });
+    expect(lipid.nextDue).toBe("2027-04-01");
+    expect(lipid.cadence).toMatchObject({ months: 6, from: "result", reason: "LDL cholesterol was outside the range last time" });
   });
   it("a once-only test done years ago never comes back", () => {
     const plan = buildPlan(profile(), { today, last: { hiv: { on: "2019-03-01", source: "lab", outcome: "normal", flagged: [] } } });
