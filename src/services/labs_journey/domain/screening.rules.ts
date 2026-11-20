@@ -121,7 +121,7 @@ export const buildPanel = (p: ScreeningProfile): PanelItem[] => {
         ? "High cholesterol or early heart disease runs in your family; guidelines move this to yearly."
         : between(age, 40, 75)
         ? `You're ${age}; from 40 to 75 guidelines use cholesterol to estimate 10-year heart risk, which informs statin decisions.`
-        : "Guidelines list a baseline lipid profile for adults from 20, repeated every 4–6 years.",
+        : "General guideline: a baseline lipid profile for adults from 20, repeated every 4–6 years.",
       cadence: risk ? "Yearly" : "Every 4–6 years",
       source: between(age, 40, 75) && !risk
         ? USPSTF(2022, "B", "statin-use-in-adults-preventive-medication")
