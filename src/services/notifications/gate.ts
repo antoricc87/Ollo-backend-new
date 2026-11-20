@@ -27,10 +27,23 @@ export const DIGEST_HOUR = 9;
 /** Quiet hours, local, [start, end). A `now` push in this window waits for the end. */
 export const QUIET_START = "21:30";
 export const QUIET_END = "07:30";
-/** Pushes a day from Ollie's own work, digest included. */
+/**
+ * TWO ALLOWANCES (Nov 20 2026, his view: not flooded, but what matters gets
+ * through). Ollie's NOTES (the digest and what rides in it) and TIMELY pushes
+ * (work that is stale by tomorrow: the Sunday week wrap, a lighter option for
+ * today, labs just read) are counted apart — before, the 09:00 digest used the
+ * day's only slot and a lighter option for TODAY's session waited for the
+ * next morning.
+ */
+export const TIMELY_KINDS = new Set(["plan_week", "lighter_today", "watch_out"]);
+export type PushClass = "note" | "timely";
+export const classOf = (kind: string): PushClass => (TIMELY_KINDS.has(kind) ? "timely" : "note");
+/** Notes a day (the digest counts) and a week (Monday–Sunday, local). */
 export const DAILY_CAP = 1;
-/** Pushes a week (Monday–Sunday, local) from Ollie's own work, digest included. */
 export const WEEKLY_CAP = 5;
+/** Timely pushes a day and a week, on their own allowance. */
+export const TIMELY_DAILY_CAP = 1;
+export const TIMELY_WEEKLY_CAP = 3;
 
 export type DeliveryMode = "now" | "digest";
 
@@ -38,9 +51,11 @@ export type GateInput = {
   mode: DeliveryMode;
   now: Date;
   timeZone: string;
-  /** Agent pushes already sent or queued to send today (local). */
+  /** Default "note". */
+  pushClass?: PushClass;
+  /** Pushes of this class already sent or queued for the day it would go out (local). */
   pushedToday: number;
-  /** Agent pushes already sent or queued to send this week (local, ISO week). */
+  /** Pushes of this class already sent or queued that ISO week (local). */
   pushedThisWeek: number;
 };
 
@@ -66,14 +81,20 @@ export const quietEnd = (local: moment.Moment) => {
   return end.isAfter(local) ? end.toDate() : end.add(1, "day").toDate();
 };
 
+/** When a `now` push would actually go out: now, or the end of quiet hours. The caps are counted for THAT day. */
+export const sendTimeFor = (now: Date, timeZone: string) => {
+  const local = moment(now).tz(timeZone);
+  return inQuietHours(local) ? { at: quietEnd(local), quiet: true } : { at: now, quiet: false };
+};
+
 export const decideDelivery = (g: GateInput): GateVerdict => {
   if (g.mode === "digest") return { status: "held", scheduledFor: g.now, reason: "digest" };
+  const timely = g.pushClass === "timely";
   // Over a cap, the work still waits in the app and rides the next digest.
-  if (g.pushedThisWeek >= WEEKLY_CAP) return { status: "held", scheduledFor: g.now, reason: "weekly_cap" };
-  if (g.pushedToday >= DAILY_CAP) return { status: "held", scheduledFor: g.now, reason: "daily_cap" };
-  const local = moment(g.now).tz(g.timeZone);
-  if (inQuietHours(local)) return { status: "queued", scheduledFor: quietEnd(local), reason: "quiet_hours" };
-  return { status: "queued", scheduledFor: g.now, reason: null };
+  if (g.pushedThisWeek >= (timely ? TIMELY_WEEKLY_CAP : WEEKLY_CAP)) return { status: "held", scheduledFor: g.now, reason: "weekly_cap" };
+  if (g.pushedToday >= (timely ? TIMELY_DAILY_CAP : DAILY_CAP)) return { status: "held", scheduledFor: g.now, reason: "daily_cap" };
+  const send = sendTimeFor(g.now, g.timeZone);
+  return { status: "queued", scheduledFor: send.at, reason: send.quiet ? "quiet_hours" : null };
 };
 
 /* ------------------------------- the digest ------------------------------ */
@@ -94,6 +115,17 @@ export const DIGEST_LINES: Record<string, string> = {
 };
 
 /** On its own, each kind's push says this. */
+/**
+ * A signal's push names the AREA (Nov 20 2026) — "Something changed in your
+ * sleep" — never a value, a symptom or a finding. Weight and food stay
+ * generic on a lock screen.
+ */
+const SIGNAL_AREA: Record<string, string> = { recovery: "recovery", sleep: "sleep", training: "training" };
+export const signalLine = (detectorKey: string | null | undefined) => {
+  const area = SIGNAL_AREA[(detectorKey ?? "").split(".")[0]];
+  return area ? `Something changed in your ${area} — Ollie explains` : SINGLE_LINES.signal;
+};
+
 export const SINGLE_LINES: Record<string, string> = {
   weekly_review: "Your weekly review is ready",
   plan_week: "Next week's training is drafted",
@@ -107,7 +139,7 @@ export const SINGLE_LINES: Record<string, string> = {
 /** "a", "a and b", "a, b and c". */
 const listOf = (parts: string[]) => (parts.length < 2 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`);
 
-export type DigestItem = { kind: string; threadId: string | null };
+export type DigestItem = { kind: string; threadId: string | null; body?: string | null };
 
 /**
  * One push for everything held. One item reads as that item and opens it;
@@ -119,7 +151,7 @@ export const digestPush = (items: DigestItem[]): { body: string; route: string; 
   const kinds = [...new Set(items.map((i) => i.kind))];
   if (items.length === 1) {
     const only = items[0];
-    return { body: SINGLE_LINES[only.kind] ?? "Ollie left you a note", route: only.threadId ? `ollie?threadId=${only.threadId}` : "ollie/ready", threadId: only.threadId };
+    return { body: only.body || SINGLE_LINES[only.kind] || "Ollie left you a note", route: only.threadId ? `ollie?threadId=${only.threadId}` : "ollie/ready", threadId: only.threadId };
   }
   const lines = kinds.map((k) => DIGEST_LINES[k] ?? "a note");
   return { body: `Ready for you: ${listOf(lines)}.`, route: "ollie/ready", threadId: null };

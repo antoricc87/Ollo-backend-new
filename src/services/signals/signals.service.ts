@@ -1,6 +1,7 @@
 import moment from "moment-timezone";
 import prisma from "../../utility/prismaClient";
 import { safeTz } from "../agent/memory/dates";
+import { signalLine } from "../notifications/gate";
 import { backToUsualInstruction, getPreference, runProactiveFor, signalInstruction, stillGoingInstruction, SIGNAL_SCAN_HOUR } from "../agent/proactive/proactive.service";
 import { describeFinding } from "./domain/describe";
 import { FollowUpEvent, FollowUpKind } from "./domain/followups";
@@ -43,7 +44,10 @@ export const tellFinding = async (
   findingId: string,
   opts: { kind: "signal" | "watch_out"; instruction: string; title?: string; severity: number; threadId?: string | null }
 ): Promise<{ threadId: string | null; notified: boolean; skipped?: string }> => {
-  const proactive = await runProactiveFor(patientId, opts.kind, { instruction: opts.instruction, title: opts.title, threadId: opts.threadId ?? null });
+  const detectorKey = opts.kind === "signal" ? (await prisma.finding.findUnique({ where: { id: findingId }, select: { detectorKey: true } }))?.detectorKey : null;
+  // "Notes about your data" off: the note is still written (the Signals page reads it), only the push is skipped.
+  const notify = opts.kind === "signal" ? (await getPreference(patientId)).watchOutsEnabled : true;
+  const proactive = await runProactiveFor(patientId, opts.kind, { instruction: opts.instruction, title: opts.title, threadId: opts.threadId ?? null, notify, ...(opts.kind === "signal" ? { pushBody: signalLine(detectorKey) } : {}) });
   const threadId = "threadId" in proactive ? proactive.threadId ?? null : null;
   if ("skipped" in proactive) return { threadId, notified: false, skipped: proactive.skipped };
   await markNotified(findingId, threadId, opts.severity);
@@ -61,7 +65,8 @@ const tellFollowUp = async (patientId: string, findingId: string, event: FollowU
     event.kind === "still_going"
       ? stillGoingInstruction({ ...words, since, days: daysBetween(since, today), evidence: row.evidence, baseline: row.baseline, against: detector?.against ?? "rule" })
       : backToUsualInstruction({ title: words.title, since, until: event.episode.lastSeenAt, against: detector?.against ?? "rule" });
-  const proactive = await runProactiveFor(patientId, "signal", { instruction, threadId: row.threadId, title: words.title });
+  const notify = (await getPreference(patientId)).watchOutsEnabled;
+  const proactive = await runProactiveFor(patientId, "signal", { instruction, threadId: row.threadId, title: words.title, notify, pushBody: signalLine(row.detectorKey) });
   const threadId = "threadId" in proactive ? proactive.threadId ?? null : null;
   if ("skipped" in proactive) return { threadId, skipped: proactive.skipped };
   await markFollowUp(findingId, event.kind);

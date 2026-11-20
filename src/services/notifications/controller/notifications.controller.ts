@@ -1,5 +1,7 @@
 import { Response } from "express";
 import { z } from "zod";
+import moment from "moment-timezone";
+import prisma from "../../../utility/prismaClient";
 import Util from "../../../utils/response";
 import { registerDevice, unregisterDevice, activeDevices } from "../devices.store";
 import { listNotifications, markOpened, sendNow } from "../notifications.service";
@@ -12,6 +14,8 @@ const RegisterBody = z.object({
   bundleId: z.string().min(3).max(120),
   platform: z.enum(["ios"]).default("ios"),
   appVersion: z.string().max(40).nullish(),
+  /** The phone's IANA zone. Sent on every launch so quiet hours and the 09:00 digest follow a person who travels (it was set once, at sign-up). */
+  timeZone: z.string().max(64).nullish(),
 });
 
 const TestBody = z.object({
@@ -26,7 +30,9 @@ class NotificationsHandler {
     if (!userId) return response.status(401).json(Util.error({}, "Unauthorized"));
     const parsed = RegisterBody.safeParse(request.body);
     if (!parsed.success) return response.status(400).json(Util.error(parsed.error.flatten(), "Invalid device"));
-    const d = await registerDevice(userId, parsed.data as { token: string; bundleId: string; platform?: string; appVersion?: string | null });
+    const { timeZone, ...device } = parsed.data;
+    const d = await registerDevice(userId, device as { token: string; bundleId: string; platform?: string; appVersion?: string | null });
+    if (timeZone && moment.tz.zone(timeZone)) await prisma.patient.updateMany({ where: { id: userId, NOT: { timeZone } }, data: { timeZone } }).catch(() => null);
     return response.status(200).json(Util.success({ id: d.id, apnsEnv: d.apnsEnv, bundleId: d.bundleId }, "Device registered"));
   };
 

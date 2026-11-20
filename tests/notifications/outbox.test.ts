@@ -7,6 +7,8 @@
 const mockPrisma = {
   notification: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), findMany: jest.fn(), findUnique: jest.fn(), updateMany: jest.fn() },
   device: { findMany: jest.fn(), update: jest.fn(), findUnique: jest.fn(), create: jest.fn(), updateMany: jest.fn() },
+  // The person's zone: dedupe counts their own day, not UTC's.
+  patient: { findUnique: jest.fn(async () => ({ timeZone: "America/New_York" })) },
 };
 jest.mock("../../src/utility/prismaClient", () => ({ __esModule: true, default: mockPrisma }));
 

@@ -1,7 +1,7 @@
 import { Worker } from "bullmq";
 import { AGENT_TICK_JOB } from "./agent.scheduler";
 import { AGENT_QUEUE, redisConnection } from "../../../workers/config/jobQueque";
-import { runDue } from "./proactive.service";
+import { runWeekWrapDue } from "./proactive.service";
 import { runSignalScanDue } from "../../signals/signals.service";
 import { runMorningTasksDue } from "./tasks";
 import { runDigestDue } from "../../notifications/digest";
@@ -10,8 +10,8 @@ import { runBookingSweep } from "../../booking/booking.service";
 require("dotenv").config();
 
 /**
- * Processes the hourly tick: weekly reviews (Monday 08:00 local), the Sunday
- * planning run, then for whoever's local clock is at 09:00 the morning tasks
+ * Processes the hourly tick: the Sunday 18:00 week wrap (review + next week's
+ * plan, one push — Nov 20 2026), then for whoever's local clock is at 09:00 the morning tasks
  * (missed session → moved), the signal scan, the check-in sweep (close what
  * is over, ask the follow-ups due — Nov 16 2026), and LAST the digest, so
  * everything the morning prepared goes out as one push (Oct 16 2026).
@@ -24,8 +24,8 @@ if (process.env.NODE_ENV !== "development") {
     AGENT_QUEUE,
     async (job) => {
       if (job.name !== AGENT_TICK_JOB) return;
-      const weekly = await runDue("weekly_review");
-      const planWeek = await runDue("plan_week");
+      // Sunday 18:00 local: the week in review + next week's plan, one push.
+      const wrap = await runWeekWrapDue();
       const tasks = await runMorningTasksDue();
       const signals = await runSignalScanDue();
       const checkins = await runCheckinsDue();
@@ -33,13 +33,13 @@ if (process.env.NODE_ENV !== "development") {
       const booking = await runBookingSweep().catch((e) => (console.error("booking sweep", e), null));
       const digest = await runDigestDue();
       console.log(
-        `agent tick: weekly ${weekly.filter((r) => r.ok).length}/${weekly.length}, plan_week ${planWeek.filter((r) => r.ok).length}/${planWeek.length}, ` +
+        `agent tick: week wrap ${wrap.filter((r) => r.review).length} reviews, ${wrap.filter((r) => r.plan).length} plans, ${wrap.filter((r) => r.notified).length} pushed, ` +
           `tasks ${tasks.filter((t) => t.missed.ran).length}/${tasks.length} · signals scanned ${signals.scanned} · ${signals.episodesOpened} opened · ${signals.notified} notified · ` +
           `check-ins closed ${checkins.closed} asked ${checkins.asked} · ` +
           `bookings ${booking ? `${booking.reminded} reminded, ${booking.results} results` : "sweep failed"} · ` +
           `digests ${digest.filter((d) => d.pushed).length}/${digest.length}`
       );
-      return { weekly: weekly.length, planWeek: planWeek.length, tasks: tasks.length, signals, checkins, digests: digest.length };
+      return { weekWrap: wrap.length, tasks: tasks.length, signals, checkins, digests: digest.length };
     },
     {
       connection: redisConnection,

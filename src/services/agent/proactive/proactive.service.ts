@@ -10,7 +10,8 @@ import type { Yardstick } from "../../signals/domain/types";
 
 /**
  * Proactive runs: the same agent, opened by a job instead of a message.
- *   weekly_review  Monday morning — judge last week vs the plan, propose tweaks
+ *   weekly_review  Sunday evening (was Monday 08:00) — the week that is ending
+ *                  vs the plan, in the same thread and push as plan_week
  *   signal         a detector cleared its bar (services/signals) — explain it
  *   watch_out      event-driven — a new lab report changed something on record
  *                  (services/signals/labs.service decides; was "every upload")
@@ -25,10 +26,11 @@ import type { Yardstick } from "../../signals/domain/types";
  * that deep-links to it. Eligibility is decided here, not in the worker.
  */
 
-export const WEEKLY_REVIEW_HOUR = 8; // local, Monday
+/** Sunday 18:00 local: the week in review and next week's plan, one thread, one push (Nov 20 2026, his ruling). */
+export const WEEK_WRAP_HOUR = 18;
 /** Local hour the signal scan runs — morning, after the night's data has synced. */
 export const SIGNAL_SCAN_HOUR = 9;
-export const PLAN_WEEK_HOUR = 18; // local, Sunday
+export const PLAN_WEEK_HOUR = WEEK_WRAP_HOUR; // local, Sunday
 const INACTIVE_AFTER_DAYS = 14;
 
 export type Preference = {
@@ -72,9 +74,15 @@ const recentlyActive = async (patientId: string) => {
 
 /* ------------------------------- instructions ---------------------------- */
 
+/** The week being reviewed: on Sunday the one ending today, otherwise the last finished one. */
+const reviewWeek = (tz: string) => {
+  const now = moment().tz(tz);
+  return isoWeekRange(tz, now.isoWeekday() === 7 ? now : now.clone().subtract(1, "week"));
+};
+
 const weeklyInstruction = (tz: string) => {
-  const lastWeek = isoWeekRange(tz, moment().tz(tz).subtract(1, "week"));
-  return `[Weekly plan review for the week ${lastWeek.start} → ${lastWeek.end}. First call get_week_review (no arguments): it returns that week against the one before, row by row, and shows the review card. Only if you need detail the card does not carry, call get_nutrition_summary or get_workouts for that exact range (from=${lastWeek.start}, to=${lastWeek.end}). Compare against the plan targets. If a target should change, call update_plan_targets with the full new target list.]`;
+  const week = reviewWeek(tz);
+  return `[Weekly review for the week ${week.start} → ${week.end}. First call get_week_review with weekOf=${week.start}: it returns that week against the one before, row by row, and shows the review card. Only if you need detail the card does not carry, call get_nutrition_summary or get_workouts for that exact range (from=${week.start}, to=${week.end}). If they have a plan with targets, compare against them, and if a target should change call update_plan_targets with the full new target list; with no plan, just say how the week went. Short: the card carries the numbers — at most three sentences around it.]`;
 };
 
 /**
@@ -160,7 +168,7 @@ export const DELIVERY: Record<ProactiveKind, DeliveryMode> = {
   lighter_today: "now", // today's session is today
 };
 
-export async function runProactiveFor(patientId: string, kind: ProactiveKind, opts: { notify?: boolean; threadId?: string | null; instruction?: string; title?: string } = {}) {
+export async function runProactiveFor(patientId: string, kind: ProactiveKind, opts: { notify?: boolean; threadId?: string | null; instruction?: string; title?: string; pushBody?: string } = {}) {
   const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { timeZone: true, firstName: true } });
   if (!patient) return { skipped: "no patient" as const };
   const tz = safeTz(patient.timeZone);
@@ -169,7 +177,7 @@ export async function runProactiveFor(patientId: string, kind: ProactiveKind, op
   const instruction =
     opts.instruction ?? (kind === "weekly_review" ? weeklyInstruction(tz) : kind === "plan_week" ? await planWeekInstruction(patientId, tz) : null);
   if (!instruction) throw new Error(`proactive ${kind} needs an instruction — the finding is written by code, never looked for by the model`);
-  const title = opts.title ?? (kind === "weekly_review" ? `Weekly review · ${isoWeekRange(tz, moment().tz(tz).subtract(1, "week")).start}` : TITLES[kind]);
+  const title = opts.title ?? (kind === "weekly_review" ? `Your week · ${reviewWeek(tz).start}` : TITLES[kind]);
 
   const r = await runProactiveCollect({ patientId, kind, title, instruction, threadId: opts.threadId ?? null });
   const stamp = kind === "weekly_review" ? { lastWeeklyReviewAt: new Date() } : kind === "plan_week" ? { lastPlanWeekAt: new Date() } : {};
@@ -190,7 +198,7 @@ export async function runProactiveFor(patientId: string, kind: ProactiveKind, op
         userId: patientId,
         kind,
         title: "Ollie",
-        body: SINGLE_LINES[kind] ?? TITLES[kind],
+        body: opts.pushBody ?? SINGLE_LINES[kind] ?? TITLES[kind],
         route: r.threadId ? `ollie?threadId=${r.threadId}` : "ollie",
         threadId: r.threadId ?? null,
         dedupeKey: `${kind}:${r.threadId ?? "none"}`,
@@ -223,8 +231,10 @@ export async function duePatients(kind: ScheduledKind, now = new Date()) {
     if (!pref.proactiveEnabled) continue;
     const local = moment(now).tz(safeTz(p.timeZone));
     if (kind === "weekly_review") {
-      if (!pref.weeklyReviewEnabled || local.isoWeekday() !== 1 || local.hour() !== WEEKLY_REVIEW_HOUR) continue;
-      if (!p.healthPlans.length) continue; // nothing to review against
+      // Everyone active gets their week back — a health plan was required and
+      // nobody without one ever got a review (Nov 20 2026). The card says what
+      // was not recorded instead of judging it.
+      if (!pref.weeklyReviewEnabled || local.isoWeekday() !== 7 || local.hour() !== WEEK_WRAP_HOUR) continue;
       if (pref.lastWeeklyReviewAt && moment(pref.lastWeeklyReviewAt).isAfter(local.clone().startOf("isoWeek"))) continue;
     } else if (kind === "plan_week") {
       // Sunday evening, for people who train with Ollie: a saved week, a training profile, or a plan with an exercise target.
@@ -236,6 +246,59 @@ export async function duePatients(kind: ScheduledKind, now = new Date()) {
     due.push(p.id);
   }
   return due;
+}
+
+/** The Sunday push, by what was made. Names the work, never a number. */
+export const weekWrapLine = (review: boolean, plan: boolean) =>
+  review && plan ? "Your week in review, and next week's plan" : review ? "Your week in review is ready" : SINGLE_LINES.plan_week;
+
+/**
+ * SUNDAY 18:00 — the week in review and next week's plan in ONE thread with
+ * ONE push (Nov 20 2026, his ruling: a weekly overview without the flood).
+ * The review runs first so the plan run sees it; either can run alone
+ * (review switched off, or no training with Ollie). Sequential, one model at
+ * a time, like every scheduled run.
+ */
+export async function runWeekWrapDue(now = new Date()) {
+  const reviewIds = await duePatients("weekly_review", now);
+  const planIds = await duePatients("plan_week", now);
+  const ids = [...new Set([...reviewIds, ...planIds])];
+  const results: { patientId: string; review: boolean; plan: boolean; notified: boolean }[] = [];
+  for (const patientId of ids) {
+    let threadId: string | null = null;
+    let review = false;
+    let plan = false;
+    try {
+      if (reviewIds.includes(patientId)) {
+        const r = await runProactiveFor(patientId, "weekly_review", { notify: false });
+        review = !("skipped" in r);
+        threadId = r.threadId ?? null;
+      }
+      if (planIds.includes(patientId)) {
+        const r = await runProactiveFor(patientId, "plan_week", { notify: false, threadId });
+        plan = !("skipped" in r);
+        threadId = threadId ?? r.threadId ?? null;
+      }
+    } catch (e) {
+      console.error(`week wrap failed for ${patientId}`, e);
+    }
+    let notified = false;
+    if (review || plan) {
+      const row = await queueNotification({
+        userId: patientId,
+        kind: "plan_week",
+        title: "Ollie",
+        body: weekWrapLine(review, plan),
+        route: threadId ? `ollie?threadId=${threadId}` : "ollie",
+        threadId,
+        dedupeKey: `week_wrap:${threadId ?? patientId}`,
+        mode: "now",
+      }).catch((e) => (console.error("week wrap notify failed", e), null));
+      notified = row?.status === "queued";
+    }
+    results.push({ patientId, review, plan, notified });
+  }
+  return results;
 }
 
 /** Run every due patient for this hour, sequentially (one model at a time). */

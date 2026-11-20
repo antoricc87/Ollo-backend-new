@@ -26,20 +26,24 @@ export async function runDigestFor(userId: string, now = new Date()): Promise<Di
   const seen = new Set(
     (await prisma.agentThread.findMany({ where: { id: { in: threadIds }, seenAt: { not: null } }, select: { id: true } })).map((t) => t.id)
   );
-  const stale = held.filter((h) => h.threadId && seen.has(h.threadId));
-  const live = held.filter((h) => !(h.threadId && seen.has(h.threadId)));
+  // A lighter option held overnight is about a session that is over: not news.
+  const patient = await prisma.patient.findUnique({ where: { id: userId }, select: { timeZone: true } });
+  const tz = safeTz(patient?.timeZone);
+  const today = moment(now).tz(tz).format("YYYY-MM-DD");
+  const pastDay = (h: (typeof held)[number]) => h.kind === "lighter_today" && moment(h.createdAt).tz(tz).format("YYYY-MM-DD") !== today;
+  const stale = held.filter((h) => (h.threadId && seen.has(h.threadId)) || pastDay(h));
+  const live = held.filter((h) => !stale.includes(h));
   if (stale.length) await prisma.notification.updateMany({ where: { id: { in: stale.map((s) => s.id) } }, data: { status: "merged", suppressedReason: "seen" } });
   if (!live.length) return { userId, items: 0, dropped: stale.length, pushed: false, reason: "all already opened" };
 
-  const patient = await prisma.patient.findUnique({ where: { id: userId }, select: { timeZone: true } });
-  const counts = await agentPushCounts(userId, now, safeTz(patient?.timeZone));
+  const counts = await agentPushCounts(userId, now, tz);
   // Over the week's cap the work stays in the app, unannounced.
   if (counts.pushedThisWeek >= WEEKLY_CAP) {
     await prisma.notification.updateMany({ where: { id: { in: live.map((l) => l.id) } }, data: { status: "merged", suppressedReason: "weekly_cap" } });
     return { userId, items: live.length, dropped: stale.length, pushed: false, reason: "weekly cap" };
   }
 
-  const push = digestPush(live.map((l) => ({ kind: l.kind, threadId: l.threadId })))!;
+  const push = digestPush(live.map((l) => ({ kind: l.kind, threadId: l.threadId, body: l.body })))!;
   const row = await queueNotification({
     userId,
     kind: "digest",

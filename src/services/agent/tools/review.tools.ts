@@ -13,7 +13,7 @@ import { statLine } from "../../review/domain/weekStats";
 export const getWeekReview = defineTool({
   name: "get_week_review",
   description:
-    "One finished Monday–Sunday week against the week before: sleep, HRV, training sessions, calories, protein and body weight, each with how much of the week was actually recorded. Shows the weekly review card. Default: last week. Use for the weekly review and for 'how was my week / last week'. For the week still in progress use the snapshot and the other tools instead.",
+    "One Monday–Sunday week (finished, or the current one on its Sunday) against the week before: sleep, HRV, training sessions, calories, protein and body weight, each with how much of the week was actually recorded. Shows the weekly review card. Default: last week. Use for the weekly review and for 'how was my week / last week'. For the week still in progress use the snapshot and the other tools instead.",
   schema: z.object({ weekOf: dayString.optional().describe("Any day inside the week to review. Omit for last week.") }),
   risk: "read",
   // The card IS the review — it shows even when other tools ran in the turn.
@@ -23,7 +23,10 @@ export const getWeekReview = defineTool({
     const lastWeek = isoWeekRange(ctx.timeZone, moment.tz(thisWeek.start, ctx.timeZone).subtract(1, "week"));
     const asked = input.weekOf ? isoWeekRange(ctx.timeZone, moment.tz(input.weekOf, ctx.timeZone)) : lastWeek;
     // A week still running has nothing to average yet — review the last finished one.
-    const week = asked.start >= thisWeek.start ? lastWeek : asked;
+    // Except on its Sunday: the Sunday-evening review (Nov 20 2026) reads the
+    // week that is ending, with six or seven days and nights in.
+    const sunday = moment().tz(ctx.timeZone).isoWeekday() === 7;
+    const week = asked.start === thisWeek.start && sunday ? thisWeek : asked.start >= thisWeek.start ? lastWeek : asked;
     const [review, stat, habits] = await Promise.all([
       weekReviewFor(ctx.patientId, week.start, ctx.timeZone),
       weekStatFor(ctx.patientId, week.start, ctx.timeZone).catch(() => null),

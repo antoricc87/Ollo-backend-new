@@ -1201,6 +1201,27 @@ Not chosen: "did you get seen?" after an escalation; linking a comeback.
 
 ## Background tasks + the morning digest (Oct 16 2026)
 
+**Nov 20 2026 changes (his view: "not flooded, but a mix of Ollie deciding and
+a weekly overview"):**
+- **Sunday 18:00 week wrap** — `runWeekWrapDue` runs the weekly review (the week
+  ENDING, `get_week_review` accepts the current week on its Sunday) and then
+  `plan_week` in the SAME thread, with ONE push (`weekWrapLine`: "Your week in
+  review, and next week's plan"). The review no longer needs an ACTIVE
+  HealthPlan (nobody without one ever got it) and no longer runs Monday 08:00.
+- **Two allowances** (`gate.ts classOf`): notes (digest + what rides in it) 1/day,
+  5/week; timely (`plan_week`, `lighter_today`, `watch_out`) 1/day, 3/week on
+  their own — the 09:00 digest used to take the only slot and a lighter option
+  for today waited until tomorrow. Caps are counted for the day the push goes
+  OUT (22:00 → tomorrow 07:30). A `lighter_today` still held the next morning
+  drops out of the digest (the session is over).
+- Dedupe counts the person's local day, not UTC's.
+- Signal pushes name the AREA (`signalLine`: sleep / recovery / training;
+  weight and food stay generic) — in the digest too when it is the only item.
+  `watchOutsEnabled` ("Notes about your data") now gates signal pushes; the
+  note is still written for the Signals page.
+- The phone sends its time zone with every device registration
+  (`POST /api/devices {timeZone}`) — it was set once at sign-up.
+
 Ruling: Ollie does work unasked, leaves it READY in the app, and the push names
 the work done. "Go with the digest", first build = the gate + three tasks.
 Defaults taken without his answer (say so if asked): drafts only — every task

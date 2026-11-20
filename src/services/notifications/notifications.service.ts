@@ -1,7 +1,7 @@
 import moment from "moment-timezone";
 import prisma from "../../utility/prismaClient";
 import { safeTz } from "../agent/memory/dates";
-import { AGENT_KINDS, decideDelivery, isAgentKind, type DeliveryMode } from "./gate";
+import { AGENT_KINDS, classOf, decideDelivery, isAgentKind, sendTimeFor, type DeliveryMode, type PushClass } from "./gate";
 import { apnsConfigured, sendApns, type ApnsEnv, type ApnsResult } from "./apns/client";
 import { activeDevices, disableDevice, setDeviceEnv } from "./devices.store";
 
@@ -42,28 +42,30 @@ export type QueueInput = {
 
 export type NotificationRow = Awaited<ReturnType<typeof prisma.notification.create>>;
 
-const startOfUtcDay = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-
-/** Ollie's pushes already out (or about to go) today and this week, in the person's own days. */
-export async function agentPushCounts(userId: string, now: Date, timeZone: string) {
-  const local = moment(now).tz(timeZone);
+/** Ollie's pushes of one class already out (or about to go) on that day and its week, in the person's own days. */
+export async function agentPushCounts(userId: string, at: Date, timeZone: string, pushClass: PushClass = "note") {
+  const local = moment(at).tz(timeZone);
   const rows = await prisma.notification.findMany({
     where: { userId, kind: { in: [...AGENT_KINDS] }, status: { in: ["queued", "sent"] }, scheduledFor: { gte: local.clone().startOf("isoWeek").toDate(), lt: local.clone().endOf("isoWeek").toDate() } },
-    select: { scheduledFor: true },
+    select: { scheduledFor: true, kind: true },
   });
-  const today = local.format("YYYY-MM-DD");
-  return { pushedThisWeek: rows.length, pushedToday: rows.filter((r) => moment(r.scheduledFor).tz(timeZone).format("YYYY-MM-DD") === today).length };
+  const mine = rows.filter((r) => classOf(r.kind) === pushClass);
+  const day = local.format("YYYY-MM-DD");
+  return { pushedThisWeek: mine.length, pushedToday: mine.filter((r) => moment(r.scheduledFor).tz(timeZone).format("YYYY-MM-DD") === day).length };
 }
 
 export async function queueNotification(input: QueueInput): Promise<NotificationRow> {
   let scheduledFor = input.scheduledFor ?? new Date();
   let status = "queued";
   let suppressedReason: string | null = null;
+  const patient = await prisma.patient.findUnique({ where: { id: input.userId }, select: { timeZone: true } });
+  const timeZone = safeTz(patient?.timeZone);
   // Ollie's own work goes through the gate; a person's message never does.
   if (isAgentKind(input.kind) && input.kind !== "digest") {
-    const patient = await prisma.patient.findUnique({ where: { id: input.userId }, select: { timeZone: true } });
-    const timeZone = safeTz(patient?.timeZone);
-    const verdict = decideDelivery({ mode: input.mode ?? "now", now: scheduledFor, timeZone, ...(await agentPushCounts(input.userId, scheduledFor, timeZone)) });
+    const pushClass = classOf(input.kind);
+    // Counted for the day it would go out: at 22:00 that is tomorrow 07:30.
+    const goesAt = sendTimeFor(scheduledFor, timeZone).at;
+    const verdict = decideDelivery({ mode: input.mode ?? "now", now: scheduledFor, timeZone, pushClass, ...(await agentPushCounts(input.userId, goesAt, timeZone, pushClass)) });
     status = verdict.status;
     scheduledFor = verdict.scheduledFor;
     suppressedReason = verdict.reason;
@@ -74,7 +76,8 @@ export async function queueNotification(input: QueueInput): Promise<Notification
         userId: input.userId,
         dedupeKey: input.dedupeKey,
         status: { in: ["queued", "sent", "held", "merged"] },
-        createdAt: { gte: startOfUtcDay(scheduledFor) },
+        // The person's own day, not UTC's (a 20:00 push in New York is tomorrow in UTC).
+        createdAt: { gte: moment(scheduledFor).tz(timeZone).startOf("day").toDate() },
       },
       select: { id: true },
     });

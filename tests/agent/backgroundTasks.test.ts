@@ -1,4 +1,5 @@
-import { decideDelivery, digestPush, inQuietHours, DAILY_CAP, WEEKLY_CAP } from "../../src/services/notifications/gate";
+import { classOf, decideDelivery, digestPush, inQuietHours, signalLine, DAILY_CAP, WEEKLY_CAP, TIMELY_DAILY_CAP, TIMELY_WEEKLY_CAP } from "../../src/services/notifications/gate";
+import { weekWrapLine } from "../../src/services/agent/proactive/proactive.service";
 import { rescheduleMissed, overlaps } from "../../src/services/workouts/design/reschedule";
 import { lastNightLow } from "../../src/services/signals/domain/lastNight";
 import { pickStat, weekStats, statLine } from "../../src/services/review/domain/weekStats";
@@ -39,6 +40,46 @@ describe("the gate", () => {
   it("over a cap, the push waits for the digest instead", () => {
     expect(decideDelivery({ ...base, mode: "now", now: at("2026-10-16 14:00"), pushedToday: DAILY_CAP })).toMatchObject({ status: "held", reason: "daily_cap" });
     expect(decideDelivery({ ...base, mode: "now", now: at("2026-10-16 14:00"), pushedThisWeek: WEEKLY_CAP })).toMatchObject({ status: "held", reason: "weekly_cap" });
+  });
+});
+
+describe("two allowances (Nov 20 2026)", () => {
+  const base = { timeZone: NY, pushedToday: 0, pushedThisWeek: 0 };
+
+  it("time-sensitive work is its own class; notes and the digest share the other", () => {
+    expect(["plan_week", "lighter_today", "watch_out"].map(classOf)).toEqual(["timely", "timely", "timely"]);
+    expect(["digest", "signal", "weekly_review", "missed_session", "checkin_followup"].map(classOf)).toEqual(["note", "note", "note", "note", "note"]);
+  });
+
+  it("a lighter option for today still goes out after the morning digest used the note slot", () => {
+    // The counts handed in are the timely class's own: the digest is not in them.
+    expect(decideDelivery({ ...base, mode: "now", pushClass: "timely", now: at("2026-10-16 10:00") })).toMatchObject({ status: "queued", reason: null });
+  });
+
+  it("timely pushes have their own daily and weekly caps", () => {
+    expect(decideDelivery({ ...base, mode: "now", pushClass: "timely", now: at("2026-10-16 10:00"), pushedToday: TIMELY_DAILY_CAP })).toMatchObject({ status: "held", reason: "daily_cap" });
+    expect(decideDelivery({ ...base, mode: "now", pushClass: "timely", now: at("2026-10-16 10:00"), pushedThisWeek: TIMELY_WEEKLY_CAP })).toMatchObject({ status: "held", reason: "weekly_cap" });
+  });
+});
+
+describe("words on the lock screen", () => {
+  it("the Sunday push says what was made", () => {
+    expect(weekWrapLine(true, true)).toBe("Your week in review, and next week's plan");
+    expect(weekWrapLine(true, false)).toBe("Your week in review is ready");
+    expect(weekWrapLine(false, true)).toBe("Next week's training is drafted");
+  });
+
+  it("a signal names the area, never a value; weight and food stay generic", () => {
+    expect(signalLine("sleep.debt")).toBe("Something changed in your sleep — Ollie explains");
+    expect(signalLine("recovery.dip")).toBe("Something changed in your recovery — Ollie explains");
+    expect(signalLine("training.stopped")).toBe("Something changed in your training — Ollie explains");
+    expect(signalLine("weight.change")).toBe("A note on something that changed");
+    expect(signalLine("nutrition.protein_short")).toBe("A note on something that changed");
+    expect(signalLine(null)).toBe("A note on something that changed");
+  });
+
+  it("a digest of one signal carries that signal's own line", () => {
+    expect(digestPush([{ kind: "signal", threadId: "t", body: signalLine("sleep.debt") }])!.body).toBe("Something changed in your sleep — Ollie explains");
   });
 });
 
