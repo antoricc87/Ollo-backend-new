@@ -163,6 +163,7 @@ model Patient {
   workoutSessions      WorkoutSession[]      @relation("PatientWorkouts")
   workoutPlans         WorkoutPlan[]         @relation("PatientWorkoutPlans")
   trainingProfile      TrainingProfile?
+  profileTargets       ProfileTargets?
   healthId             HealthId?
   agentPreference      AgentPreference?
   labJourneys          LabJourney[]          @relation("PatientLabJourneys")
@@ -1967,4 +1968,27 @@ model PreventiveDone {
   createdAt DateTime @default(now())
 
   @@index([patientId, itemKey])
+}
+
+/// The person's own daily/weekly targets (Nov 22 2026, his ruling): set from
+/// their profile when onboarding ends, theirs to change, independent of any
+/// plan — an ACTIVE HealthPlan's targets win while it runs. Calories live in
+/// PatientSummary.caloricAmount (read across nutrition), not here.
+model ProfileTargets {
+  id                String   @id @default(uuid())
+  patientId         String   @unique
+  patient           Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  proteinG          Int?
+  sleepMinutes      Int?
+  sessionsPerWeek   Int?
+  activeMinutesWeek Int?
+  /// Keys the person set themselves (calories, proteinG, …) — never recomputed.
+  edited            String[] @default([])
+  /// Ollie's one-line reason per key (the hybrid, Nov 22 2026); absent = the formula's line.
+  reasons           Json?
+  /// When Ollie last adjusted them from the Health ID; null = formula numbers only.
+  adjustedAt        DateTime?
+  computedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }

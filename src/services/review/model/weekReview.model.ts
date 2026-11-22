@@ -1,7 +1,9 @@
+import { reviewTargets } from "../../targets/targets.model";
 import moment from "moment-timezone";
 import prisma from "../../../utility/prismaClient";
 import { BASELINE_NIGHTS, baselineOf, STD_FLOOR } from "../../signals/domain/baseline";
 import { buildWeekReview, Range, WeekData, WeekReview } from "../domain/weekReview";
+import { buildBuckets, type BucketWeek, type WeekBuckets } from "../domain/weekBuckets";
 import { pickStat, WINDOW_DAYS, weekStats, type WeekStat } from "../domain/weekStats";
 import { collect } from "../../signals/model/collect";
 import { describeFinding } from "../../signals/domain/describe";
@@ -17,7 +19,7 @@ const LB_PER_KG = 2.204_62;
 
 const shift = (day: string, delta: number) => moment.utc(day, DAY).add(delta, "days").format(DAY);
 
-export async function weekReviewFor(patientId: string, weekStart: string, timeZone: string): Promise<WeekReview> {
+export async function weekReviewFor(patientId: string, weekStart: string, timeZone: string): Promise<WeekReview & { buckets: WeekBuckets }> {
   const from = weekStart;
   const to = shift(from, 6);
   const prevFrom = shift(from, -7);
@@ -26,13 +28,17 @@ export async function weekReviewFor(patientId: string, weekStart: string, timeZo
   const until = moment.tz(to, DAY, timeZone).endOf("day").toDate();
 
   const [vitals, anyNight, dailyFoods, sessions, weightTracker, plan] = await Promise.all([
-    prisma.nightlyVitals.findMany({ where: { patientId, date: { gte: baselineFrom, lte: to } }, orderBy: { date: "asc" }, select: { date: true, asleepMinutes: true, hrvMs: true } }),
+    prisma.nightlyVitals.findMany({ where: { patientId, date: { gte: baselineFrom, lte: to } }, orderBy: { date: "asc" }, select: { date: true, asleepMinutes: true, hrvMs: true, restingHr: true } }),
     prisma.nightlyVitals.findFirst({ where: { patientId }, select: { id: true } }),
     // DailyFood.date is stored as a longer string that starts with the local day — match by prefix range.
     prisma.dailyFood.findMany({ where: { userId: patientId, date: { gte: prevFrom, lt: shift(to, 1) } }, select: { date: true, foodEntries: { select: { mealType: true, calories: true, proteins: true } } } }),
     prisma.workoutSession.findMany({
       where: { patientId, deletedAt: null, OR: [{ plannedFor: { gte: prevFrom, lte: to } }, { startedAt: { gte: since, lte: until } }] },
-      select: { startedAt: true, plannedFor: true, status: true, durationSec: true, planId: true },
+      select: {
+        startedAt: true, plannedFor: true, status: true, durationSec: true, planId: true, title: true, activityKey: true, calories: true,
+        // The weekly summary's strength/cardio split is estimated from these (Nov 22 2026).
+        exercises: { select: { exerciseKey: true, sets: { select: { durationSec: true, isWarmup: true } } } },
+      },
     }),
     prisma.weightTracker.findUnique({ where: { userId: patientId }, include: { weightEntries: true } }).catch(() => null),
     prisma.healthPlan.findFirst({ where: { patientId, status: "ACTIVE" }, include: { targets: true }, orderBy: { createdAt: "desc" } }),
@@ -58,6 +64,13 @@ export async function weekReviewFor(patientId: string, weekStart: string, timeZo
     done: s.status === "COMPLETED",
     planned: !!s.planId || s.status !== "COMPLETED",
     minutes: s.durationSec ? Math.round(s.durationSec / 60) : null,
+    title: s.title ?? null,
+    activityKey: s.activityKey,
+    calories: s.calories ?? null,
+    parts: s.exercises.map((e) => {
+      const work = e.sets.filter((x) => !x.isWarmup);
+      return { exerciseKey: e.exerciseKey, workSets: work.length, durationSec: work.reduce((a, x) => a + (x.durationSec ?? 0), 0) };
+    }),
   }));
 
   const weekOf = (a: string): WeekData => {
@@ -87,22 +100,38 @@ export async function weekReviewFor(patientId: string, weekStart: string, timeZo
     return t && (t.min !== null || t.max !== null) ? { min: t.min, max: t.max } : null;
   };
 
-  return buildWeekReview({
-    from,
-    to,
-    week: weekOf(from),
-    previous: weekOf(prevFrom),
-    targets: {
+  // The plan's targets while one is active, else the person's own (Nov 22 2026).
+  const targets = plan
+    ? {
       calories: range("calories"),
       proteinG: range("protein_g"),
       sleepMinutes: target("sleep_minutes")?.min ?? target("sleep_minutes")?.max ?? null,
       sessionsPerWeek: target("exercise_sessions")?.min ?? target("exercise_sessions")?.max ?? null,
-    },
-    // The usual from the nights BEFORE this week — a week is never judged against itself.
-    hrvBaseline: baselineOf(vitals.filter((v) => v.date < from).map((v) => v.hrvMs), STD_FLOOR.hrvMs),
+      }
+    : await reviewTargets(patientId).catch(() => ({ calories: null, proteinG: null, sleepMinutes: null, sessionsPerWeek: null }));
+  // The usual from the nights BEFORE this week — a week is never judged against itself.
+  const earlier = vitals.filter((v) => v.date < from);
+  const hrvBaseline = baselineOf(earlier.map((v) => v.hrvMs), STD_FLOOR.hrvMs);
+
+  const review = buildWeekReview({ from, to, week: weekOf(from), previous: weekOf(prevFrom), targets, hrvBaseline, hasNights: !!anyNight, weightUnit });
+
+  const bucketWeek = (a: string): BucketWeek => {
+    const b = shift(a, 6);
+    const inWeek = (date: string) => date >= a && date <= b;
+    return {
+      days: weekOf(a).days,
+      nights: vitals.filter((v) => inWeek(v.date)),
+      sessions: rows.filter((r) => inWeek(r.date)),
+    };
+  };
+  const buckets = buildBuckets({
+    week: bucketWeek(from),
+    previous: bucketWeek(prevFrom),
+    targets,
+    baselines: { asleepMinutes: baselineOf(earlier.map((v) => v.asleepMinutes), STD_FLOOR.asleepMinutes), hrvMs: hrvBaseline, restingHr: baselineOf(earlier.map((v) => v.restingHr), STD_FLOOR.restingHr) },
     hasNights: !!anyNight,
-    weightUnit,
   });
+  return { ...review, buckets };
 }
 
 /**

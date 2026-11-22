@@ -10,6 +10,11 @@ import { statLine } from "../../review/domain/weekStats";
  * are decided in code (review/domain/weekReview.ts); the model gets the same
  * facts the card shows and writes the words around them.
  */
+const withoutBuckets = <T extends { buckets?: unknown }>(r: T) => {
+  const { buckets: _b, ...rest } = r;
+  return rest;
+};
+
 export const getWeekReview = defineTool({
   name: "get_week_review",
   description:
@@ -35,7 +40,8 @@ export const getWeekReview = defineTool({
     return {
       result: {
         ...(week.start !== asked.start ? { note: `That week is not over yet — this is the last finished one (${week.start} → ${week.end}).` } : {}),
-        ...review,
+        // The card's three-category detail (buckets) is for the app; the model reads the rows.
+        ...withoutBuckets(review),
         ...(stat
           ? {
               worthKnowing: {

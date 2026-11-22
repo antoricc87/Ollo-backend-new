@@ -9,6 +9,7 @@ import { getLLM } from "../../agent/llm/openai.client";
 import { dayKey, safeTz } from "../../agent/memory/dates";
 import { createPatientSummary, updatePatientSummarySection } from "../../patient/model/patient.model";
 import { calculateTDEE } from "../../../utils/calculateTDEE";
+import { ensureTargets } from "../../targets/targets.model";
 import { calculateAgeFromDob } from "../../../utils/calculateAgefromDob";
 import HealthIdService from "./healthId.model";
 import { parseStory, SECTION_KEYS, type SectionEdit } from "../domain/healthId";
@@ -250,5 +251,7 @@ export async function completeOnboarding(patientId: string): Promise<{ ok: true 
     if (isFinite(tdee) && tdee >= 800) await prisma.patientSummary.update({ where: { id: s.id }, data: { caloricAmount: Math.round(tdee / 50) * 50 } });
   }
   await prisma.patient.update({ where: { id: patientId }, data: { onBoardingComplete: true, lastSectionCompleted: "complete" } });
+  // Their targets exist by now (Ollie set them on the targets step); make sure for any path that skipped it.
+  await ensureTargets(patientId).catch((e) => console.error("targets at onboarding", e));
   return { ok: true };
 }
