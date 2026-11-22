@@ -77,10 +77,13 @@ describe("trainingGateFor", () => {
     }
   });
 
-  it("hold (pending): the interview is still running", () => {
-    expect(trainingGateFor(enc("back_pain", mildBack, { phase: "HISTORY" }), null)).toMatchObject({ level: "hold", pending: true });
-    // A new answer after an assessment reopens the interview — and the hold.
-    expect(trainingGateFor(enc("back_pain", mildBack, { phase: "HISTORY" }), assessment)).toMatchObject({ level: "hold", pending: true });
+  /* Ruling Nov 22 2026: a request for a workout always gets the workout — an unfinished interview means go carefully, not wait. */
+  it("general (pending): the interview is still running and no warning sign matched", () => {
+    expect(trainingGateFor(enc("back_pain", mildBack, { phase: "HISTORY" }), null)).toMatchObject({ level: "general", pending: true });
+    // A new answer after an assessment reopens the interview — and the caution.
+    expect(trainingGateFor(enc("back_pain", mildBack, { phase: "HISTORY" }), assessment)).toMatchObject({ level: "general", pending: true });
+    const flag = { ruleId: "back.weakness", level: "SEEK_CARE_NOW" as const, criterion: "Back pain with new leg weakness", source: { org: "NICE", year: 2025 } };
+    expect(trainingGateFor(enc("back_pain", mildBack, { phase: "HISTORY", redFlags: [flag] }), null).level).toBe("hold");
   });
 
   /* Ruling Oct 8 2026: an accidental second check-in, ended by hand, still blocked every session for a day. */

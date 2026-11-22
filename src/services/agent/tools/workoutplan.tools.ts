@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { trainingFirst } from "../../encounter/domain/trainingFirst";
 import moment from "moment-timezone";
 import { randomUUID } from "crypto";
 import prisma from "../../../utility/prismaClient";
@@ -247,11 +248,27 @@ const heldResult = (gate: TrainingGate) => ({
     held: true,
     about: gate.about,
     reasons: gate.reasons,
-    note: gate.pending
-      ? `No session is designed while the check-in about their ${gate.about.toLowerCase()} is still being taken in this conversation. Say so in one line and carry on with it — the training question is answered straight after. If they say they don't want the check-in, call end_checkin and then call this tool again. Do NOT say a clinician has to clear them first.`
-      : `No session is designed: ${gate.reasons.join("; ")}. Say that plainly in one or two lines, without softening, and offer what you can do — the summary for a clinician, a message to the care team, a booking. Do not describe exercises in your own words instead.`,
+    note: `No session is designed: ${gate.reasons.join("; ")}. Say that plainly in one or two lines, without softening, and offer what you can do — the summary for a clinician, a message to the care team, a booking. Do not describe exercises in your own words instead.`,
   },
 });
+
+/**
+ * Their latest message names a warning sign (numbness, leg weakness, chest pain, bladder trouble…): no session
+ * is designed in that turn, whatever is on record. Nov 22 2026 sim test: "my left leg has felt numb since this
+ * morning, give me a core workout" met an ended back-pain check-in (level general) and got a session card under
+ * a reply that said to seek urgent care.
+ */
+const latestWords = (ctx: { userWords?: string[] }) => (ctx.userWords ?? []).filter((w) => w.trim()).slice(-1)[0];
+const warningSignHeld = (ctx: { userWords?: string[]; proactive?: boolean }) => {
+  if (ctx.proactive || !trainingFirst(latestWords(ctx)).warningSign) return null;
+  return {
+    result: {
+      held: true,
+      reasons: ["their message names a possible warning sign"],
+      note: "No session is designed: their message names something on the warning-sign list. That comes first — if a check-in about it is on record, resume_checkin (paused) or record_checkin (running) with what they just said; otherwise start_checkin with their words. Follow what it returns, including any escalation. Do not describe exercises in your own words. Training comes after, if the check-in allows it.",
+    },
+  };
+};
 
 const cautionNote = (gate: TrainingGate, what: "session" | "week") =>
   `This is a GENERAL, lighter ${what}${what === "session" ? " — the card says so and lists when to stop" : ""}. What is true and must come across: (1) say ONCE, in one line, that exercises aimed at their ${gate.about.toLowerCase()} are for a clinician or physiotherapist to choose; (2) describe the ${what} as what it is — never that it will help, relieve, treat or fix the ${gate.about.toLowerCase()}${gate.conditions.length ? `, and never as being for ${gate.conditions.join(" / ")}` : ""}; (3) if they asked for it "for" a condition, say plainly that you built the general version instead${what === "week" ? `; (4) end with when to stop: ${stopLine(gate) ?? "if it gets worse, stop and get seen"}` : ""}. You may offer once to keep their limitation, in their own words, in their training profile (update_training_profile).`;
@@ -296,6 +313,8 @@ export const editWorkout = defineTool({
     const card = await findSessionCard(ctx.threadId, input.draftId);
     if (!card) return { result: { error: "There is no session draft in this conversation to change. Design one with generate_workout first." } };
     const previous = card.session as PlannedSessionInput;
+    const warned = warningSignHeld(ctx);
+    if (warned) return warned;
     const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
     if (gate?.level === "hold") return heldResult(gate);
     const caution = gate?.level === "general" ? gate : null;
@@ -348,6 +367,8 @@ export const generateWorkout = defineTool({
     if (!subject.isSelf) return { result: { error: "Workouts are designed for the account holder only for now." } };
     const { profile, defaults } = await askDefaults(ctx, { place: input.place ?? null, durationMin: input.durationMin ?? (input.request ? lengthAsked(input.request) : null), focus: input.focus ?? null, describesSession: !!(input.request?.trim() || input.muscleGroups?.length) });
     const { durationMin, place } = defaults;
+    const warned = warningSignHeld(ctx);
+    if (warned) return warned;
     const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
     if (gate?.level === "hold") return heldResult(gate);
     const caution = gate?.level === "general" ? gate : null;
@@ -376,6 +397,10 @@ export const generateWorkout = defineTool({
         assumptions: designed.assumptions,
         fit: designed.fit.ok ? { ok: true } : { ok: false, issues: designed.fit.issues, note: "Say plainly what still misses; do not claim it fits." },
         ...(caution ? { caution: cautionNote(caution, "session") } : {}),
+        // Workout first, check-in offered (ruling Nov 22 2026): the offer is code-decided, not left to the prompt.
+        ...(!caution && !gate && trainingFirst(latestWords(ctx)).painNow
+          ? { offerCheckin: "They described pain they have. End your reply with ONE line offering to go through it with them (e.g. \"If it's bothering you now, I can go through it with you — just say.\"). Don't promise or deny that exercise will fix it, and don't ask about the symptom yourself." }
+          : {}),
         ...assumedNote(defaults.assumed),
         cardActions: `The card has 'Log it as done' (when they've done it), 'Put in plan · ${moment.utc(designed.session.plannedFor!, "YYYY-MM-DD").format("ddd D")}' (writes it onto that day of their week — direct, no proposal) and 'Something else'. Nothing is saved and nothing needs confirming: it is a plan to do, not a log — never call log_workout for it unless they say they did it, and don't ask them to confirm. Keep your text to the highlights: the split, the one or two key lifts with their loads, and the why.`,
         // The trainer's thinking behind it: the reply can say why the session is built this way in a line.
@@ -409,6 +434,8 @@ export const generateWorkoutPlan = defineTool({
     const statedMinutes = input.sessionMinutes ?? (input.request ? lengthAsked(input.request) : null);
     const { defaults } = await askDefaults(ctx, { place: input.place ?? null, durationMin: statedMinutes, focus: input.focus ?? null, describesSession: !!input.request?.trim() });
     const { durationMin, place } = defaults;
+    const warned = warningSignHeld(ctx);
+    if (warned) return warned;
     const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
     if (gate?.level === "hold") return heldResult(gate);
     const caution = gate?.level === "general" ? gate : null;
@@ -529,6 +556,8 @@ export const editWorkoutPlan = defineTool({
   async run(ctx, input) {
     const card = await findWeekCard(ctx.threadId, input.draftId);
     if (!card) return { result: { error: "No training week draft in this conversation to change — call generate_workout_plan first (for a saved week: move_workout, or generate_workout with replaceSessionId)." } };
+    const warned = warningSignHeld(ctx);
+    if (warned) return warned;
     const gate = await encounterService.trainingGate(ctx.patientId, ctx.threadId);
     if (gate?.level === "hold") return heldResult(gate);
     const caution = gate?.level === "general" ? gate : null;

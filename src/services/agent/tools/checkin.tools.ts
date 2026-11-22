@@ -1,4 +1,5 @@
 import { MAX_OWN_QUESTIONS, OwnQuestion, ownQuestionsLeft, questionAsked } from "../../encounter/domain/ownQuestions";
+import { trainingFirst } from "../../encounter/domain/trainingFirst";
 import { linkEncounter } from "../../signals/model/findings.store";
 import threadStore from "../memory/thread.store";
 import { bodyFor } from "../../encounter/domain/bodyRegions";
@@ -91,14 +92,44 @@ const flagView = (flags: TrippedFlag[]) => flags.map((f) => ({ level: f.level, c
 export const startCheckin = defineTool({
   name: "start_checkin",
   description:
-    "Open a check-in when the user describes a symptom they are having (pain, breathlessness, a rash, dizziness, exhaustion, low mood…). Pass their own words as `complaint`. This CREATES the check-in and returns the questions to cover — you then take the history yourself, in conversation, one question per message. Do not call it for a condition already on their record, or for food, training or sleep coaching.",
+    "Open a check-in when the user describes a symptom they are having (pain, breathlessness, a rash, dizziness, exhaustion, low mood…). Pass their own words as `complaint`. This CREATES the check-in and returns the questions to cover — you then take the history yourself, in conversation, one question per message. Do not call it for a condition already on their record, for food or sleep coaching, or from a request for a workout or training week (those go to the design tools first, even when they name a body part, pain or recovery — unless the message also names a warning sign such as numbness, limb weakness, chest pain, bladder/bowel trouble, fever or a fall).",
   schema: z.object({
     complaint: z.string().min(2).max(1000).describe("The user's own description of the symptom, in their words. Do not summarise or rename it."),
     newEpisode: z.boolean().optional().describe("Only when they say this is a DIFFERENT problem from a check-in already on record for the same complaint (a new headache, not the one being followed)."),
   }),
   risk: "read",
   async run(ctx, input) {
-    const started = await encounterService.start(ctx.patientId, input.complaint.trim(), { threadId: ctx.threadId, newEpisode: input.newEpisode });
+    // The workout comes first (ruling Nov 22 2026): a training request with no warning sign never opens a check-in.
+    // The prompt says so too; this holds when the model does not follow it (first sim test, third turn).
+    const latest = (ctx.userWords ?? []).filter((w) => w.trim()).slice(-1)[0];
+    if (!ctx.proactive && trainingFirst(latest).designFirst)
+      return {
+        result: {
+          opened: false,
+          note: "No check-in was opened: their message asks for training and names no warning sign, so the workout comes first. Call generate_workout (or generate_workout_plan for a week) NOW with their words — pass what they said about the pain in `request`. After the card, offer in ONE line to go through the pain with them if it is bothering them now; never make it a condition, and don't ask about the symptom yourself.",
+        },
+      };
+    let started = await encounterService.start(ctx.patientId, input.complaint.trim(), { threadId: ctx.threadId, newEpisode: input.newEpisode });
+    if ("existing" in started) {
+      const e = started.existing;
+      const here = e.row.threadId === ctx.threadId;
+      // A warning sign said now must reach the red-flag rules, not be filed under "already on record" (Nov 22 2026).
+      if (trainingFirst(latest).warningSign) {
+        if (here && (e.recordedState === "paused" || e.recordedState === "active"))
+          return {
+            result: {
+              existing: true,
+              checkinId: e.row.id,
+              about: e.protocol.title,
+              state: e.recordedState,
+              note: `The check-in about their ${e.protocol.title.toLowerCase()} in this conversation is ${e.recordedState}, AND their message names something on the warning-sign list. That comes first: ${e.recordedState === "paused" ? "call resume_checkin now — it records what they just said" : "call record_checkin now with what they just said"}, and the red-flag rules run on it. Follow what it returns, including any escalation. No workout this turn.`,
+            },
+          };
+        // On record from another conversation, or already assessed: what they say now is new — open it here so the
+        // prescan and red-flag rules see it (sim test: resume_checkin refused a check-in from another thread).
+        started = await encounterService.start(ctx.patientId, input.complaint.trim(), { threadId: ctx.threadId, newEpisode: true });
+      }
+    }
     if ("existing" in started) {
       const e = started.existing;
       const here = e.row.threadId === ctx.threadId;

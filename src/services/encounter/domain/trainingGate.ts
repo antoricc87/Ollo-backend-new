@@ -11,9 +11,9 @@ import { EncounterState, Protocol } from "./types";
  * book a doctor, no session. Ten questions that decide nothing.
  *
  * Now the check-in's own answers decide, here, in code:
- *   - HOLD     a published warning sign matched, the interview is not finished
- *              yet, or the complaint is one where exertion itself is the
- *              question (chest, breathing, dizziness). No session is designed.
+ *   - HOLD     a published warning sign matched, or the complaint is one
+ *              where exertion itself is the question (chest, breathing,
+ *              dizziness). No session is designed.
  *   - GENERAL  assessed, no warning sign, but an answer says to go carefully
  *              (it travels, it has lasted a month, it is getting worse or
  *              constant, 7+ of 10). A clinician is recommended ONCE and Ollie
@@ -38,7 +38,7 @@ export type TrainingGate = {
   about: string;
   /** Why this level, as facts from their own answers. */
   reasons: string[];
-  /** HOLD only: the interview is still open, so finishing it is what lifts the hold. */
+  /** The interview is still open in this conversation (GENERAL until it is finished; finishing it is offered, never required). */
   pending: boolean;
   /** Possibilities the assessment named. A session may never be designed for, or named after, one of these. */
   conditions: string[];
@@ -111,9 +111,14 @@ export const trainingGateFor = (
   // carefully — a lighter general session, not a hold. Ruling Oct 8 2026, after an accidental second check-in
   // the user ended by hand still blocked every session for a day.
   if (input.status === "ABANDONED") return { ...base, level: "general", pending: false, reasons: ["the check-in was ended before it finished"] };
-  // Mid-interview: the next turn or two finish it, and the training question is answered right after.
+  // Mid-interview, no warning sign so far: a lighter general session now, not a hold (ruling Nov 22 2026 — a
+  // request for a workout always gets the workout; "I am asking you to create a workout" was answered with the
+  // interview's next question twice). Finishing the check-in is offered, never a condition.
+  // Halted at ROUTE with no assessment = the crisis halt (self-harm): never opens training.
+  if (!lastAssessment && state.phase === "ROUTE")
+    return { ...base, level: "hold", pending: false, reasons: ["the check-in was stopped so they could get support first"] };
   if (!lastAssessment || input.status !== "OPEN" || state.phase !== "ROUTE")
-    return { ...base, level: "hold", pending: true, reasons: ["the check-in is not finished"] };
+    return { ...base, level: "general", pending: true, reasons: ["the check-in is not finished"] };
   const reasons = cautionReasons(state, protocol);
   if (latestFollowUp?.trend === "WORSE") reasons.push(`at the latest follow-up (day ${latestFollowUp.day}) it was worse`);
   return reasons.length ? { ...base, level: "general", pending: false, reasons } : { ...base, level: "normal", pending: false, reasons: [] };
