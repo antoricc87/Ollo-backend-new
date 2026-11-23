@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { withExerciseFacts } from "../../workouts/domain/exercise.catalog";
 import { trainingFirst } from "../../encounter/domain/trainingFirst";
 import moment from "moment-timezone";
 import { randomUUID } from "crypto";
@@ -341,7 +342,7 @@ export const editWorkout = defineTool({
         ...(caution ? { caution: cautionNote(caution, "session") } : {}),
         ...keepLengthNote(asked, profile?.sessionMinutes),
       },
-      cards: [{ type: "workout", title: session.title!, data: cardData }],
+      cards: [{ type: "workout", title: session.title!, data: withExerciseFacts(cardData) }],
     };
   },
 });
@@ -407,7 +408,7 @@ export const generateWorkout = defineTool({
         approach: designed.approach,
         design: { model: designed.model, latencyMs: designed.latencyMs },
       },
-      cards: [{ type: "workout", title: designed.session.title!, data: cardData }],
+      cards: [{ type: "workout", title: designed.session.title!, data: withExerciseFacts(cardData) }],
     };
   },
 });
