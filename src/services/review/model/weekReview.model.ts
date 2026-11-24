@@ -28,7 +28,7 @@ export async function weekReviewFor(patientId: string, weekStart: string, timeZo
   const until = moment.tz(to, DAY, timeZone).endOf("day").toDate();
 
   const [vitals, anyNight, dailyFoods, sessions, weightTracker, plan] = await Promise.all([
-    prisma.nightlyVitals.findMany({ where: { patientId, date: { gte: baselineFrom, lte: to } }, orderBy: { date: "asc" }, select: { date: true, asleepMinutes: true, hrvMs: true, restingHr: true } }),
+    prisma.nightlyVitals.findMany({ where: { patientId, date: { gte: baselineFrom, lte: to } }, orderBy: { date: "asc" }, select: { date: true, asleepMinutes: true, hrvMs: true, restingHr: true, sleepingHr: true } }),
     prisma.nightlyVitals.findFirst({ where: { patientId }, select: { id: true } }),
     // DailyFood.date is stored as a longer string that starts with the local day — match by prefix range.
     prisma.dailyFood.findMany({ where: { userId: patientId, date: { gte: prevFrom, lt: shift(to, 1) } }, select: { date: true, foodEntries: { select: { mealType: true, calories: true, proteins: true } } } }),
@@ -128,7 +128,7 @@ export async function weekReviewFor(patientId: string, weekStart: string, timeZo
     week: bucketWeek(from),
     previous: bucketWeek(prevFrom),
     targets,
-    baselines: { asleepMinutes: baselineOf(earlier.map((v) => v.asleepMinutes), STD_FLOOR.asleepMinutes), hrvMs: hrvBaseline, restingHr: baselineOf(earlier.map((v) => v.restingHr), STD_FLOOR.restingHr) },
+    baselines: { asleepMinutes: baselineOf(earlier.map((v) => v.asleepMinutes), STD_FLOOR.asleepMinutes), hrvMs: hrvBaseline, restingHr: baselineOf(earlier.map((v) => v.restingHr), STD_FLOOR.restingHr), sleepingHr: baselineOf(earlier.map((v) => v.sleepingHr), STD_FLOOR.sleepingHr) },
     hasNights: !!anyNight,
   });
   return { ...review, buckets };

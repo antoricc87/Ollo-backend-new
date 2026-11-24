@@ -10,6 +10,7 @@
  * a PLANNED row, so "design → put on a day → do it → log it" is one record.
  */
 import moment from "moment-timezone";
+import { lengthWishMet } from "./fitWords";
 import prisma from "../../../utility/prismaClient";
 import { getLLM } from "../../agent/llm/openai.client";
 import { route } from "../../agent/llm/policy";
@@ -856,6 +857,9 @@ export const designWeek = async (ask: WeekAsk, brief: DesignBrief, opts: { model
       unmet = (await review(designed)).filter((c) => !c.met).map((c) => c.wish);
     } else unmet = misses.map((c) => c.wish);
   }
+
+  // A length wish is checked against the real minutes, not the reviewer's reading (Nov 22 2026 false miss).
+  unmet = unmet.filter((w) => lengthWishMet(w, designed.map((d) => d.session.durationMin)) !== true);
 
   return {
     title: skeleton.title.slice(0, 120),

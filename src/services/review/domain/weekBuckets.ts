@@ -22,14 +22,14 @@ import { isFullDay, MIN_DAYS, SLEEP_SLACK_MIN, TOLERANCE, type Range, type WeekD
 export type Kind = "strength" | "cardio" | "other";
 export type BucketPart = { exerciseKey: string; workSets: number; durationSec: number };
 export type BucketSession = { date: string; title: string | null; activityKey: string; minutes: number | null; calories: number | null; done: boolean; planned: boolean; parts: BucketPart[] };
-export type BucketNight = { date: string; asleepMinutes: number | null; hrvMs: number | null; restingHr: number | null };
+export type BucketNight = { date: string; asleepMinutes: number | null; hrvMs: number | null; restingHr: number | null; sleepingHr?: number | null };
 export type BucketWeek = { days: WeekDay[]; nights: BucketNight[]; sessions: BucketSession[] };
 
 export type BucketInput = {
   week: BucketWeek;
   previous: BucketWeek;
   targets: { calories: Range | null; proteinG: Range | null; sleepMinutes: number | null; sessionsPerWeek: number | null };
-  baselines: { asleepMinutes: Baseline | null; hrvMs: Baseline | null; restingHr: Baseline | null };
+  baselines: { asleepMinutes: Baseline | null; hrvMs: Baseline | null; restingHr: Baseline | null; sleepingHr?: Baseline | null };
   hasNights: boolean;
 };
 
@@ -140,6 +140,11 @@ export type SleepBucket = {
   usual: { lo: number; hi: number } | null;
   hrv: BandFact | null;
   restingHr: BandFact | null;
+  /**
+   * Heart rate while asleep, the phone's own sleep-window figure (the readiness card uses the same one). Shown in
+   * the resting-HR tile's place (his ruling Nov 22 2026): resting HR was never uploaded by the app.
+   */
+  sleepingHr: BandFact | null;
   deltaMin: number | null;
   sub: string;
 };
@@ -154,6 +159,7 @@ export function sleepBucket(input: BucketInput): SleepBucket {
   const prev = input.previous.nights.map((n) => n.asleepMinutes).filter(present);
   const hrv = bandFact(input.week.nights.map((n) => n.hrvMs).filter(present), input.baselines.hrvMs);
   const restingHr = bandFact(input.week.nights.map((n) => n.restingHr).filter(present), input.baselines.restingHr);
+  const sleepingHr = bandFact(input.week.nights.map((n) => n.sleepingHr ?? null).filter(present), input.baselines.sleepingHr ?? null);
   const b = input.baselines.asleepMinutes;
   const short = present(avg) && !!target && avg < target - SLEEP_SLACK_MIN;
   const tag = !enough ? null : short ? "SHORT" : hrv?.label === "Below your usual" ? "BELOW USUAL" : target ? "ON PLAN" : null;
@@ -174,6 +180,7 @@ export function sleepBucket(input: BucketInput): SleepBucket {
     usual: isUsable(b) ? { lo: b!.mean - b!.std, hi: b!.mean + b!.std } : null,
     hrv,
     restingHr,
+    sleepingHr,
     deltaMin: present(avg) && prev.length >= MIN_DAYS ? Math.round(avg - mean(prev)) : null,
     sub: !input.hasNights ? "No watch data at night" : enough ? `${Math.floor(avg! / 60)}:${String(Math.round(avg!) % 60).padStart(2, "0")} a night` : `${mins.length} of ${of} nights recorded`,
   };

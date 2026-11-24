@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { plainIssues } from "../../workouts/design/fitWords";
 import { withExerciseFacts } from "../../workouts/domain/exercise.catalog";
 import { trainingFirst } from "../../encounter/domain/trainingFirst";
 import moment from "moment-timezone";
@@ -330,7 +331,7 @@ export const editWorkout = defineTool({
     const session = keepUntouched(previous, designed.session, input.request as string);
     const changes = sessionChanges(previous, session);
     const draftId = randomUUID();
-    const cardData = { ...card, draftId, session, display: sessionDisplay(session), fit: designed.fit, assumptions: designed.assumptions, lastLoads: Object.fromEntries(session.exercises!.filter((e) => brief.lastLoads[e.exerciseKey]).map((e) => [e.exerciseKey, brief.lastLoads[e.exerciseKey]])), caution: caution ? { about: caution.about, stopIf: caution.stopIf } : null, changedFrom: card.draftId ?? null };
+    const cardData = { ...card, draftId, session, display: sessionDisplay(session), fit: { ...designed.fit, plain: plainIssues(designed.fit.issues ?? []) }, assumptions: designed.assumptions, lastLoads: Object.fromEntries(session.exercises!.filter((e) => brief.lastLoads[e.exerciseKey]).map((e) => [e.exerciseKey, brief.lastLoads[e.exerciseKey]])), caution: caution ? { about: caution.about, stopIf: caution.stopIf } : null, changedFrom: card.draftId ?? null };
     registerSessionDraft(draftId, session, cardData);
     return {
       result: {
@@ -387,7 +388,7 @@ export const generateWorkout = defineTool({
     const display = sessionDisplay(designed.session);
     const active = await WorkoutPlanService.getActive(ctx.patientId);
     const inWeek = !!active && designed.session.plannedFor! >= active.startDate && designed.session.plannedFor! <= active.endDate;
-    const cardData = { draftId, session: designed.session, display, fit: designed.fit, assumptions: [...defaults.assumed, ...designed.assumptions], slot: { date: designed.session.plannedFor, replaces, planId: inWeek ? active!.id : null, inWeek }, lastLoads: Object.fromEntries(designed.session.exercises!.filter((e) => brief.lastLoads[e.exerciseKey]).map((e) => [e.exerciseKey, brief.lastLoads[e.exerciseKey]])), timeZone: ctx.timeZone, caution: caution ? { about: caution.about, stopIf: caution.stopIf } : null };
+    const cardData = { draftId, session: designed.session, display, fit: { ...designed.fit, plain: plainIssues(designed.fit.issues ?? []) }, assumptions: [...defaults.assumed, ...designed.assumptions], slot: { date: designed.session.plannedFor, replaces, planId: inWeek ? active!.id : null, inWeek }, lastLoads: Object.fromEntries(designed.session.exercises!.filter((e) => brief.lastLoads[e.exerciseKey]).map((e) => [e.exerciseKey, brief.lastLoads[e.exerciseKey]])), timeZone: ctx.timeZone, caution: caution ? { about: caution.about, stopIf: caution.stopIf } : null };
     registerSessionDraft(draftId, designed.session, cardData);
     return {
       result: {
@@ -473,7 +474,8 @@ export const generateWorkoutPlan = defineTool({
       days: input.days,
       // The reading travels with the card: an edit knows what the week is for and what they wanted in it.
       brief: { sessionsPerWeek, sessionMinutes: durationMin, focus: input.focus ?? null, place, request: input.request ?? null, reading: { purpose: week.reading.purpose, wishes: week.reading.wishes } },
-      fit: week.fit,
+      // plain: the same misses in words for the card (his ruling Nov 22 2026); issues stay for the designer.
+      fit: { ...week.fit, plain: plainIssues(week.fit.issues ?? [], startDate) },
       sessions,
       rest: Array.from({ length: input.days }, (_, i) => i + 1).filter((d) => !sessions.some((s) => s.day === d)).map((d) => ({ day: d, date: shiftDay(startDate, d - 1) })),
       replaces: active ? { id: active.id, title: active.title, startDate: active.startDate } : null,
@@ -501,7 +503,7 @@ export const generateWorkoutPlan = defineTool({
         cardActions: "The card shows every day with its exercises, a 'Save this week' button and per-day Log/Swap once saved. Nothing is saved yet: if the user asks to save/keep/use it, call save_workout_plan with this draftId (a proposal they confirm) — otherwise mention once that the card has Save. Keep your text to the split, the days, and one highlight per session.",
         design: { model: week.model, latencyMs: week.latencyMs },
       },
-      cards: [{ type: "workout_plan", title: week.title, data: cardData }],
+      cards: [{ type: "workout_plan", title: week.title, data: withExerciseFacts(cardData) }],
     };
   },
 });
@@ -678,7 +680,7 @@ export const editWorkoutPlan = defineTool({
       days,
       // Every session now at one length they asked for → that is the week's length (the next added session gets it too).
       brief: { ...(card.brief ?? {}), sessionsPerWeek: sessions.length, ...(weekLength ? { sessionMinutes: weekLength } : {}) },
-      fit: { ok: issues.length === 0, issues },
+      fit: { ok: issues.length === 0, issues, plain: plainIssues(issues, startDate) },
       sessions,
       rest: Array.from({ length: days }, (_, i) => i + 1).filter((d) => !sessions.some((s) => s.day === d)).map((d) => ({ day: d, date: dateOfDay(startDate, d) })),
       timeZone: ctx.timeZone,
@@ -699,7 +701,7 @@ export const editWorkoutPlan = defineTool({
         ...(weekLength ? keepLengthNote(weekLength, (await TrainingProfileService.get(ctx.patientId))?.sessionMinutes) : {}),
         note: "What is true: only the changes listed in `changed` were made — say each session's change as `changed` states it (minutes, exercises added, MORE or FEWER sets), never more than that; every other session is exactly as it was on the previous card. Say what changed (for a designed session, its key moves) and that the rest is untouched — do not list the unchanged sessions again. The new card replaces the previous one; nothing is saved until they ask (save_workout_plan with this draftId) or tap Save on the card.",
       },
-      cards: [{ type: "workout_plan", title: cardData.title, data: cardData }],
+      cards: [{ type: "workout_plan", title: cardData.title, data: withExerciseFacts(cardData) }],
     };
   },
 });
